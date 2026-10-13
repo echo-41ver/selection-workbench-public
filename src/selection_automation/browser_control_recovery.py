@@ -1,6 +1,7 @@
 """Read-only recovery checks after an uncertain, serialized driver command."""
 import json
 import time
+from datetime import datetime
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
@@ -48,6 +49,28 @@ class BrowserControlRecoveryTimeout(RuntimeError):
 CONTROL_RECOVERY_TERMINAL = {
     BrowserControlRecoveryTimeout.status, 'STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET',
 }
+
+
+def control_stop_was_replaced(root, session, progress):
+    """A completed replacement invalidates only the previous driver's stop."""
+    if progress.get('status') not in CONTROL_RECOVERY_TERMINAL | {'STOPPED_BROWSER_COMMAND_TIMEOUT'}:
+        return False
+    current = str(session.get('profile_id') or '')
+    stopped_profile = progress.get('control_recovery_profile_id')
+    if current and stopped_profile:
+        return str(stopped_profile) != current
+    # Legacy stops require a newer successful replacement of this exact lane.
+    try:
+        number = int(session['name'].split('-')[1])
+        journal = json.loads((Path(root) / 'runtime/proxyshare-chains' /
+                              f'replacement-worker-{number}.json').read_text('utf-8'))
+        stopped_at = datetime.fromisoformat(str(progress['updated_at']).replace('Z', '+00:00'))
+        replaced_at = datetime.fromisoformat(journal['replaced_at'])
+        return bool(current and journal.get('phase') == 'REPLACED'
+                    and str(journal.get('new_profile_id')) == current
+                    and stopped_at < replaced_at)
+    except (OSError, ValueError, TypeError, KeyError, IndexError):
+        return False
 
 
 def reserve_control_recovery(path, unique_goods, *, limit=3, now=time.time):

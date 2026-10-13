@@ -475,10 +475,22 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
             log = output / "collector.log"
             progress_path = output / "progress.json"
             existing = json.loads(progress_path.read_text(encoding="utf-8")) if progress_path.exists() else {}
-            from selection_automation.browser_control_recovery import CONTROL_RECOVERY_TERMINAL
+            from selection_automation.browser_control_recovery import CONTROL_RECOVERY_TERMINAL, control_stop_was_replaced
+            if control_stop_was_replaced(ROOT, session, existing):
+                previous_status = existing['status']
+                existing = {**existing, 'status':'RESUMING', 'manual_action_required':False,
+                    'automatic_retry':True, 'automatic_resume_pending':True,
+                    'confirmed_login_redirect':False, 'http_block':None,
+                    'session_recovery_kind':None, 'command_execution_unknown':False,
+                    'control_recovery_profile_id':str(session.get('profile_id') or ''),
+                    'previous_control_stop':previous_status}
+                atomic_write(progress_path,json.dumps(existing,ensure_ascii=False))
+                recovery_event(run_root(category),session['name'],'REPLACED_CONTROL_STOP_CLEARED',
+                    query=query,sort=sort,profile_id=session.get('profile_id'),previous_status=previous_status)
             def stop_control_recovery(progress, status, record):
                 blocked={**progress,'status':status,'manual_action_required':True,'automatic_retry':False,
-                         'control_recovery':record,'browser_preserved':True}
+                         'control_recovery':record,'browser_preserved':True,
+                         'control_recovery_profile_id':str(session.get('profile_id') or '')}
                 atomic_write(progress_path,json.dumps(blocked,ensure_ascii=False))
                 write_worker_state(session['name'],{
                     'status':'HUMAN_ACTION_REQUIRED','query_status':status,

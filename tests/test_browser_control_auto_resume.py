@@ -5,6 +5,27 @@ from selection_automation import browser_control_recovery as recovery
 from selection_automation.worker_runtime import WorkerLease, WorkerStopRequested
 
 
+@pytest.mark.parametrize('profile,expected',[('old-profile',True),('new-profile',False)])
+def test_control_stop_is_scoped_to_its_browser_profile(tmp_path,profile,expected):
+    progress={'status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','control_recovery_profile_id':profile}
+    assert recovery.control_stop_was_replaced(tmp_path,{'profile_id':'new-profile'},progress) is expected
+
+
+@pytest.mark.parametrize('phase,new_profile,updated,expected',[
+    ('REPLACED','new-profile','2026-10-13T07:52:41Z',True),
+    ('BIND_FAILED','new-profile','2026-10-13T07:52:41Z',False),
+    ('REPLACED','different-profile','2026-10-13T07:52:41Z',False),
+    ('REPLACED','new-profile','2026-10-13T08:00:00Z',False),
+])
+def test_legacy_control_stop_requires_a_newer_completed_replacement(tmp_path,phase,new_profile,updated,expected):
+    journal=tmp_path/'runtime/proxyshare-chains/replacement-worker-1.json'
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps({'phase':phase,'new_profile_id':new_profile,
+        'replaced_at':'2026-10-13T15:58:30+08:00'}),encoding='utf-8')
+    progress={'status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','updated_at':updated}
+    assert recovery.control_stop_was_replaced(tmp_path,{'name':'worker-01-new','profile_id':'new-profile'},progress) is expected
+
+
 def test_wait_probes_until_fenced_and_usable_without_replaying_commands(tmp_path):
     sequence=iter([False,True,True]); calls=[]; waits=[]; observations=[]
     lease=SimpleNamespace(check_stop=lambda:None)
