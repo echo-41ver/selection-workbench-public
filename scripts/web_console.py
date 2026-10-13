@@ -176,6 +176,8 @@ class Console:
         self.root=root; self.lock=threading.Lock(); self.busy=False
         self.phase='尚未启动'; self.key=selection.read(root/'runtime/web-console/state.json',{}).get('category_key'); self.cancel=threading.Event(); self.progress_file=None; self.draft=None; self.draft_path=None; self.draft_key=None; self.draft_used=False; self.draft_amazon_path=None; self.draft_plan_path=None
         self.pending_scope=None; self.generation_error=None
+        from selection_automation.rule_provider import settings
+        self.draft_provider=settings()
         self.plain_application={}
         self.stage3_busy=False; self.stage3_phase='等待手动启动'; self.stage3_key=None
         self.market_busy=False
@@ -191,10 +193,12 @@ class Console:
         candidate=Path(saved.get('category_path',''))
         if isinstance(saved.get('draft'),dict) and candidate.is_file() and candidate.resolve().is_relative_to((root/'runtime/web-console').resolve()):
             self.draft=saved['draft'];self.draft_path=candidate
+            try:self.draft_provider=settings(**saved.get('rule_provider',{}))
+            except (TypeError,ValueError):self.draft_provider=settings()
             for field,attribute in [('amazon_path','draft_amazon_path'),('plan_path','draft_plan_path')]:
                 path=Path(saved.get(field,''))
                 if path.is_file() and path.resolve().is_relative_to((root/'runtime/web-console').resolve()):setattr(self,attribute,path)
-            self.draft_key=self.saved_credential() if self.draft_amazon_path and self.draft_plan_path else None
+            self.draft_key=self.saved_credential() if self.draft_amazon_path and self.draft_plan_path and self.draft_provider==settings() else None
             self.phase=(('草稿已恢复，可继续应用或运行' if self.draft_key else '草稿已恢复，请填写API key后应用或运行') if self.draft_amazon_path and self.draft_plan_path
                         else '旧草稿缺少 Amazon 商品与关键词，请重新点击生成规则与关键词')
             if self.draft_amazon_path and self.draft_plan_path:
@@ -323,9 +327,13 @@ class Console:
         return key if key and len(key)<=4096 and not any(ord(c)<32 for c in key) else None
 
     def start(self, body):
-        if set(body)-{'worker_count','bestsellers_url','commercial'}!={'category_name','amazon_count','per_keyword','api_key'}:
+        if set(body)-{'worker_count','bestsellers_url','commercial','api_base_url','api_model'}!={'category_name','amazon_count','per_keyword','api_key'}:
             raise ConsoleError('INVALID_INPUT','请填写品类、Amazon数量、每关键词数量及API key')
         body=dict(body)
+        from selection_automation.rule_provider import settings, DEFAULT_URL
+        try:provider=settings(body.get('api_base_url',''),body.get('api_model',''))
+        except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
+        body.update(api_base_url=provider['base_url'],api_model=provider['model'])
         if 'commercial' in body:
             from selection_automation.commercial import settings
             try:body['commercial']=settings(body['commercial'])
@@ -340,6 +348,8 @@ class Console:
             raise ConsoleError('INVALID_INPUT','品类名称无效')
         cached=approved_category(name,body['bestsellers_url']) is not None
         if isinstance(key,str) and not key.strip():
+            if provider['base_url']!=DEFAULT_URL:
+                raise ConsoleError('MISSING_CREDENTIAL','使用其他 API 服务时，请输入该服务的 Key；不会转发本机保存的 DeepSeek 密钥')
             key=self.saved_credential() or ''
             if not key and not cached: raise ConsoleError('MISSING_CREDENTIAL','本机没有同品类已运行规则及可用 API key，请在网页输入后重试')
             body['api_key']=key
@@ -358,10 +368,11 @@ class Console:
             self.plain_application={}
             self.progress_file=None; self.generation_error=None
             self.pending_scope={'category':name.strip(),'amazon_count':body['amazon_count'],
-                                'per_keyword':body['per_keyword'],'worker_count':count,'bestsellers_url':body['bestsellers_url']}
+                                'per_keyword':body['per_keyword'],'worker_count':count,'bestsellers_url':body['bestsellers_url'],
+                                'api_base_url':provider['base_url'],'api_model':provider['model']}
             selection.save(self.root/'runtime/web-console/pending-generation.json',{'scope':self.pending_scope})
             previous_draft=({field:getattr(self,field) for field in
-                            ('draft','draft_path','draft_amazon_path','draft_plan_path')}
+                            ('draft','draft_path','draft_amazon_path','draft_plan_path','draft_provider')}
                             if self.draft and not self.draft_used else None)
             self.draft=None; self.draft_key=None; self.draft_path=None; self.draft_used=False; self.draft_amazon_path=None; self.draft_plan_path=None
             thread=threading.Thread(target=self._start, args=(dict(body),previous_draft),daemon=True)
@@ -369,7 +380,9 @@ class Console:
         return {'ok':True,'phase':self.phase}
 
     def _start(self, body, previous_draft=None):
-        env={**os.environ,'DEEPSEEK_API_KEY':body.pop('api_key').strip(),'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
+        from selection_automation.rule_provider import settings, environment
+        provider=settings(body.pop('api_base_url',''),body.pop('api_model',''))
+        env={**os.environ,**environment(provider),'DEEPSEEK_API_KEY':body.pop('api_key').strip(),'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
         try:
             folder=self.root/'runtime'/'web-console'; folder.mkdir(parents=True,exist_ok=True)
             output=folder/f'category-{uuid.uuid4().hex}.json'
@@ -379,6 +392,7 @@ class Console:
                 *(['--bestsellers-url',body['bestsellers_url']] if body.get('bestsellers_url') else [])],env=env,timeout=1800)
             if generated.returncode: raise ConsoleError('GENERATION_FAILED', self.generation_progress().get('message') or '品类生成或榜单核实失败，请检查网络和API授权后重试')
             category=json.loads(output.read_text('utf-8'))
+            category['rule_generation_provider']=provider
             category['temu']['worker_count']=worker_count(body.get('worker_count',4))
             if 'commercial' in body:category['commercial']=body['commercial']
             if not re.fullmatch('[a-z][a-z0-9_]{0,63}',category['category_key']): raise ValueError('invalid generated key')
@@ -390,7 +404,7 @@ class Console:
             # Save usable generated rules before the optional explanation.
             with self.lock:
                 self.draft=draft_view(category,uuid.uuid4().hex,plan)
-                self.draft_path=output; self.draft_key=env['DEEPSEEK_API_KEY']; self.draft_used=False
+                self.draft_path=output; self.draft_key=env['DEEPSEEK_API_KEY']; self.draft_provider=provider; self.draft_used=False
                 self.persist_draft()
             self.phase='正在生成通俗中文规则说明'
             if not category.get('approved_rule_source'):
@@ -426,6 +440,7 @@ class Console:
 
     def persist_draft(self):
         selection.save(self.root/'runtime/web-console/resume-draft.json',{'draft':self.draft,'category_path':str(self.draft_path),
+                       'rule_provider':self.draft_provider,
                        'amazon_path':str(self.draft_amazon_path) if self.draft_amazon_path else '',
                        'plan_path':str(self.draft_plan_path) if self.draft_plan_path else ''})
 
@@ -468,13 +483,19 @@ class Console:
 
     def plain_rules(self, body):
         if body.get('scope','all') not in ('all','stage1','stage3'): raise ConsoleError('INVALID_INPUT','规则层无效')
-        if set(body)-{'draft_id','instruction','api_key','scope'} or not {'draft_id','instruction'}<=set(body) or not isinstance(body['instruction'],str) or len(body['instruction'])>12000:
+        if set(body)-{'draft_id','instruction','api_key','scope','api_base_url','api_model'} or not {'draft_id','instruction'}<=set(body) or not isinstance(body['instruction'],str) or len(body['instruction'])>12000:
             raise ConsoleError('INVALID_INPUT','请提供草稿编号和中文要求')
         with self.lock:
-            self.accept_key(body)
             if self.busy or self.owner(): raise ConsoleError('ALREADY_RUNNING','请等待当前操作完成',409)
             if not self.draft or body['draft_id']!=self.draft['id'] or self.draft_used:
                 raise ConsoleError('STALE_DRAFT','草稿已失效，请重新生成',409)
+            from selection_automation.rule_provider import settings
+            try:provider=settings(body.get('api_base_url',self.draft_provider['base_url']),body.get('api_model',self.draft_provider['model']))
+            except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
+            if provider['base_url']!=self.draft_provider['base_url'] and not body.get('api_key'):
+                raise ConsoleError('KEY_REQUIRED','更换 API 服务地址时，请同时填写对应 Key',409)
+            self.accept_key(body)
+            self.draft_provider=provider
             if not self.draft_key: raise ConsoleError('KEY_REQUIRED','请重新填写API key，已保留草稿无需重新生成',409)
             scope=body.get('scope','all')
             self.plain_application[scope]={'state':'processing','message':'正在应用，请等待处理结果。','updated_at':time.time()}
@@ -488,10 +509,13 @@ class Console:
                        {'draft_id':(self.draft or {}).get('id'),'states':self.plain_application})
 
     def _plain_rules(self, instruction, scope="all"):
-        env={**os.environ,'DEEPSEEK_API_KEY':self.draft_key,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
+        from selection_automation.rule_provider import environment
+        env={**os.environ,**environment(self.draft_provider),'DEEPSEEK_API_KEY':self.draft_key,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
         try:
             output=self.explain_file(self.draft_path,instruction,env,scope)
             category=json.loads(output.read_text('utf-8'))
+            category['rule_generation_provider']=self.draft_provider
+            selection.save(output,category)
             with self.lock:
                 if self.cancel.is_set():
                     self.phase='已停止'
@@ -560,7 +584,8 @@ class Console:
         return {'ok':True,'phase':self.phase}
 
     def _run_draft(self, edits):
-        env={**os.environ,'DEEPSEEK_API_KEY':self.draft_key or '', 'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
+        from selection_automation.rule_provider import DEFAULT_URL, environment
+        env={**os.environ,**environment(self.draft_provider),'DEEPSEEK_API_KEY':self.draft_key or '', 'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
         try:
             if not self.draft_amazon_path or not self.draft_plan_path or not self.draft_amazon_path.is_file() or not self.draft_plan_path.is_file():
                 raise ConsoleError('KEYWORD_PLAN_MISSING','这份旧草稿没有 Amazon 商品与关键词，请重新点击生成规则与关键词')
@@ -576,6 +601,7 @@ class Console:
                 category['execution_mode']='full'
             # A failed launch may already have frozen its configuration.
             category.setdefault('temu',{})['worker_count']=worker_count(edits.get('worker_count',category_worker_count(category)))
+            category['rule_generation_provider']=self.draft_provider
             # Retried edits receive a fresh run instead of mixing old state.
             category['category_key']=category['category_key'][:48]+'_'+uuid.uuid4().hex[:12]
             selection.save(output,category)
@@ -584,7 +610,9 @@ class Console:
             if self.cancel.is_set(): raise ConsoleError('CANCELLED','已停止')
             self.seed_run_from_draft(category)
             self.phase='启动中'
-            result=self.invoke([str(self.root/'scripts/selection.py'),'start','--category',str(output)],env=env,timeout=90)
+            collection_env={**env}
+            if self.draft_provider['base_url']!=DEFAULT_URL:collection_env['DEEPSEEK_API_KEY']=''
+            result=self.invoke([str(self.root/'scripts/selection.py'),'start','--category',str(output)],env=collection_env,timeout=90)
             if result.returncode: raise ConsoleError('START_FAILED','任务启动失败，请检查本地依赖和公司配置')
             owner=self.registered_owner(self.key)
             if self.cancel.is_set(): raise ConsoleError('CANCELLED','已停止')
@@ -1223,7 +1251,10 @@ class Console:
             supplied=body.get('api_key')
             if supplied is not None and (not isinstance(supplied,str) or not supplied.strip() or len(supplied)>4096 or any(ord(c)<32 for c in supplied)):
                 raise ConsoleError('INVALID_INPUT','API key无效')
-            api_key=supplied.strip() if supplied is not None else ((self.draft_key if self.key==key else None) or self.saved_credential())
+            from selection_automation.rule_provider import DEFAULT_URL
+            if supplied is not None and self.draft_provider['base_url']!=DEFAULT_URL:
+                raise ConsoleError('VISION_PROVIDER_UNSUPPORTED','第三层仍使用 DeepSeek 视觉接口；其他服务的 Key 只用于规则生成，请使用已导入的 DeepSeek 配置',409)
+            api_key=supplied.strip() if supplied is not None else ((self.draft_key if self.key==key and self.draft_provider['base_url']==DEFAULT_URL else None) or self.saved_credential())
             if not api_key: raise ConsoleError('KEY_REQUIRED','未检测到 DeepSeek API key，请导入公司配置',409)
             folder=base/'stage123'; folder.mkdir(parents=True,exist_ok=True)
             (folder/'STOP').unlink(missing_ok=True)
@@ -1329,7 +1360,7 @@ class Console:
 
     def generation_progress(self):
         raw=selection.read(self.progress_file,{}) if self.progress_file else {}
-        if raw.get('stage') not in {'discovering','validating','generating','complete','error'}: return {}
+        if raw.get('stage') not in {'dependencies','discovering','validating','generating','complete','error'}: return {}
         result={key:raw[key] for key in ('stage','message','error_code','failed_stage') if isinstance(raw.get(key),str)}
         if type(raw.get('depth')) is int: result['depth']=raw['depth']
         return result
@@ -1461,6 +1492,9 @@ class Console:
                       'draft':None if self.draft_used else self.draft,'scope':scope,
                       'plain_application':self.plain_application,
                       'saved_credential_available':bool(self.saved_credential()),
+                      'rule_provider':self.draft_provider if self.draft else {
+                          'base_url':(self.pending_scope or {}).get('api_base_url','https://api.deepseek.com'),
+                          'model':(self.pending_scope or {}).get('api_model','deepseek-flash')},
                       'excel_files':self.excel_files(key),
                       'commercial': selection.read(self.root/'runs'/key/'commercial_report.json', {}) if key and not preparing_new and not business_error else {},
                       'commercial_error': '商业判断更新失败，暂不展示旧结论，请检查任务发布状态' if business_error else None,
