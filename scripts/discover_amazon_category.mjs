@@ -1,4 +1,6 @@
 import { chromium } from 'playwright';
+import {existsSync} from 'node:fs';
+import path from 'node:path';
 import {inspectAmazonPage} from './amazon_page_state.mjs';
 import {openAmazonDetail} from './amazon_browser_recovery.mjs';
 const url = process.argv[2];
@@ -8,7 +10,10 @@ if (!valid(url)) throw new Error('Invalid Amazon Best Sellers URL');
 let browser;
 let stage = 'browser_launch';
 try {
+  const installedEdge=process.platform==='win32' ? [process.env['ProgramFiles(x86)'],process.env.ProgramFiles]
+    .filter(Boolean).map(directory=>path.join(directory,'Microsoft/Edge/Application/msedge.exe')).find(existsSync) : null;
   browser = await chromium.launch({ headless: true,
+    executablePath: process.env.AMAZON_BROWSER_PATH || installedEdge || chromium.executablePath(),
     ...(process.env.AMAZON_BROWSER_PROXY?{proxy:{server:process.env.AMAZON_BROWSER_PROXY}}:{}) });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'en-US' });
   const page = await context.newPage();
