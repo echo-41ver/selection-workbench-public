@@ -30,6 +30,36 @@ class CategoryGenerationError(RuntimeError):
         self.code = code
 
 
+def model_http_error(error, key):
+    """Keep the provider's bounded explanation, never echo credentials or HTML."""
+    hints = {401: '密钥无效或与服务地址不匹配', 403: '接口服务拒绝访问，需核对具体返回原因',
+             402: '服务余额或计费授权不足', 404: '服务地址或模型名不存在',
+             429: '服务限流或额度不足'}
+    hint=hints.get(error.code,'请检查服务状态及请求格式')
+    try:raw=error.read(8192).decode('utf-8','replace')
+    except (OSError,AttributeError,TypeError):raw=''
+    detail=''
+    if error.code==403 and re.search(r'error\s*code\s*:\s*1010\b',raw,re.I):
+        hint='接口网关拒绝当前客户端标识（1010），未能进入 API 鉴权'
+    else:
+        try:
+            value=json.loads(raw)
+            if isinstance(value,dict):
+                value=value.get('error',value)
+                if isinstance(value,dict):
+                    code=value.get('code') or value.get('type')
+                    message=value.get('message')
+                    parts=[str(code) if isinstance(code,(str,int)) else '',message if isinstance(message,str) else '']
+                    detail='：'.join(part for part in parts if part)
+        except (ValueError,TypeError):pass
+    if key:detail=detail.replace(key,'[密钥已隐藏]')
+    detail=re.sub(r'(?i)Bearer\s+[^\s,;]+','Bearer [密钥已隐藏]',detail)
+    detail=re.sub(r'sk[-_][A-Za-z0-9_-]{8,}','[密钥已隐藏]',detail)
+    detail=' '.join(detail.split())[:240]
+    return CategoryGenerationError(f'品类模型请求返回 HTTP {error.code}；{hint}'+
+        ('；服务返回：'+detail if detail else ''),f'MODEL_HTTP_{error.code}')
+
+
 def compile_generated_policy(config, *, model=None):
     """One bounded repair of malformed authoring; never substitute a category."""
     from selection_automation.identity_policy import VERSION
@@ -80,7 +110,8 @@ def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = 
     if provider == settings():
         payload.update(thinking={'type': 'enabled'}, reasoning_effort='low')
     request = urllib.request.Request(provider['base_url']+'/chat/completions',
-        data=json.dumps(payload).encode(), headers={'Authorization': 'Bearer '+key, 'Content-Type':'application/json'})
+        data=json.dumps(payload).encode(), headers={'Authorization': 'Bearer '+key,
+        'Content-Type':'application/json','User-Agent':'selection-workbench/1.0','Accept':'application/json'})
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             result = json.load(response)
@@ -95,10 +126,7 @@ def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = 
     except CategoryGenerationError:
         raise
     except urllib.error.HTTPError as error:
-        hints = {401: '密钥无效或与服务地址不匹配', 403: '密钥权限不足或服务拒绝访问',
-                 402: '服务余额或计费授权不足', 404: '服务地址或模型名不存在',
-                 429: '服务限流或额度不足'}
-        raise CategoryGenerationError(f'品类模型请求返回 HTTP {error.code}；'+hints.get(error.code, '请检查服务状态及请求格式'), f'MODEL_HTTP_{error.code}') from None
+        raise model_http_error(error,key) from None
     except (TimeoutError, urllib.error.URLError):
         raise CategoryGenerationError('连接品类模型超时或网络失败；未创建任务', 'MODEL_NETWORK_ERROR') from None
     except (ValueError, KeyError, IndexError, TypeError):

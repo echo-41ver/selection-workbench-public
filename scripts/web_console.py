@@ -216,6 +216,8 @@ class Console:
             self.phase=pending.get('message') or '准备任务被中断，请重试'
             if self.phase.startswith('安装网页采集浏览器'):
                 self.phase='上次任务在旧版自动安装阶段失败；新版已移除该步骤，请重新填写 API Key 后重试生成'
+            elif self.phase=='品类模型请求返回 HTTP 403；密钥权限不足或服务拒绝访问':
+                self.phase='上次模型请求返回 HTTP 403；已更新 API 客户端标识，请重新填写 Key 后重试；如仍失败将显示接口具体原因'
             self.generation_error={'code':pending.get('code') or 'GENERATION_INTERRUPTED','message':self.phase}
 
 

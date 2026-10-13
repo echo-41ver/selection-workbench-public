@@ -33,8 +33,10 @@ def test_custom_service_requires_explicit_model_and_key(tmp_path, monkeypatch):
 
 def test_actual_http_request_uses_selected_endpoint_model_and_standard_payload(monkeypatch):
     received = []
+    client_agents = []
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            client_agents.append(self.headers.get('User-Agent'))
             received.append((self.path, self.headers['Authorization'],
                 json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
             self.send_response(200);self.send_header('Content-Type', 'application/json');self.end_headers()
@@ -51,7 +53,26 @@ def test_actual_http_request_uses_selected_endpoint_model_and_standard_payload(m
     path, auth, payload = received[0]
     assert path == '/v1/chat/completions' and auth == 'Bearer TEST_ONLY_KEY'
     assert payload['model'] == 'test-model'
+    assert client_agents==['selection-workbench/1.0']
     assert 'thinking' not in payload and 'reasoning_effort' not in payload
+
+
+@pytest.mark.parametrize('body,expected',[
+    (b'error code: 1010\n','客户端标识'),
+    (b'{"error":{"code":"MODEL_NOT_ALLOWED","message":"model access denied"}}','MODEL_NOT_ALLOWED'),
+    (b'{"message":"echo TEST_ONLY_PRIVATE_KEY and Bearer TEST_ONLY_OTHER"}','密钥已隐藏'),
+    (b'<html>blocked TEST_ONLY_PRIVATE_KEY</html>','服务拒绝访问')])
+def test_http403_preserves_reason_without_exposing_credentials(monkeypatch,body,expected):
+    import io
+    from urllib.error import HTTPError
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_PRIVATE_KEY')
+    def fail(*args,**kwargs):raise HTTPError('https://provider.example/chat/completions',403,'Forbidden',{},io.BytesIO(body))
+    monkeypatch.setattr(generator.urllib.request,'urlopen',fail)
+    with pytest.raises(generator.CategoryGenerationError) as captured:generator.model_json('test')
+    assert captured.value.code=='MODEL_HTTP_403' and expected in str(captured.value)
+    assert 'TEST_ONLY_PRIVATE_KEY' not in str(captured.value)
+    assert 'TEST_ONLY_OTHER' not in str(captured.value)
+    assert '<html>' not in str(captured.value)
 
 
 def test_web_generation_keeps_provider_for_edits_without_persisting_key(tmp_path, monkeypatch):

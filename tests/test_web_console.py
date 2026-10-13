@@ -651,14 +651,17 @@ def test_amazon_invocation_uses_node_not_python(tmp_path,monkeypatch):
     assert calls==[['C:/node.exe','collector.mjs','--config','category.json']]
 
 
-def test_legacy_install_failure_is_labelled_previous_attempt_and_retains_scope(tmp_path):
+@pytest.mark.parametrize('message,expected',[
+    ('安装网页采集浏览器未完成；请检查网络后重试，或运行 deploy.cmd。','新版已移除该步骤'),
+    ('品类模型请求返回 HTTP 403；密钥权限不足或服务拒绝访问','已更新 API 客户端标识')])
+def test_legacy_failure_is_labelled_previous_attempt_and_retains_scope(tmp_path,message,expected):
     scope={'category':'键盘','amazon_count':20,'per_keyword':200,'worker_count':4,
         'api_base_url':'https://provider.example/v1','api_model':'test-model'}
     web.selection.save(tmp_path/'runtime/web-console/pending-generation.json',{
-        'scope':scope,'code':'GENERATION_FAILED','message':'安装网页采集浏览器未完成；请检查网络后重试，或运行 deploy.cmd。'})
+        'scope':scope,'code':'GENERATION_FAILED','message':message})
     console=web.Console(tmp_path)
     assert console.pending_scope==scope
-    assert '上次任务' in console.phase and '新版已移除该步骤' in console.phase
+    assert '上次' in console.phase and expected in console.phase
     assert console.generation_error['message']==console.phase and not console.busy
 
 
