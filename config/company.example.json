@@ -1,0 +1,15 @@
+{
+  "adspower_api_key": "REPLACE_WITH_COMPANY_ADSPOWER_API_KEY",
+  "adspower_api_url": "http://127.0.0.1:50325",
+  "proxy": {
+    "host": "proxy.proxyshare.com",
+    "port": 5959,
+    "username": "REPLACE_WITH_COMPANY_USERNAME_session-initial",
+    "password": "REPLACE_WITH_COMPANY_PROXY_PASSWORD"
+  },
+  "preproxy_candidates": [
+    {"host": "127.0.0.1", "port": 7890},
+    {"host": "127.0.0.1", "port": 1080},
+    {"host": "127.0.0.1", "port": 10808}
+  ]
+}

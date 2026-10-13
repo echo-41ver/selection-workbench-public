@@ -1,0 +1,310 @@
+{
+  "schema_version": "shower-curtain-three-layer-3.1",
+  "rule_version": "shower-curtain-three-layer-v3.1-module-facts",
+  "category": "浴帘",
+  "scope": {
+    "amazon_market": "US",
+    "amazon_domain": "www.amazon.com",
+    "temu_domain": "www.temu.com",
+    "delivery_country": "US",
+    "delivery_postcode": "10001",
+    "language": "en-US",
+    "currency": "USD",
+    "locale_status": "DEFAULT_REQUIRES_PAGE_VERIFICATION",
+    "queries": [
+      "shower curtain"
+    ],
+    "amazon_candidate_policy": {
+      "require_bestseller_badge": true,
+      "accepted_badges": [
+        "畅销",
+        "Best Seller"
+      ],
+      "require_category_bsr": true
+    },
+    "included_subtypes": [
+      "CURTAIN",
+      "LINER",
+      "CURTAIN_WITH_LINER",
+      "BATHROOM_SET"
+    ],
+    "excluded_subtypes": [
+      "ACCESSORY"
+    ],
+    "unknown_subtype_action": "NEEDS_EVIDENCE",
+    "export_inputs": {
+      "amazon": "SellerSprite exported Amazon product-detail Excel; each retained row must show bestseller evidence.",
+      "temu": "JiJingYun exported TEMU product-detail Excel; each row must carry goods_id and source traceability."
+    }
+  },
+  "collection": {
+    "temu_source": "JIJINGYUN_TEMU_MANUAL_EXPORT",
+    "amazon_modes": [
+      "SELLERSPRITE_MANUAL_EXPORT"
+    ],
+    "cdp_endpoint": null,
+    "concurrency": 1,
+    "max_retries": 3,
+    "backoff_seconds": [
+      60,
+      120,
+      240
+    ],
+    "honor_retry_after": true,
+    "rate_limit_action": "PAUSE_SITE_AND_CHECKPOINT",
+    "visible_challenge_action": "CHECKPOINT_AND_WAIT_FOR_USER_SAME_SESSION",
+    "smoke": {
+      "amazon_limit": 3,
+      "temu_limit": 10,
+      "max_pages": 3
+    },
+    "expanded": {
+      "amazon_limit": 20,
+      "temu_limit": 300,
+      "max_pages": 30
+    },
+    "stop_reasons": [
+      "LIMIT_REACHED",
+      "END_OF_RESULTS",
+      "NO_NEW_IDS",
+      "PAGE_LIMIT",
+      "RATE_LIMITED",
+      "BLOCKED_LOGIN",
+      "BLOCKED_CAPTCHA",
+      "LOAD_FAILED"
+    ],
+    "amazon_source": "SELLERSPRITE_MANUAL_EXPORT",
+    "temu_modes": [
+      "JIJINGYUN_TEMU_MANUAL_EXPORT"
+    ],
+    "live_browser_collection": false,
+    "input_contract": "TWO_EXCEL_EXPORTS_ONLY"
+  },
+  "matching": {
+    "mode": "FULL_CARTESIAN",
+    "count_unique_by": "goods_id",
+    "sku_policy": "EXISTS_OBSERVED_MATCHING_REAL_SKU_PAIR",
+    "accuracy": null,
+    "final_similarity_scoring": {
+      "version": "shower-layer3-v2.1-module-facts",
+      "score_source": "LAYER3_SEVEN_EXPLAINABLE_MODULES_ONLY",
+      "stage1_score_included": false,
+      "stage2_vector_score_included": false,
+      "modules": {
+        "design_identity": 32,
+        "core_structure": 18,
+        "material_opacity": 15,
+        "function_subtype": 12,
+        "surface_details": 10,
+        "bundle_accessories": 7,
+        "spec_variants": 6
+      },
+      "same_product_threshold": 86,
+      "same_product_operator": ">=",
+      "non_match_score_ceiling": 71,
+      "manual_review_band": "72-85",
+      "confirmation_requires": "no accepted hard conflict; key-module minimums; at least six known modules; evidence quality medium or high",
+      "identity_hard_conflict_requires_bilateral_evidence": true,
+      "identity_hard_conflict_min_confidence": null,
+      "bundle_hard_conflict_min_confidence": 85
+    },
+    "stage1_text_gate": {
+      "version": "shower-text-gate-2.0",
+      "scoring": false,
+      "states": [
+        "TEXT_HARD_EXCLUDE",
+        "TEXT_CLEAR",
+        "TEXT_INSUFFICIENT"
+      ],
+      "hard_exclude_action": "SKIP_LAYER2_AND_LAYER3",
+      "insufficient_action": "ADVANCE_TO_IMAGE_VECTOR",
+      "bilateral_explicit_evidence_required": true,
+      "allowed_variant_dimensions": [
+        "color",
+        "size",
+        "thickness",
+        "hooks_or_rings",
+        "packaging",
+        "watermark",
+        "brand_overlay"
+      ],
+      "fact_input": "TRACEABLE_PRODUCT_FACT_ARCHIVE_V3.1"
+    },
+    "stage2_image_vector": {
+      "model": "torchvision/resnet50-imagenet1k-v2",
+      "embedding_dimensions": 2048,
+      "score_formula": "cosine_similarity_times_100",
+      "candidate_threshold": 50,
+      "role": "ROUTING_ONLY",
+      "included_in_final_score": false,
+      "below_threshold_action": "FINAL_DIFFERENT_BY_CALIBRATED_VECTOR_THRESHOLD"
+    },
+    "legacy_framework_matching": {
+      "enabled": false,
+      "status": "HISTORICAL_SYNTHETIC_TESTS_ONLY_NOT_CURRENT_SCORING",
+      "confirmation_threshold": 85,
+      "threshold_operator": ">",
+      "weights": {
+        "print_layout": 35,
+        "core_material": 15,
+        "opacity": 10,
+        "size_ratio": 10,
+        "installation_structure": 10,
+        "weave_surface": 8,
+        "edge_seam_details": 7,
+        "bundle_accessories": 5
+      },
+      "required_bilateral_dimensions": [
+        "print_layout",
+        "core_material",
+        "opacity",
+        "size_ratio",
+        "installation_structure",
+        "bundle_accessories"
+      ],
+      "hard_conflicts": [
+        "DIFFERENT_PRINT",
+        "DIFFERENT_CORE_MATERIAL",
+        "DIFFERENT_OPACITY",
+        "DIFFERENT_INSTALLATION",
+        "DIFFERENT_LINER_STRUCTURE",
+        "DIFFERENT_MAIN_BUNDLE",
+        "DIFFERENT_SIZE_TIER",
+        "DIFFERENT_SUBTYPE"
+      ],
+      "variant_dimensions": {
+        "true_color": {
+          "different_action": "COLOR_VARIANT_NOT_HARD_CONFLICT",
+          "rule": "颜色或色系不同只记录为颜色变体；不得单独排除同款。图案主体、重复单元或版式不同仍按 DIFFERENT_PRINT 处理。",
+          "requires": "两侧颜色事实均有来源证据"
+        }
+      },
+      "unknown_score": 0,
+      "redistribute_missing_weight": false,
+      "unresolved_text_image_conflict": "NEEDS_EVIDENCE",
+      "size_tolerance": {
+        "mode": "ROUNDING_ONLY",
+        "max_axis_delta_cm": 1.0,
+        "requires_same_nominal_size_tier": true,
+        "requires_product_dimensions": true,
+        "allow_axis_swap": false,
+        "status": "INITIAL_PENDING_REAL_SAMPLE_VALIDATION"
+      },
+      "vision_hard_conflict_min_confidence": 90,
+      "evidence_channels": {
+        "visual": {
+          "required": true,
+          "input": "main_and_detail_images",
+          "role": "verify_print_layout_material_opacity_installation_bundle"
+        },
+        "text": {
+          "required": true,
+          "input": [
+            "title",
+            "product_description",
+            "bullet_points",
+            "variant_options",
+            "specifications"
+          ],
+          "role": "extract_normalized_bilateral_facts",
+          "title_only_action": "NEEDS_EVIDENCE"
+        },
+        "cross_check": {
+          "required": true,
+          "action_on_text_image_conflict": "NEEDS_EVIDENCE"
+        }
+      },
+      "text_fact_dimensions": [
+        "print_layout",
+        "core_material",
+        "opacity",
+        "size_ratio",
+        "installation_structure",
+        "weave_surface",
+        "edge_seam_details",
+        "bundle_accessories",
+        "subtype",
+        "true_color",
+        "liner_structure",
+        "main_bundle"
+      ]
+    }
+  },
+  "vision": {
+    "status": "OPENAI_RESPONSES_SEVEN_MODULE_FACTS_IMPLEMENTED_PENDING_FULL_RERUN",
+    "channel": "OPENAI_RESPONSES_API",
+    "model_env": "OPENAI_VISION_MODEL",
+    "default_model": "gpt-5.6-luna",
+    "api_key_env": "OPENAI_API_KEY",
+    "base_url_env": "OPENAI_BASE_URL",
+    "endpoint_env": "OPENAI_BASE_URL",
+    "timeout_seconds": 180,
+    "prompt_version": "shower-openai-module-facts-v2.0",
+    "output": "STRUCTURED_VISUAL_FACTS_ONLY",
+    "missing_configuration_action": "NEEDS_EVIDENCE_NO_DEFAULT_SCORES",
+    "responses_api": {
+      "sdk": "official_openai_python",
+      "endpoint": "v1/responses",
+      "structured_outputs": "strict_json_schema",
+      "image_input": "LOCAL_CACHED_IMAGE_BYTES_DATA_URL",
+      "retry_after_failure": 1,
+      "store": false,
+      "model_outputs_final_scores": false,
+      "model_outputs": "SEVEN_MODULE_BILATERAL_FACTS_ONLY"
+    },
+    "legacy_local_ollama": {
+      "enabled": false,
+      "status": "HISTORICAL_ONLY_NOT_CURRENT_ENTRYPOINT"
+    },
+    "local_ollama": {
+      "enabled": false,
+      "status": "HISTORICAL_ONLY_NOT_CURRENT_ENTRYPOINT"
+    },
+    "fact_schema_version": "shower-module-facts-v2.0",
+    "current_image_input": "ONE_MAIN_IMAGE_PER_SIDE",
+    "future_multi_image_plan": "skills/amazon-to-temu-selection/references/multi_image_future_plan.md"
+  },
+  "external_vision_review": {
+    "enabled": false,
+    "status": "REPLACED_BY_PRIMARY_OPENAI_RESPONSES_API_CHANNEL"
+  },
+  "temu_multi_source": {
+    "mode": "UNION_BY_GOODS_ID",
+    "status": "CONTRACT_DEFINED_CONNECTORS_NOT_YET_ENABLED",
+    "primary_source": "JIJINGYUN",
+    "dedupe_key": "goods_id",
+    "intersection_role": "SOURCE_AGREEMENT_SIGNAL_ONLY",
+    "different_goods_id_policy": "KEEP_SEPARATE_FOR_LATER_SAME_PRODUCT_CLUSTERING",
+    "field_merge_policy": "KEEP_FIELD_LEVEL_PROVENANCE_AND_CONFLICTS",
+    "required_trace_fields": [
+      "source_name",
+      "source_record_id",
+      "observed_at",
+      "market",
+      "language",
+      "currency",
+      "raw_record_hash"
+    ]
+  },
+  "replay_contract": {
+    "reference_run": "output/shower_curtain/full_run_001",
+    "layer1_entrypoint": "scripts/run_full_stage1_text_v2.py",
+    "layer2_model": "torchvision/resnet50-imagenet1k-v2",
+    "layer2_candidate_threshold": 50,
+    "layer3_entrypoint": "scripts/run_layer3_openai_responses_full.py",
+    "layer3_workers": 5,
+    "layer3_prompt_version": "shower-openai-module-facts-v2.0",
+    "final_export_entrypoint": "scripts/export_full_layer123_openai.py",
+    "final_validation_entrypoint": "scripts/validate_full_layer123_openai.py",
+    "final_excel_columns": 29,
+    "final_excel_freeze_panes": "A5",
+    "cache_reuse_requires": "VISION_REVISION_KEY_EXACT_MATCH",
+    "current_candidate_count_after_layer1_v3_1": 700
+  },
+  "deferred_iterations": [
+    "HUMAN_GROUND_TRUTH_SET",
+    "MANUAL_FALSE_NEGATIVE_REVIEW",
+    "THRESHOLD_RECALIBRATION",
+    "ADDITIONAL_MANUAL_EXCEL_VIEWS"
+  ]
+}

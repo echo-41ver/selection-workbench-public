@@ -1,0 +1,14 @@
+{
+  "schema_version": "temu-proxy-policy-v1",
+  "architecture": "ADSPOWER_TO_LOCAL_HTTP_CHAIN_TO_LOCAL_SOCKS5_TO_PROXYSHARE_TO_TEMU",
+  "direct_proxyshare_in_adspower_forbidden": true,
+  "preproxy": "127.0.0.1:7890",
+  "worker_chain_ports": [17891, 17892, 17893, 17894],
+  "session_rotation_policy": "NEW_ADSPOWER_PROFILE_AND_NEW_PROXY_SESSION",
+  "reuse_old_profile_on_session_change": false,
+  "delete_old_profile_first_via_adspower": true,
+  "old_profile_deletion_is_permanent": true,
+  "replacement_speed_target_seconds": 60,
+  "credential_storage": "WINDOWS_DPAPI_CURRENT_USER",
+  "temu_only_probe": true
+}

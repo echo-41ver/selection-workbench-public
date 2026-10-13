@@ -1,0 +1,39 @@
+{
+  "schema_version": "knife-stage3-admission-v1",
+  "stage2": {
+    "candidate_threshold": 60,
+    "threshold_status": "PROVISIONAL_UNCALIBRATED_HIGH_RECALL",
+    "below_threshold_action": "NOT_SELECTED_NOT_MANUAL_REVIEW",
+    "included_in_final_score": false
+  },
+  "stage3": {
+    "batch_size": 12,
+    "max_concurrency": 64,
+    "max_output_tokens": 65536,
+    "candidate_admission_threshold": 65,
+    "admission_threshold_status": "PROVISIONAL_KNIFE_65_USER_APPROVED_AFTER_68_POINT_VISUAL_COUNTEREXAMPLE",
+    "set_inventory_features": {
+      "knife_set_composition": [
+        "chef",
+        "bread",
+        "santoku",
+        "utility",
+        "paring",
+        "steak",
+        "cleaver",
+        "boning",
+        "carving",
+        "scissors",
+        "sharpener",
+        "block",
+        "bag",
+        "sheath",
+        "peeler",
+        "other",
+        "unknown"
+      ]
+    }
+  },
+  "recovery_pool_min_score": 60,
+  "note": "第三层65分门槛由用户确认。68.1269分商品对人工原图复核为高置信同外观候选，75分存在漏检。第一二层保持60分，60至65分候选保留回查；未入围不等于不同款，65分尚未证明总体召回率。"
+}

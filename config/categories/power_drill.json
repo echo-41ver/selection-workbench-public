@@ -1,0 +1,66 @@
+{
+  "schema_version": "category-automation-v1",
+  "category_key": "power_drill",
+  "category_name_zh": "电钻",
+  "category_name_en": "Power Drills",
+  "market": "US",
+  "amazon": {
+    "mode": "BEST_SELLERS_FRONTEND",
+    "bestsellers_url": "https://www.amazon.com/Best-Sellers-Power-Drills/zgbs/hi/552794",
+    "url_evidence": "Amazon Power Drills category; collector must validate live consecutive ranks before publishing",
+    "target_count": 30,
+    "detail_concurrency": 4
+  },
+  "temu": {
+    "base_queries": ["power drill"],
+    "keyword_features": ["cordless", "corded", "brushless", "hammer drill", "rotary hammer", "keyless chuck", "compact", "20v", "12v", "18v", "drill driver"],
+    "keyword_limit": 60,
+    "keywords_per_product": 6,
+    "max_products_per_keyword": 500,
+    "idle_complete_rounds": 10,
+    "include_terms": ["drill", "电钻", "电锤"],
+    "severe_exclude_terms": ["nail drill", "manicure", "nail file"],
+    "collection_source": "VISIBLE_TEMU_FRONTEND",
+    "merge_key": "goods_id"
+  },
+  "stage1": {
+    "text_gate": "declarative",
+    "attributes": [
+      {"name": "供电形式", "hard_conflict": true,
+       "values": {"无线": ["cordless", "battery powered"], "有线": ["corded", "corded electric"]},
+       "ambiguous_phrases": ["not corded", "not cordless", "compatible with", "replacement", "for cordless"]},
+      {"name": "工具子类", "hard_conflict": true,
+       "values": {"电锤": ["rotary hammer", "sds plus rotary"], "起子机": ["impact driver"], "钻孔起子机": ["drill driver"]},
+       "ambiguous_phrases": ["combo", "combination", "compatible", "not", "without", "replacement", "bit set"]}
+    ]
+  },
+  "stage2": {
+    "model": "torchvision/resnet50-imagenet1k-v2",
+    "candidate_threshold": 50,
+    "threshold_status": "PROVISIONAL_UNCALIBRATED",
+    "below_threshold_action": "NOT_SELECTED_NOT_MANUAL_REVIEW",
+    "included_in_final_score": false
+  },
+  "stage3": {
+    "rule_version": "power-drill-visual-v1",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com",
+    "batch_size": 12,
+    "max_concurrency": 4,
+    "same_threshold": 88,
+    "different_score_ceiling": 75,
+    "threshold_status": "PROVISIONAL_PENDING_CALIBRATION",
+    "modules": {"body": 40, "chuck_controls": 30, "battery_interface": 20, "kit": 10},
+    "module_labels": {"body": "机身结构", "chuck_controls": "夹头控制布局", "battery_interface": "供电接口", "kit": "可见套装"},
+    "module_descriptions": {
+      "body": "机身轮廓、握柄、散热孔、接缝和外壳细节；相同颜色不能证明同款",
+      "chuck_controls": "夹头外形、扭矩环、档位开关、扳机和方向开关位置",
+      "battery_interface": "可见电池连接结构、底座、供电线或接口；不从外观猜电压和兼容性",
+      "kit": "可见工具本体与配件构成；电池数量、包装和附送钻头可为套装变体"
+    },
+    "confirmation_minimums": {"body": 34, "chuck_controls": 25, "battery_interface": 16},
+    "identity_hard_conflicts": ["DIFFERENT_BODY_STRUCTURE", "DIFFERENT_CHUCK_LAYOUT", "DIFFERENT_POWER_INTERFACE"],
+    "variant_fields": ["外壳颜色", "配件数量", "包装", "品牌水印"],
+    "visual_instructions": "不要把只有钻头、电池或充电器的配件图片当成电钻本体。看不到关键接口时标未知，不推断接口一致。"
+  }
+}

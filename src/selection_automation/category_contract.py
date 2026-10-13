@@ -1,0 +1,96 @@
+"""Read-only authoring contract for Agent-generated, category-independent rules."""
+from __future__ import annotations
+import json
+import sys
+
+
+def category_contract() -> dict:
+    """Return a fresh template; no filesystem, provider or browser operations."""
+    return {
+        "contract_version": "agent-category-contract-v3-effects",
+        "ready_to_prepare": False,
+        "instructions": [
+            "由当前Agent根据用户品类生成配置，替换所有待填值；不是选择某个已有品类模板。",
+            "由Agent核实真实Amazon美国站Best Sellers榜单URL，禁止编造或以搜索结果替代榜单。",
+            "用户提供Amazon前X名与TEMU每关键词条数；API key通过独立密钥入口保存，不放入品类配置。",
+            "第一层只在双边明确文字身份冲突时排除；缺失、歧义或多个属性值不构成硬冲突。",
+            "否定、排除、适配语境和SKU多值须按歧义处理；普通允许的颜色/尺寸/包装变体不能设为文字身份硬冲突。",
+            "第二层使用原有中心视图、保留完整主体视图与可靠纯色背景的主体视图，取最佳视图对分数召回候选；分数不表示同款概率。",
+            "第三层先核验整体基础款并记录有辨识力的双边细节、身份差异及未知项；模块由Agent按新品类设计，权重合计100，仅为辅助证据。",
+            "第三层须对照实际款式设计与部件形状位置，主体/配件/保护套分清，不能仅凭同类通用部件确认同款。",
+            "先生成stage3.identity_policy作为唯一品类边界，再生成文字属性与视觉模块；不是把其他品类规则换个名称。每个特征明确决定基础款、允许变体或仅供说明，以及证据来自图片、文字、两者或当前无法可靠取得。",
+            "主体结构、关键部件布局与局部装饰分开定义，不把局部花纹或表面处理自动上升为主体构造差异，也不把所有品类的图案一律当变体。按该品类实际决定，并写清适用部位和条件。",
+            "把手、隔断、堆叠结构、卡槽、接口及按键布局等结构特征不可整项设为允许变体。部件形状、位置、数量和连接方式属于身份；仅表面颜色可变时另建限定表面的颜色特征。不能用批次不同、可能有型号变体、图片未展示作为允许结构变化的理由。",
+            "每个特征填写region和effects，按变化实际影响而非名称判断。shape/layout/connection/function/body_weave/transparency不能设为variant。装饰带内织纹属于decoration/surface_texture，不是body/body_weave；装饰带位置组数属于decoration/layout。variant必须用preserves引用须保持的可见身份特征。已确认品类标准优先，不能重新猜测。",
+            "上述结构限制针对出售主体；packaging仅指本体之外的包装，外包装形状可变但须保留本体身份。不得把出售主体或集成部件标为包装来绕过限制。套装主体构成与外包装件数分开。",
+            "preserves只列与该允许变化有关的最小身份条件；颜色变化不可要求核实无关的背面接口、挂环或其他未展示部位。未知身份不冒充一致，亦不因无关部位未展示而阻断已清晰对应的主体款式。",
+            "不要要求主图证明隐藏的背部结构、化学成分、精确尺寸、性能或兼容型号；明确文字可证的用text，当前无法可靠取得的用unverifiable且role=context。",
+            "required_visual只选择主图通常可见、足以辨认款式的最小身份特征集合，至少一项。其余身份特征有清晰差异时仍排除，但未展示不自动阻断；不要把背部接口、底部结构或配件一律设为确认必需。",
+            "文字属性name必须复用identity_policy.features.id，不能另起同义名称；模块只绑定可见特征。程序据此编译允许变体、模块说明、关键身份模块和冲突代码，避免多份独立标准矛盾。",
+            "可见特征另有明确文字词典时，程序合并为both证据来源；不可可靠核实的营销宣称即使写在标题里，也仍是context，不变成身份排除依据。",
+            "骨架含null和空规则，故意不能直接提交；填写完成后用selection_prepare验证并冻结。",
+        ],
+        "field_requirements": {
+            "visual_decision": "固定visible_core_binary_v1；最终看图结论只有同款/不同款。主体款式和核心结构对应即同款；颜色标识及无关未展示部位不阻断。主图不能体现核心对应时按不同款筛选并说明依据，图片读取或模型输出失败须自动重试，不能冒充商品结论。",
+            "category_key": "必填；[a-z][a-z0-9_]{0,63}，新品类独立标识",
+            "category_name_zh": "必填；真实品类显示名，不含Windows文件名非法字符",
+            "amazon.bestsellers_url": "必填；Agent实际核实的https://www.amazon.com/.../zgbs/... URL",
+            "amazon.target_count": "必填用户数量，整数1..100",
+            "temu.base_queries": "必填非空英文代表关键词列表；首词用于后续关键词计划",
+            "temu.keyword_features": "明确填写本品类可观察的英文结构、功能、外观或包装细化短语；不能把模板空数组当作已完成。包装短语不得当作商品本体属性，品牌和营销宣传不得当作身份特征。只在实际标题命中时生成有来源证据的查询；若确实无法支持细化词，允许空数组并明确提示缺口，后续使用通用标题数量等证据，不伪造精准覆盖。",
+            "temu.include_terms": "Agent填写本品类及相关商品的纳入短语列表，不复用其他品类词典",
+            "temu.category_aliases": "当前品类出售主体的英文、简体、繁体和常用地区称呼列表；不得包含配件、兼容宿主或不同形态，仅用于采集召回，不作为同款结论",
+            "temu.subject_filter": "mode=TARGET_BODY_ONLY；reject_mixed_subjects=true；exclude_subject_terms填明确其他出售主体的中英文名词，不能填共享功能词。明确不相关商品直接排除，主体信息不足保存在补采队列，不进入品类商品结果",
+            "temu.severe_exclude_terms": "Agent填写明确无关商品的强排除短语列表；避免排除目标变体",
+            "temu.collection_source": "固定VISIBLE_TEMU_FRONTEND，标记真实TEMU前端采集来源",
+            "temu.keyword_limit": "兼容旧配置的字段，不限制关键词数量；所有有商品证据的有效关键词去重后纳入",
+            "temu.max_products_per_keyword": "必填用户数量，正整数",
+            "temu.merge_key": "固定goods_id",
+            "stage1.text_gate": "新品类固定declarative；不生成或执行Python代码",
+            "stage1.attributes": "非空列表；每项name、hard_conflict布尔、values属性值到非空字面同义词列表；ambiguous_phrases为歧义短语列表",
+            "stage1.rule_version": "Agent维护第一层规则版本，改变规则时升级",
+            "stage2": "candidate_threshold及below_threshold_action必填；未校准阈值不能作最终不同款结论",
+            "stage3.modules": "Agent设计1..12个视觉模块，权重均>0、合计100",
+            "stage3.module_descriptions": "键与modules完全一致，各值解释该品类的图片判断标准",
+            "stage3.module_labels": "可选，与模块键对应的中文Excel显示名",
+            "stage3.confirmation_minimums": "键标记关键身份模块；模块确认须SAME，不以总分补偿VARIANT/SIMILAR/UNKNOWN；数值仅保留辅助计分兼容，每个值0..该模块权重",
+            "stage3.identity_hard_conflicts": "Agent定义身份级冲突代码；只允许双边明确DIFFERENT证据使用",
+            "stage3.variant_fields": "由identity_policy中role=variant的特征id编译，不独立猜测。不可填写整个模块键；允许变化只限scope和rule界定的部位与条件。",
+            "stage3.identity_policy": "必填。{version:'category-identity-policy-v2-effects',product_scope:中文主体/套装范围,features:[{id:唯一英文标识,label:中文名,role:identity|variant|context,evidence:image|text|both|unverifiable,region:body|component|decoration|packaging|specification,effects:[shape|layout|connection|function|body_weave|transparency|color|surface_pattern|surface_texture|material_composition|nominal_size|package_quantity|marking|performance_claim],preserves:[variant须保持的identity特征id，其余为空],scope:实际对应部位或属性范围,rule:可执行边界,modules:[对应模块键],required_visual:布尔}]}。text/unverifiable的modules为空；unverifiable只能context。required_visual只用于image/both的identity特征，至少一项但不要求全部展示。所有模块须有特征支持。variant不能包含结构影响，且须保持可见身份结构；不能按特征名称猜测effects。",
+            "stage3.module_variant_fields": "可选：模块键到具体允许变体标识数组。仅整体款式一致、有双边变体证据时兼容该模块V；不抵消身份冲突或未知。",
+            "stage3.identity_required_modules": "可选：明确决定基础款的可见结构模块。模块权重/最低辅助分不等同关键身份；不要要求正面商品图证明看不到的电池仓、后接口或材质。缺失关键款式证据仍不能确认。",
+            "stage3.visual_instructions": "Agent生成品类特定的可见事实、遮挡UNKNOWN及禁止推断标准",
+            "stage3.same_threshold/different_score_ceiling": "兼容辅助计分配置：0<=different_score_ceiling<same_threshold<=100；不能用分数覆盖整体身份判断",
+            "stage3.max_output_tokens": "可选整数1024..32000；实际使用至少16384以留足推理与事实输出空间；非实际消耗量",
+            "stage3.rule_version/prompt_version/schema_version": "Agent设置规则、提示词与输出协议版本，保留已冻结任务配置",
+            "stage12_output_dir": "可选相对目录，默认stage12；不能绝对路径、盘符或..",
+        },
+        "attribute_shape": {"name": "待填身份属性名", "hard_conflict": True,
+                            "values": {"待填属性值": ["待填明确字面证据"]}, "ambiguous_phrases": []},
+        "template": {
+            "schema_version": "category-automation-v1", "category_key": None, "category_name_zh": None,
+            "market": "US", "currency": "USD",
+            "amazon": {"mode": "BEST_SELLERS_FRONTEND", "bestsellers_url": None, "target_count": None, "detail_concurrency": 4},
+            "temu": {"base_queries": [], "keyword_limit": None, "keywords_per_product": 6,
+                     "max_products_per_keyword": None, "merge_key": "goods_id",
+                     "keyword_features": [], "include_terms": [], "category_aliases": [], "severe_exclude_terms": [],
+                     "subject_filter":{"mode":"TARGET_BODY_ONLY","reject_mixed_subjects":True,"exclude_subject_terms":[]},
+                     "collection_source": "VISIBLE_TEMU_FRONTEND", "entry_mode": "empty_search",
+                     "search_submit_method": "icon"},
+            "stage1": {"text_gate": "declarative", "rule_version": None, "attributes": []},
+            "stage2": {"candidate_threshold": 60, "threshold_status": "PROVISIONAL_UNCALIBRATED_HIGH_RECALL",
+                       "below_threshold_action": "NOT_SELECTED_NOT_MANUAL_REVIEW", "included_in_final_score": False},
+            "stage3": {"provider": "deepseek", "model": "deepseek-flash", "base_url": "https://api.deepseek.com",
+                       "rule_version": None, "prompt_version": None, "schema_version": None,
+                       "modules": {}, "module_descriptions": {}, "module_labels": {}, "identity_policy": None,
+                       "confirmation_minimums": {}, "identity_hard_conflicts": [], "variant_fields": [],
+                       "visual_instructions": None, "same_threshold": 88, "different_score_ceiling": 69,
+                       "threshold_status": "PROVISIONAL_PENDING_HUMAN_GROUND_TRUTH_CALIBRATION",
+                       "batch_size": 12, "max_concurrency": 4, "reasoning_effort": "low"},
+        },
+    }
+
+
+if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(json.dumps(category_contract(), ensure_ascii=False, indent=2))

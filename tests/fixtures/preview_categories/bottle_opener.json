@@ -1,0 +1,91 @@
+{
+  "schema_version": "category-automation-v1",
+  "category_key": "agent_bottle_opener_review_20261005",
+  "category_name_zh": "开瓶器",
+  "market": "US",
+  "currency": "USD",
+  "amazon": {"mode": "BEST_SELLERS_FRONTEND", "bestsellers_url": null, "target_count": null, "detail_concurrency": 4},
+  "temu": {
+    "base_queries": ["bottle opener", "wine corkscrew"],
+    "keyword_limit": 6,
+    "keywords_per_product": 6,
+    "max_products_per_keyword": null,
+    "merge_key": "goods_id",
+    "keyword_features": ["winged", "waiter's", "lever", "electric", "wall mounted", "folding", "crown cap"],
+    "include_terms": ["bottle opener", "corkscrew", "wine opener", "cap opener"],
+    "severe_exclude_terms": [],
+    "collection_source": "VISIBLE_TEMU_FRONTEND"
+  },
+  "stage1": {
+    "text_gate": "declarative",
+    "rule_version": "bottle-opener-current-agent-draft-v1",
+    "attributes": [
+      {
+        "name": "opening_mechanism",
+        "hard_conflict": true,
+        "values": {
+          "wing_corkscrew": ["wing corkscrew", "winged corkscrew"],
+          "waiter_corkscrew": ["waiter's corkscrew", "waiters corkscrew", "sommelier corkscrew"],
+          "electric_corkscrew": ["electric wine opener", "electric corkscrew"],
+          "lever_corkscrew": ["lever corkscrew"],
+          "fixed_cap_opener": ["wall mounted bottle opener", "wall-mounted bottle opener"],
+          "handheld_cap_opener": ["handheld crown cap opener", "hand held crown cap opener"]
+        },
+        "ambiguous_phrases": ["replacement", "spare parts", "compatible with", "for use with", "accessory", "parts only", "适用于", "替换", "配件"]
+      },
+      {
+        "name": "body_color",
+        "hard_conflict": false,
+        "values": {"red": ["red"], "black": ["black"], "silver": ["silver"]},
+        "ambiguous_phrases": ["random color", "assorted colors", "多色随机"]
+      },
+      {
+        "name": "nominal_size",
+        "hard_conflict": false,
+        "values": {"12_cm": ["12 cm", "12cm"], "15_cm": ["15 cm", "15cm"]},
+        "ambiguous_phrases": ["package size", "box size", "包装尺寸"]
+      }
+    ]
+  },
+  "stage2": {
+    "candidate_threshold": 60,
+    "threshold_status": "PROVISIONAL_UNCALIBRATED_HIGH_RECALL",
+    "below_threshold_action": "NOT_SELECTED_NOT_MANUAL_REVIEW",
+    "included_in_final_score": false,
+    "calibration_basis": "沿用空合同的临时候选起点60；没有本品类真实图分布或人眼标签支持，不能称为已校准，低分只是不进入候选而非最终不同款。"
+  },
+  "stage3": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com",
+    "rule_version": "bottle-opener-current-agent-draft-v1",
+    "prompt_version": "bottle-opener-current-agent-draft-v1",
+    "schema_version": "bottle-opener-current-agent-draft-v1",
+    "modules": {"body_design": 50, "opening_parts": 40, "finish": 10},
+    "module_labels": {"body_design": "主体轮廓及连接布局", "opening_parts": "可见开启机构及附加工具", "finish": "表面颜色"},
+    "module_descriptions": {},
+    "confirmation_minimums": {},
+    "identity_hard_conflicts": [],
+    "variant_fields": [],
+    "visual_instructions": "依据下方统一身份策略编译；按实际主体形状和可对应的连接细节比较，不能只因都有螺旋/把手或同属开瓶器确认。隐藏工具、未展开刀片、内部电机和电池均不可脑补。",
+    "prompt_override": "先识别实际售卖工具，不把瓶子、酒杯、包装盒或分离赠品当工具主体。拍摄时折叠/展开或夹持瓶口的姿态差异先判断能否由同一机构动作解释；没有证据不要当作结构不同或假定机构一样。仅有同类通用圆柱、双翼或螺旋不能构成充分款式证据；主图中至少应有可对应的具体主体设计细节。不要要求图片一定显示隐藏的螺旋、刀片、内部电机、电池仓或背面安装孔。明确可见的实际工具头/铰接布局不同仍须记录差异，不能被颜色相同抵消。",
+    "same_threshold": 88,
+    "different_score_ceiling": 69,
+    "threshold_status": "PROVISIONAL_PENDING_HUMAN_GROUND_TRUTH_CALIBRATION",
+    "batch_size": 12,
+    "max_concurrency": 4,
+    "reasoning_effort": "low",
+    "identity_policy": {
+      "version": "category-identity-policy-v2-effects",
+      "product_scope": "比较实际售卖开瓶工具的基础款式，不预先把开瓶器缩成单一啤酒/葡萄酒类型。不同开启机构可以进入采样，但不能按同一用途确认。套装先对应同一个基础工具，单纯件数或分离包装赠品不替代主体证据；本体集成的额外工具另看可见结构。",
+      "features": [
+        {"id": "body_design", "label": "可见主体具体设计", "role": "identity", "evidence": "image", "region": "body", "effects": ["shape", "layout", "connection"], "preserves": [], "scope": "实际工具可见的壳体或握柄轮廓、开口比例、铰接/支点与主体的布置；只比较能对应的部分，不要求不存在的部件。", "rule": "主体款式须有双边可对应的具体设计证据。仅同为圆柱、双翼、T形或有把手是类别共性，不足确认。明确不同的主体外形或连接布置为身份差异；被遮挡、图太小、只有包装或通用共性时保持未知。", "modules": ["body_design"], "required_visual": true},
+        {"id": "opening_mechanism", "label": "实际开启机构", "role": "identity", "evidence": "both", "region": "component", "effects": ["shape", "connection", "function"], "preserves": [], "scope": "商品明确自述的开瓶机构类型及图片实际可见的螺旋/杠杆/瓶盖钩与主体连接方式；字面兼容说明、替换件和多工具混合描述不等同于商品只有一种机构。", "rule": "文字只有双方各自明确、唯一且不同的机构类型才作第一层硬冲突；泛称bottle opener/wine opener、缺失、否定、兼容、替换、多值描述不能推断类型。图中确实可见机构不同则记身份差异；折叠/展开等动作姿态可解释时先对应机构，不见螺旋或驱动装置不要求补证或猜测电动。", "modules": ["opening_parts"], "required_visual": false},
+        {"id": "integrated_tools", "label": "可见集成附加工具布局", "role": "identity", "evidence": "image", "region": "component", "effects": ["layout", "connection", "function"], "preserves": [], "scope": "与同一工具本体连接且实际可见的折叠刀、辅助开盖钩、支点等；分离赠品、包装附件和未展开隐藏工具不在此处推断。", "rule": "双边明确可见且无法由折叠姿态解释的集成工具数量/连接布局差异改变基础款式。单边没展示或隐藏工具无法辨认时是未知，不把没有看见写成没有工具，也不要求所有开瓶器都具备刀片/附加钩。", "modules": ["opening_parts"], "required_visual": false},
+        {"id": "body_color", "label": "主体非结构颜色", "role": "variant", "evidence": "both", "region": "body", "effects": ["color"], "preserves": ["body_design"], "scope": "同一主体设计的涂装或握柄表面颜色；不包含新增包覆层造成的形状/连接变化。", "rule": "已有可对应主体设计证据且无明确开启机构冲突时，单纯红黑银等颜色不同允许为同基础款变体；不能借颜色规则豁免实际头部、铰链或握柄形状变化。", "modules": ["finish"], "required_visual": false},
+        {"id": "nominal_size", "label": "文字标称尺寸", "role": "context", "evidence": "text", "region": "specification", "effects": ["nominal_size"], "preserves": [], "scope": "商品明确标注的本体长宽，不含包装或随附物尺寸；当前只列少量字面例值，未识别尺寸不填零或推断。", "rule": "记录已识别的标称规格供审阅，不凭12/15cm自动判不同款或确认同款，不从主图比例反推毫米。实际形状/构件比例变化仍由主体身份判断。", "modules": [], "required_visual": false},
+        {"id": "hidden_performance", "label": "内部驱动及性能宣传", "role": "context", "evidence": "unverifiable", "region": "specification", "effects": ["performance_claim", "material_composition"], "preserves": [], "scope": "内置电机/电池容量、耐用性、钢材牌号、省力程度等未由本次列表文字和主图可靠证明的宣传。", "rule": "不根据外观、价格或品牌猜测，不把宣传一致当同款证据，也不为缺这些隐含属性要求额外不存在的视觉细节。", "modules": [], "required_visual": false}
+      ]
+    }
+  }
+}

@@ -1,0 +1,2 @@
+.githooks/* text eol=lf
+start-web.local.json export-ignore

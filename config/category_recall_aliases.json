@@ -1,0 +1,24 @@
+{
+  "schema_version": "reviewed-category-recall-aliases-v1",
+  "categories": [
+    {
+      "category_names": ["鼠标", "鼠標", "滑鼠"],
+      "listing_identity": "https://www.amazon.com/Best-Sellers-Computer-Mice/zgbs/pc/11036491",
+      "aliases": ["鼠标", "鼠標", "滑鼠", "computer mouse", "computer mice", "轨道球鼠", "軌道球鼠", "轨迹球鼠", "軌跡球鼠"],
+      "basis": "Computer Mice 同一商品主体的简体、繁体及地区常用称呼。仅用于采集品类召回，不代表严格同款。",
+      "reviewed_at": "2026-10-13",
+      "subject_filter": {
+        "mode": "TARGET_BODY_ONLY",
+        "reject_mixed_subjects": true,
+        "exclude_subject_terms": [
+          "键盘", "鍵盤", "键鼠", "鍵鼠", "keyboard",
+          "平板电脑", "平板電腦", "安卓平板", "android tablet",
+          "飞鼠", "飛鼠", "空鼠", "空中鼠标", "空中鼠標", "空气鼠标", "空气鼠標", "air mouse", "airmouse",
+          "遥控器", "遙控器", "remote control", "触控板", "触摸板", "觸控板", "touchpad", "trackpad",
+          "创意控制台", "創意控制台", "creative console",
+          "鼠标垫", "鼠標墊", "滑鼠墊", "mouse pad", "mousepad", "mouse mat"
+        ]
+      }
+    }
+  ]
+}

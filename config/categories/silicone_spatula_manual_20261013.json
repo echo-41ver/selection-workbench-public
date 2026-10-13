@@ -1,0 +1,384 @@
+{
+  "schema_version": "category-automation-v1",
+  "category_key": "silicone_spatula_manual_20261013",
+  "category_name_zh": "硅胶锅铲",
+  "market": "US",
+  "currency": "USD",
+  "amazon": {
+    "mode": "BEST_SELLERS_FRONTEND",
+    "bestsellers_url": "https://www.amazon.com/Best-Sellers-Kitchen-Dining-Spatulas/zgbs/kitchen/760380/ref=zg_bs_nav_kitchen_3_16439841",
+    "target_count": 10,
+    "detail_concurrency": 4,
+    "verification": {
+      "url": "https://www.amazon.com/Best-Sellers-Kitchen-Dining-Spatulas/zgbs/kitchen/760380/ref=zg_bs_nav_kitchen_3_16439841",
+      "title": "Amazon Best Sellers: Best Spatulas",
+      "heading": "Best Sellers in Spatulas",
+      "rank_count": 30
+    },
+    "scope_note": "已核实的是美国站Spatulas总榜，包含不同材质的铲具；采集榜单前10名，再按硅胶锅铲目标规则筛选，不能称其为硅胶专属榜或预先声称前10名均为硅胶商品。"
+  },
+  "temu": {
+    "base_queries": [
+      "silicone spatula"
+    ],
+    "keyword_limit": null,
+    "keywords_per_product": 6,
+    "max_products_per_keyword": 100,
+    "merge_key": "goods_id",
+    "keyword_features": [
+      "slotted turner",
+      "solid turner",
+      "pancake turner",
+      "fish turner",
+      "spoon spatula",
+      "jar spatula",
+      "mini spatula",
+      "offset spatula",
+      "one piece",
+      "one-piece",
+      "detachable head"
+    ],
+    "include_terms": [
+      "spatula",
+      "turner",
+      "silicone scraper",
+      "硅胶铲",
+      "硅胶锅铲",
+      "硅胶刮刀",
+      "锅铲",
+      "漏铲"
+    ],
+    "severe_exclude_terms": [
+      "paint scraper",
+      "putty knife",
+      "windshield scraper",
+      "ice scraper",
+      "wallpaper scraper"
+    ],
+    "collection_source": "VISIBLE_TEMU_FRONTEND",
+    "entry_mode": "empty_search",
+    "search_submit_method": "icon",
+    "worker_count": 1
+  },
+  "stage1": {
+    "text_gate": "declarative",
+    "rule_version": "silicone-spatula-text-manual-v1",
+    "attributes": [
+      {
+        "name": "slot_layout",
+        "hard_conflict": true,
+        "values": {
+          "slotted": [
+            "slotted turner",
+            "slotted spatula"
+          ],
+          "solid": [
+            "solid turner",
+            "solid spatula"
+          ]
+        },
+        "ambiguous_phrases": [
+          "set",
+          "kit",
+          "combo",
+          "slotted and solid",
+          "solid and slotted",
+          "not slotted",
+          "not solid",
+          "replacement",
+          "compatible with"
+        ]
+      },
+      {
+        "name": "handle_connection",
+        "hard_conflict": true,
+        "values": {
+          "one_piece": [
+            "one-piece spatula",
+            "one piece spatula",
+            "one-piece silicone spatula",
+            "one piece silicone spatula"
+          ],
+          "detachable": [
+            "detachable head",
+            "removable spatula head"
+          ]
+        },
+        "ambiguous_phrases": [
+          "set",
+          "kit",
+          "combo",
+          "not detachable",
+          "not removable",
+          "replacement",
+          "compatible with",
+          "one piece and detachable"
+        ]
+      }
+    ]
+  },
+  "stage2": {
+    "candidate_threshold": 60,
+    "threshold_status": "PROVISIONAL_UNCALIBRATED_HIGH_RECALL",
+    "below_threshold_action": "NOT_SELECTED_NOT_MANUAL_REVIEW",
+    "included_in_final_score": false
+  },
+  "stage3": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com",
+    "rule_version": "silicone-spatula-visual-manual-v1",
+    "prompt_version": "silicone-spatula-prompt-manual-v1",
+    "schema_version": "compact-whole-product-v2",
+    "modules": {
+      "head": 40,
+      "slots": 25,
+      "handle": 20,
+      "set": 10,
+      "appearance": 5
+    },
+    "module_descriptions": {
+      "head": "head_shape｜铲头实际造型｜决定基础款｜图片可见｜确认必需的可见身份；区域：body；影响：shape,function；对应范围：铲头外轮廓、前缘、侧缘、头颈过渡及可见凹面；规则：对照真实铲头形状及头颈比例；宽扁翻铲、勺形刮铲、窄瓶刮刀等主体结构不同即不同款。双边清晰可见的前缘曲率、边角和不对称位置不同属于身份差异；透视、弯曲使用动作及遮挡不冒充结构冲突。",
+      "slots": "slot_layout｜开槽及孔洞布局｜决定基础款｜图片或明确文字｜未展示本项不单独阻断确认；区域：body；影响：layout,shape；对应范围：铲头真实开槽、孔洞数量、方向、位置与排列；规则：两边对应铲面完整可见时比较实心/开槽及真实槽孔排列；清晰的一侧有槽另一侧无槽，或实际槽孔布局不同，属于身份冲突。反光、印字不算孔；一侧被挡住或分辨率不足记未知，不把未看见当不存在。",
+      "handle": "handle_connection｜手柄连接和握柄造型｜决定基础款｜图片或明确文字｜未展示本项不单独阻断确认；区域：component；影响：connection,shape,layout；对应范围：铲头到颈部及手柄的可见连接、握柄外形和可见挂孔；规则：比较一体成型外形、可见接缝/插接、颈部弯折与握柄造型。明确可见的连接结构、挂孔形状位置差异不可由颜色或品牌不同抵消；未展示的内部芯材、连接方式和背面不得推测。",
+      "set": "set_composition｜出售套装构成｜决定基础款｜图片可见｜未展示本项不单独阻断确认；区域：component；影响：layout,shape；对应范围：商品明确展示为出售内容的不同铲具构成；规则：先识别单把与套装；套装按不同铲头款式和可见数量逐项对应，不把混合厨具套装中的一把相似铲当作整套同款。赠品或背景道具须有明确证据才能排除在出售内容外；看不全记未知。",
+      "appearance": "head_color｜铲头表面颜色｜允许变体｜图片可见｜未展示本项不单独阻断确认；区域：decoration；影响：color；对应范围：铲头表面配色；规则：仅允许配色变化，铲头外形与开槽布局须对应；颜色相同不构成同款证据。；变化时必须保持：head_shape,slot_layout\nhandle_color｜手柄表面颜色｜允许变体｜图片可见｜未展示本项不单独阻断确认；区域：decoration；影响：color；对应范围：握柄与颈部表面配色；规则：仅允许表面配色变化，不能改变手柄形状和头柄连接结构。；变化时必须保持：handle_connection\nbrand_marking｜品牌和表面标识｜允许变体｜图片或明确文字｜未展示本项不单独阻断确认；区域：decoration；影响：marking；对应范围：本体表面品牌文字、标签及商品图水印；规则：品牌名称、印字或水印不同可作为标识变体；须保持对应铲头与手柄基础结构，不允许用贴标差异解释新增加的结构部件。；变化时必须保持：head_shape,handle_connection"
+    },
+    "module_labels": {
+      "head": "铲头造型",
+      "slots": "开槽布局",
+      "handle": "头柄连接",
+      "set": "出售构成",
+      "appearance": "允许的表面变体"
+    },
+    "identity_policy": {
+      "version": "category-identity-policy-v2-effects",
+      "product_scope": "比较出售的硅胶锅铲、翻铲或刮铲实际基础款；单把按本体，成套按明确出售的各铲具构成。外包装、背景厨具及手持展示不作为本体；不能只因都叫spatula就确认同款。",
+      "features": [
+        {
+          "id": "head_shape",
+          "label": "铲头实际造型",
+          "role": "identity",
+          "evidence": "image",
+          "region": "body",
+          "effects": [
+            "shape",
+            "function"
+          ],
+          "scope": "铲头外轮廓、前缘、侧缘、头颈过渡及可见凹面",
+          "rule": "对照真实铲头形状及头颈比例；宽扁翻铲、勺形刮铲、窄瓶刮刀等主体结构不同即不同款。双边清晰可见的前缘曲率、边角和不对称位置不同属于身份差异；透视、弯曲使用动作及遮挡不冒充结构冲突。",
+          "modules": [
+            "head"
+          ],
+          "required_visual": true,
+          "preserves": []
+        },
+        {
+          "id": "slot_layout",
+          "label": "开槽及孔洞布局",
+          "role": "identity",
+          "evidence": "both",
+          "region": "body",
+          "effects": [
+            "layout",
+            "shape"
+          ],
+          "scope": "铲头真实开槽、孔洞数量、方向、位置与排列",
+          "rule": "两边对应铲面完整可见时比较实心/开槽及真实槽孔排列；清晰的一侧有槽另一侧无槽，或实际槽孔布局不同，属于身份冲突。反光、印字不算孔；一侧被挡住或分辨率不足记未知，不把未看见当不存在。",
+          "modules": [
+            "slots"
+          ],
+          "required_visual": false,
+          "preserves": []
+        },
+        {
+          "id": "handle_connection",
+          "label": "手柄连接和握柄造型",
+          "role": "identity",
+          "evidence": "both",
+          "region": "component",
+          "effects": [
+            "connection",
+            "shape",
+            "layout"
+          ],
+          "scope": "铲头到颈部及手柄的可见连接、握柄外形和可见挂孔",
+          "rule": "比较一体成型外形、可见接缝/插接、颈部弯折与握柄造型。明确可见的连接结构、挂孔形状位置差异不可由颜色或品牌不同抵消；未展示的内部芯材、连接方式和背面不得推测。",
+          "modules": [
+            "handle"
+          ],
+          "required_visual": false,
+          "preserves": []
+        },
+        {
+          "id": "set_composition",
+          "label": "出售套装构成",
+          "role": "identity",
+          "evidence": "image",
+          "region": "component",
+          "effects": [
+            "layout",
+            "shape"
+          ],
+          "scope": "商品明确展示为出售内容的不同铲具构成",
+          "rule": "先识别单把与套装；套装按不同铲头款式和可见数量逐项对应，不把混合厨具套装中的一把相似铲当作整套同款。赠品或背景道具须有明确证据才能排除在出售内容外；看不全记未知。",
+          "modules": [
+            "set"
+          ],
+          "required_visual": false,
+          "preserves": []
+        },
+        {
+          "id": "head_color",
+          "label": "铲头表面颜色",
+          "role": "variant",
+          "evidence": "image",
+          "region": "decoration",
+          "effects": [
+            "color"
+          ],
+          "scope": "铲头表面配色",
+          "rule": "仅允许配色变化，铲头外形与开槽布局须对应；颜色相同不构成同款证据。",
+          "modules": [
+            "appearance"
+          ],
+          "required_visual": false,
+          "preserves": [
+            "head_shape",
+            "slot_layout"
+          ]
+        },
+        {
+          "id": "handle_color",
+          "label": "手柄表面颜色",
+          "role": "variant",
+          "evidence": "image",
+          "region": "decoration",
+          "effects": [
+            "color"
+          ],
+          "scope": "握柄与颈部表面配色",
+          "rule": "仅允许表面配色变化，不能改变手柄形状和头柄连接结构。",
+          "modules": [
+            "appearance"
+          ],
+          "required_visual": false,
+          "preserves": [
+            "handle_connection"
+          ]
+        },
+        {
+          "id": "brand_marking",
+          "label": "品牌和表面标识",
+          "role": "variant",
+          "evidence": "both",
+          "region": "decoration",
+          "effects": [
+            "marking"
+          ],
+          "scope": "本体表面品牌文字、标签及商品图水印",
+          "rule": "品牌名称、印字或水印不同可作为标识变体；须保持对应铲头与手柄基础结构，不允许用贴标差异解释新增加的结构部件。",
+          "modules": [
+            "appearance"
+          ],
+          "required_visual": false,
+          "preserves": [
+            "head_shape",
+            "handle_connection"
+          ]
+        },
+        {
+          "id": "outer_packaging",
+          "label": "外包装",
+          "role": "variant",
+          "evidence": "text",
+          "region": "packaging",
+          "effects": [
+            "surface_pattern",
+            "color",
+            "marking"
+          ],
+          "scope": "本体之外的纸盒、袋装和外包装印刷",
+          "rule": "仅外包装与包装标识可变化；不改变出售本体及套装构成，不把少铲、多铲或不同铲头组合当作包装变体。",
+          "modules": [],
+          "required_visual": false,
+          "preserves": [
+            "head_shape",
+            "set_composition"
+          ]
+        },
+        {
+          "id": "material_claim",
+          "label": "材质说明",
+          "role": "context",
+          "evidence": "text",
+          "region": "specification",
+          "effects": [
+            "material_composition"
+          ],
+          "scope": "标题或说明中的硅胶、金属芯、木柄等材质词",
+          "rule": "如实记录明确文字，不凭外观确认真实材质组成；仅营销名称、缺失文字或未说明芯材不构成同款确认或硬排除依据。",
+          "modules": [],
+          "required_visual": false,
+          "preserves": []
+        },
+        {
+          "id": "heat_resistance",
+          "label": "耐温和食品接触宣称",
+          "role": "context",
+          "evidence": "unverifiable",
+          "region": "specification",
+          "effects": [
+            "performance_claim"
+          ],
+          "scope": "耐热温度、食品级、无BPA等性能或认证宣称",
+          "rule": "当前图片与标题不能验证性能和认证真实性；只作来源说明，不猜耐温数字，不据此确认或硬排除。",
+          "modules": [],
+          "required_visual": false,
+          "preserves": []
+        }
+      ]
+    },
+    "confirmation_minimums": {
+      "head": 40
+    },
+    "identity_hard_conflicts": [
+      "IDENTITY_HEAD_SHAPE",
+      "IDENTITY_SLOT_LAYOUT",
+      "IDENTITY_HANDLE_CONNECTION",
+      "IDENTITY_SET_COMPOSITION"
+    ],
+    "variant_fields": [
+      "head_color",
+      "handle_color",
+      "brand_marking",
+      "outer_packaging"
+    ],
+    "visual_instructions": "本品类同款边界（文字层与视觉层共用）：\n比较主体：比较出售的硅胶锅铲、翻铲或刮铲实际基础款；单把按本体，成套按明确出售的各铲具构成。外包装、背景厨具及手持展示不作为本体；不能只因都叫spatula就确认同款。\nhead_shape｜铲头实际造型｜决定基础款｜图片可见｜确认必需的可见身份；区域：body；影响：shape,function；对应范围：铲头外轮廓、前缘、侧缘、头颈过渡及可见凹面；规则：对照真实铲头形状及头颈比例；宽扁翻铲、勺形刮铲、窄瓶刮刀等主体结构不同即不同款。双边清晰可见的前缘曲率、边角和不对称位置不同属于身份差异；透视、弯曲使用动作及遮挡不冒充结构冲突。\nslot_layout｜开槽及孔洞布局｜决定基础款｜图片或明确文字｜未展示本项不单独阻断确认；区域：body；影响：layout,shape；对应范围：铲头真实开槽、孔洞数量、方向、位置与排列；规则：两边对应铲面完整可见时比较实心/开槽及真实槽孔排列；清晰的一侧有槽另一侧无槽，或实际槽孔布局不同，属于身份冲突。反光、印字不算孔；一侧被挡住或分辨率不足记未知，不把未看见当不存在。\nhandle_connection｜手柄连接和握柄造型｜决定基础款｜图片或明确文字｜未展示本项不单独阻断确认；区域：component；影响：connection,shape,layout；对应范围：铲头到颈部及手柄的可见连接、握柄外形和可见挂孔；规则：比较一体成型外形、可见接缝/插接、颈部弯折与握柄造型。明确可见的连接结构、挂孔形状位置差异不可由颜色或品牌不同抵消；未展示的内部芯材、连接方式和背面不得推测。\nset_composition｜出售套装构成｜决定基础款｜图片可见｜未展示本项不单独阻断确认；区域：component；影响：layout,shape；对应范围：商品明确展示为出售内容的不同铲具构成；规则：先识别单把与套装；套装按不同铲头款式和可见数量逐项对应，不把混合厨具套装中的一把相似铲当作整套同款。赠品或背景道具须有明确证据才能排除在出售内容外；看不全记未知。\nhead_color｜铲头表面颜色｜允许变体｜图片可见｜未展示本项不单独阻断确认；区域：decoration；影响：color；对应范围：铲头表面配色；规则：仅允许配色变化，铲头外形与开槽布局须对应；颜色相同不构成同款证据。；变化时必须保持：head_shape,slot_layout\nhandle_color｜手柄表面颜色｜允许变体｜图片可见｜未展示本项不单独阻断确认；区域：decoration；影响：color；对应范围：握柄与颈部表面配色；规则：仅允许表面配色变化，不能改变手柄形状和头柄连接结构。；变化时必须保持：handle_connection\nbrand_marking｜品牌和表面标识｜允许变体｜图片或明确文字｜未展示本项不单独阻断确认；区域：decoration；影响：marking；对应范围：本体表面品牌文字、标签及商品图水印；规则：品牌名称、印字或水印不同可作为标识变体；须保持对应铲头与手柄基础结构，不允许用贴标差异解释新增加的结构部件。；变化时必须保持：head_shape,handle_connection\nouter_packaging｜外包装｜允许变体｜仅文字证据｜未展示本项不单独阻断确认；区域：packaging；影响：surface_pattern,color,marking；对应范围：本体之外的纸盒、袋装和外包装印刷；规则：仅外包装与包装标识可变化；不改变出售本体及套装构成，不把少铲、多铲或不同铲头组合当作包装变体。；变化时必须保持：head_shape,set_composition\nmaterial_claim｜材质说明｜仅供说明，不单独确认或排除｜仅文字证据｜未展示本项不单独阻断确认；区域：specification；影响：material_composition；对应范围：标题或说明中的硅胶、金属芯、木柄等材质词；规则：如实记录明确文字，不凭外观确认真实材质组成；仅营销名称、缺失文字或未说明芯材不构成同款确认或硬排除依据。\nheat_resistance｜耐温和食品接触宣称｜仅供说明，不单独确认或排除｜当前证据不能可靠判断｜未展示本项不单独阻断确认；区域：specification；影响：performance_claim；对应范围：耐热温度、食品级、无BPA等性能或认证宣称；规则：当前图片与标题不能验证性能和认证真实性；只作来源说明，不猜耐温数字，不据此确认或硬排除。\n先定位两边同一实际部位，再比较；不可把画面左右、折叠外缘或包装当作本体结构。局部装饰表现与主体构造分开，允许变化只限所列范围。未描述不等于不存在；只有两侧对应部位均清晰可见时，有与无才构成明确差异。文字才能确认的性能、材质成分等不得凭外观猜测。",
+    "same_threshold": 88,
+    "different_score_ceiling": 69,
+    "threshold_status": "PROVISIONAL_PENDING_HUMAN_GROUND_TRUTH_CALIBRATION",
+    "batch_size": 12,
+    "max_concurrency": 4,
+    "reasoning_effort": "low",
+    "module_variant_fields": {
+      "appearance": [
+        "head_color",
+        "handle_color",
+        "brand_marking"
+      ]
+    },
+    "identity_required_modules": [
+      "head"
+    ],
+    "require_feature_comparisons": true
+  },
+  "category_name_en": "Silicone spatula",
+  "visual_decision": "visible_core_binary_v1",
+  "preparation_note": "人工编写规则；真实Amazon美国站Spatulas Best Sellers页面已由主任务read_listing核实，页面标题、榜单标题及30个排名标记保存在amazon.verification，证据为runtime/web-latest-ui-20261013/spatulas-listing-evidence.json。榜单前10名的实际商品和材质须按采集结果判断。",
+  "keyword_authoring_note": "细化短语只作为标题证据词典；仅实际采集的Amazon商品标题明确命中时生成关联查询，不能无来源展开，也不能把颜色、品牌、耐温营销词当作结构证据。",
+  "human_stage1_text": "先读双方明确标题。只有双方都写清且相互冲突的实心/开槽、整体一体式/可拆铲头结构才在第一层排除。套装、多值、否定、适配、替换件或信息缺失按歧义处理，保留后续核验。颜色、品牌、包装、耐温和未证实材质不作文字硬排除。",
+  "plain_stage1": "先读双方明确标题。只有双方都写清且相互冲突的实心/开槽、整体一体式/可拆铲头结构才在第一层排除。套装、多值、否定、适配、替换件或信息缺失按歧义处理，保留后续核验。颜色、品牌、包装、耐温和未证实材质不作文字硬排除。",
+  "plain_stage3": "先看出售的是单把还是整套，再对照铲头外形、开槽布局、头柄连接。清晰的结构差异判不同款，不能靠都是硅胶铲或颜色相近确认。核心款式对应时允许颜色、品牌印字和外包装不同，但不能改变铲头、连接和套装构成。看不到的部位写未知，不把未展示当作不存在；不猜真实材质、芯材、耐温或食品认证。图片无法读取应报技术失败，不冒充商品差异。",
+  "plain_rules_summary": "人工规则：硅胶锅铲。Amazon前10件、TEMU每关键词每种排序100件、1路，从首页搜索。第一层只排除明确双边文字结构冲突；第三层围绕铲头、开槽、头柄连接及出售构成核验，颜色品牌包装仅在核心结构保持时允许变化。已核实Spatulas总榜，采集前10名后按硅胶目标规则筛选；该榜单不是硅胶专属榜。规则生成未调用模型API。"
+}

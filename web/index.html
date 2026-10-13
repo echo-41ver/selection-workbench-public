@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>选品工作台 · 本地</title>
+<style>
+:root{color-scheme:light;--ink:#152c39;--muted:#647681;--line:#dce5e9;--blue:#145c86;--red:#ad2637}*{box-sizing:border-box}body{margin:0;background:#f4f7f8;color:var(--ink);font:15px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}header,main{max-width:1280px;margin:auto;padding:28px}header{display:flex;justify-content:space-between;align-items:center;padding-bottom:10px}.eyebrow{font-size:12px;letter-spacing:.12em;color:var(--blue)}h1{font-size:28px;margin:3px 0}h2{font-size:18px;margin:0 0 18px}p{margin:8px 0;color:var(--muted)}.badge{border:1px solid var(--line);border-radius:20px;padding:5px 12px;font-size:13px;background:white}.grid{display:grid;grid-template-columns:420px 1fr;gap:22px;align-items:start}.card{background:white;border:1px solid var(--line);border-radius:14px;padding:24px;box-shadow:0 4px 16px #173e5205}label{display:block;font-size:13px;font-weight:600;margin:16px 0 6px}input,select,button{font:inherit}input,select{width:100%;padding:10px 12px;border:1px solid #bacbd3;border-radius:8px;background:white;color:var(--ink)}input:focus,select:focus{outline:3px solid #b8d8eb;border-color:var(--blue)}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}.actions{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap}button{border:1px solid var(--line);border-radius:8px;padding:10px 17px;background:#fff;cursor:pointer;color:var(--ink)}button.primary{background:var(--blue);color:white;border-color:var(--blue);flex:1}button:disabled{cursor:wait;opacity:.55}.small{font-size:12px}.notice{border-radius:8px;padding:12px 15px;border:1px solid var(--line);background:#f7fafb;margin:16px 0;white-space:pre-wrap;overflow-wrap:anywhere}.danger{color:var(--red);background:#fff2f3;border-color:#edb5bd}.success{color:#21633f;background:#f1faf4;border-color:#b6d7c3}.module{border-top:1px solid var(--line);padding:14px 0}.module:first-child{border-top:0}.module-title{font-weight:600}.state{color:var(--muted);font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}.module.danger{padding:12px;border-radius:8px;margin:8px 0}.module.danger .state{color:var(--red)}pre{font:12px/1.6 Consolas,monospace;max-height:400px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f8fa;padding:14px;border-radius:8px}summary{cursor:pointer;color:var(--blue);font-size:13px}footer{font-size:12px;color:var(--muted);margin-top:14px}#feedback:empty{display:none}@media(max-width:760px){header,main{padding:20px}.grid{grid-template-columns:1fr}h1{font-size:24px}header{align-items:flex-start;gap:12px}.card{padding:20px}}
+.module-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.progress-card{border:1px solid var(--line);border-radius:10px;padding:15px;background:#fcfdfe}.progress-card.danger{border-color:#edb5bd;background:#fff4f5}.progress-heading{display:flex;justify-content:space-between;align-items:center;gap:6px}.progress-state{font-size:13px;margin:7px 0 10px;color:var(--muted)}.progress-card.danger .progress-state{color:var(--red)}.metric{display:flex;justify-content:space-between;gap:10px;font-size:12px;margin-top:5px}.metric span{color:var(--muted)}.metric strong{text-align:right;font-weight:500;overflow-wrap:anywhere}.advice{font-size:12px;margin:10px 0 0;color:var(--red);line-height:1.6}.serial{font-size:11px;color:var(--muted)}.span-all{grid-column:1/-1}@media(max-width:500px){.module-grid{grid-template-columns:1fr}}
+.excel-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.excel-actions button{text-align:left;background:white}.excel-actions button:not(:disabled):hover{border-color:var(--blue);color:var(--blue)}@media(max-width:500px){.excel-actions{grid-template-columns:1fr}}
+.module-grid>.notice.span-all{margin:0}
+textarea{width:100%;min-height:145px;resize:vertical;padding:12px;border:1px solid #bacbd3;border-radius:8px;font:13px/1.7 inherit;color:var(--ink)}.section-label{grid-column:1/-1;font-weight:600;color:var(--blue);padding-top:8px}.progress-track{height:7px;background:#e5edf1;border-radius:8px;overflow:hidden;margin:8px 0}.progress-fill{height:100%;background:#267c9b}.draft-source{font-size:12px;overflow-wrap:anywhere}.review-divider{border-top:1px solid var(--line);margin-top:24px;padding-top:20px}.progress-card.success .progress-state,.module.success .state{color:#21633f}.progress-card.success .progress-fill{background:#27834c}.progress-card.danger .progress-state{color:var(--red)}
+
+[hidden]{display:none!important}.grid{display:block}.workspace-nav{position:sticky;top:0;z-index:5;background:#f4f7f8ef;backdrop-filter:blur(12px);max-width:1224px;margin:0 auto;padding:12px 0;display:flex;gap:8px;border-bottom:1px solid var(--line)}.workspace-nav button{border:0;background:transparent;padding:10px 22px;font-weight:600}.workspace-nav button[aria-selected=true]{background:#145c86;color:white}.page-panel{min-height:280px}#create-panel{max-width:850px;margin:auto}.module-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.span-all{grid-column:1/-1}.lane-card{padding:14px}.lane-card .progress-heading strong{font-size:15px}.lane-card .progress-state{min-height:22px;margin:8px 0}.lane-card .actions{margin-top:10px;justify-content:space-between;align-items:center}.lane-card .actions button{font-size:13px;padding:5px 12px}.lane-card details{font-size:12px;margin-top:8px}.lane-card .advice{font-size:12px;margin:6px 0;color:var(--red)}.lane-count{font-size:21px;font-weight:600}.lane-count small{font-size:12px;font-weight:400;color:var(--muted)}.technical{margin-top:20px}.history-row{display:flex;justify-content:space-between;gap:16px;padding:18px 0;border-bottom:1px solid var(--line);align-items:center}.market-summary{display:grid;grid-template-columns:1fr 1fr;gap:12px}.market-summary .notice{margin:0}.metric-head{font-size:24px;font-weight:650}.page-panel h2{font-size:20px}.review-divider{margin-top:20px}.page-panel>.notice{margin:12px 0}.excel-actions button{font-size:14px}.workspace-nav+main{padding-top:20px}#results-panel #stage3-controls[hidden]{display:none}.progress-card:not(.lane-card) .metric{font-size:13px}@media(max-width:1000px){.module-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.workspace-nav{padding:8px;gap:0}.workspace-nav button{padding:9px 10px;font-size:13px}.module-grid{grid-template-columns:1fr 1fr}.market-summary{grid-template-columns:1fr}.history-row{align-items:flex-start;flex-direction:column}main{padding:14px}.card{padding:16px}}
+#lane-toolbar{display:flex;justify-content:space-between;align-items:center;position:sticky;top:66px;z-index:3;background:#fff;padding:10px 0;font-size:13px}.inline-filter{display:flex;align-items:center;gap:8px;margin:0}.inline-filter input{width:auto}
+header{padding-top:18px;padding-bottom:4px}header p{display:none}header h1{font-size:25px}.eyebrow{font-size:10px}.workspace-nav{padding:8px 0}#lane-toolbar{top:58px}.stage-summary{display:flex;align-items:center;flex-wrap:wrap;gap:10px 22px;padding:12px 14px}.stage-summary .progress-state{margin:0}.stage-summary details{flex:0 0 100%;width:100%;margin-left:0;font-size:12px;overflow-anchor:none}.stage-summary details[open]{width:100%}.stage-summary details[open] .metric{margin:5px 0}.stage-summary .stage-amount{font-size:16px;font-weight:600;margin-left:auto}#monitor-panel h2{margin-bottom:8px}.section-label{padding-top:0;font-size:13px}
+
+/* All fleet sizes use compact cards; long diagnostics stay in details. */
+#modules{grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;align-items:start}
+.lane-card{order:-1;padding:10px;display:grid;grid-template-columns:1fr auto;gap:4px 8px;min-width:0}
+.lane-card .progress-heading,.lane-card .progress-state,.lane-card .progress-track,.lane-card>details{grid-column:1/-1}
+.lane-card .progress-heading strong{font-size:13px}.lane-card .progress-state{margin:0;min-height:0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane-card .lane-count{font-size:16px}.lane-card .progress-track{margin:0;height:5px}.lane-card>.advice{display:none}
+.lane-card>.actions{margin:0;grid-column:2;grid-row:3;justify-content:end}.lane-card .actions button{padding:2px 9px;font-size:12px}
+.lane-card>small{font-size:11px}.lane-card>details{margin:0}.lane-card details p{overflow-wrap:anywhere}
+@media(min-width:1100px){#modules{grid-template-columns:repeat(6,minmax(0,1fr))}}
+@media(max-width:600px){#modules{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.workspace-nav{flex-wrap:wrap}}
+.warning{color:#80580c;background:#fff9e8;border-color:#e7cc80}.progress-card.warning .progress-state,.module.warning .state,.warning .advice{color:#80580c}.progress-card.warning .progress-fill{background:#bd8a18}.lane-card.warning>.advice{display:block;grid-column:1/-1}.notice:empty{display:none}#feedback{display:none}button:disabled{cursor:not-allowed}.workflow-help{margin:0 0 20px;padding:14px 18px;background:#edf5fa;border:1px solid #c6dde9;border-radius:10px}.workflow-help strong{color:var(--blue)}.workflow-help p{margin:4px 0}.button-help{font-size:13px;color:var(--muted);margin:8px 0}.progress-card.success{border-color:#b6d7c3;background:#f1faf4}.lane-card.danger>.advice{display:block;grid-column:1/-1}.notice[role=status]{line-height:1.7}
+</style>
+</head>
+<body>
+<header><div><div class="eyebrow">LOCAL SELECTION WORKSPACE</div><h1>选品工作台</h1><p>输入品类，查看采集与同款分析的实际进度。</p></div><span class="badge" id="connection">正在连接本地服务</span></header>
+<nav class="workspace-nav" aria-label="工作区"><button data-page="create" type="button">新建任务</button><button data-page="monitor" type="button">采集监控</button><button data-page="results" type="button">结果与导出</button><button data-page="history" type="button">历史记录</button></nav><main><div id="release-update" class="notice warning" role="status" aria-live="polite" hidden></div><div class="workflow-help"><strong>先生成规则 → 检查并应用修改 → 开始采集 → 查看结果</strong><p class="small">第一、二层随采集自动进行。第三层会调用付费 API，只有你点击“启动第三层”才开启。等待登录或验证码时，按黄色提示在对应浏览器完成操作。</p></div><div id="next-step" class="notice" role="status" aria-live="polite">第一步：填写品类和采集数量，再生成规则。</div><div id="global-feedback" class="notice" role="status" aria-live="polite"></div><div class="grid">
+<section class="card page-panel" id="create-panel"><h2>新建选品任务</h2>
+<form id="task-form" autocomplete="off">
+<label for="category">品类名称</label><input id="category" name="category_name" placeholder="例如：电钻" required maxlength="120">
+<label for="bestsellers-url">Amazon 榜单链接（可选）</label><input id="bestsellers-url" type="url" placeholder="留空自动寻找；也可粘贴 Amazon Best Sellers 榜单链接"><p class="small">自动定位不成功时可填链接重试。请输入对应品类的榜单，不是搜索页或商品详情页。</p>
+<div class="two"><div><label for="new-same-limit">同款数严格少于 N（采集前设置）</label><input id="new-same-limit" type="number" value="5" min="1" max="10000" step="1"><label for="amazon">Amazon 前多少名</label><input id="amazon" type="number" min="1" max="100" value="10" required></div><div><label for="quantity">每个关键词每种排序采集条数</label><input id="quantity" type="number" min="1" value="100" required></div></div>
+<p class="small">每个特征词采两轮；大类目词每轮采 3 倍。例如填 500，特征词每轮 500，大类目每轮 1500。商品自动去重；重复率很高的扩展词会自动减量，实际数量与原因可在结果中查看。</p><label for="worker-count">TEMU 并行采集路数</label><input id="worker-count" type="number" min="1" max="32" step="1" value="4" required><p class="small">可选 1–32 路，默认 4 路。按所选路数创建独立环境、分配关键词；实际可用路数受电脑性能和 AdsPower 环境额度限制。修改用于下一次启动。</p>
+<label for="api-key">API key（新品类规则与视觉分析）</label><input id="api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="已有同品类规则或已配置密钥时可留空"><p class="small">本机已有同品类规则时，直接沿用并重新核实真实榜单，无需调用模型。新品类规则生成、规则改写需要 API；第三层付费分析需单独启动。密钥由本机服务使用，不会返回浏览器；填写则本次优先使用，提交后清空。</p>
+<div class="actions"><button class="primary" id="start" type="submit">生成规则与关键词</button></div>
+</form>
+<section id="draft-editor" class="review-divider" hidden><h2>检查并编辑三层规则</h2><p class="small">生成时会先采集 Amazon 前 N 名并从商品标题提炼关键词。确认规则与分配后，点击运行，所选路数的 TEMU 采集及第一、二层分析自动开始。第三层需单独点击付费按钮。</p><div class="notice draft-source"><strong id="draft-category"></strong><div id="draft-title"></div><a id="draft-url" target="_blank" rel="noopener noreferrer"></a></div><div id="draft-keywords" class="notice" aria-live="polite"></div>
+<label for="plain-rule">第一层 · 文字筛选要求（通俗版）</label><p class="small">只看商品标题和文字介绍：哪些明确差异要排除，哪些可以保留。</p><textarea id="plain-rule" placeholder="例如：文字没有明确写材质时先保留，不要直接排除。"></textarea><button id="apply-plain" type="button">解释 / 应用第一层要求</button><div id="plain-status-stage1" class="notice" role="status" aria-live="polite" hidden></div>
+<label for="plain-rule3">第三层 · 图片同款判断要求（通俗版）</label><p class="small">先看整体是不是同一基础款，再看具体图案、结构和套装构成。两边对应部位都清楚，一边有关键特征、另一边确实没有，就是不同款；关键身份部位被挡住、无法辨认款式才保留未知；主体已能清楚辨认时，局部遮挡不自动降为待复核。模块分数只作辅助，明确差异不能被高分抵消。允许的颜色、包装或花纹变化按品类规则判断：浴巾主体织法、构造及阴刻位置布局对应时可允许花纹变化；浴帘整幅印花不同仍属不同款。</p><textarea id="plain-rule3" placeholder="例如：图案和结构必须一致；拍摄角度、背景和光线不同可以接受；被遮挡的部分不要猜。" style="min-height:190px"></textarea><button id="apply-plain3" type="button">解释 / 应用第三层要求</button><div id="plain-status-stage3" class="notice" role="status" aria-live="polite" hidden></div><div id="plain-changes" class="notice" role="status">两个框独立应用。留空点击对应按钮可解释当前规则；应用后仍需手动运行。</div>
+<details><summary>高级设置：查看或直接编辑实际执行规则</summary><p class="small">应用上方要求后，这里的规则会同步更新。普通使用无需修改这些配置。</p>
+<label for="stage1-rule">第一层 · 文字严格筛选规则</label><textarea id="stage1-rule" spellcheck="false"></textarea>
+<label for="stage2-threshold">第二层 · 图片向量候选阈值（0–100）</label><input id="stage2-threshold" type="number" min="0" max="100" step="0.1"><p class="small">同时比较完整商品和可用主体视图，保留原有中心视图；取最佳分数减少漏检。分数只筛选候选，不是同款概率。</p>
+<label for="stage3-rule">第三层 · 视觉分析规则与提示词</label><p class="small">新品类按出售主体、部件、装饰、包装和变化影响生成统一标准；第一层和第三层共用，允许变体须保持决定款式的结构。整体核验与证据要求固定保留，编辑内容作为品类补充规则。旧结果缺少整体核验时，需用新版重新分析后才能确认同款。</p><textarea id="stage3-rule" spellcheck="false"></textarea>
+<details><summary>辅助视觉模块、权重与冲突规则</summary><textarea id="stage3-modules" spellcheck="false" aria-label="视觉模块高级JSON配置"></textarea></details></details>
+<details class="review-divider"><summary>商业选品条件（可修改）</summary><p class="small">三条独立判断，满足一两条也会保留。以下门槛用于本次任务；缺失数据不会当作满足。</p><div class="two"><div><label for="biz-same_operator">同款数量条件</label><select id="biz-same_operator"><option value="lt">严格少于 N</option><option value="lte">不超过 N（旧任务）</option></select><label for="biz-same_limit">N 的值</label><input id="biz-same_limit" type="number" value="20" min="0" max="10000" step="any"></div><div><label for="biz-new_days">几天内上架算新品</label><input id="biz-new_days" type="number" value="90" min="1" max="365" step="any"></div><div><label for="biz-growth_min_percent">新品销量增长要超过（%）</label><input id="biz-growth_min_percent" type="number" value="20" min="0" max="10000" step="any"></div><div><label for="biz-top_n">看销量最高的前几名</label><input id="biz-top_n" type="number" value="5" min="1" max="100" step="any"></div><div><label for="biz-top_share_max_percent">头部销量占比要低于（%）</label><input id="biz-top_share_max_percent" type="number" value="90" min="0.1" max="100" step="any"></div><div><label for="biz-min_new_products">至少有多少个可比较新品</label><input id="biz-min_new_products" type="number" value="5" min="1" max="1000" step="any"></div><div><label for="biz-min_market_products">至少有多少个类目销量样本</label><input id="biz-min_market_products" type="number" value="30" min="2" max="100000" step="any"></div><div><label for="biz-min_sales_coverage">销量数据最低覆盖率（%）</label><input id="biz-min_sales_coverage" type="number" value="80" min="10" max="100" step="any"></div></div><label for="biz-growth_period">增长看哪个周期</label><select id="biz-growth_period"><option value="either">周环比或月环比满足一个即可</option><option value="week">只看周环比（相邻7天）</option><option value="month">只看月环比（相邻30天）</option></select><p class="small">优先读取极鲸云上架与销量环比，前端观测另行保留；销量显示 1K+ 时不会冒充精确销量。</p></details><div class="actions"><button class="primary" type="button" id="run" disabled>确认规则，开始采集与本地分析</button></div><p id="run-hint" class="button-help">先生成规则和关键词，再确认开始。</p><p class="small">采集到的数据自动进入第一、二层本地分析，持续更新 Excel；第三层需要在结果页手动点击启动。</p></section>
+<div id="feedback" class="notice" role="status" aria-live="polite"></div>
+
+</section>
+<section class="card page-panel" id="monitor-panel"><div class="progress-heading"><h2>采集监控</h2><div class="actions"><button id="resume" class="primary" type="button" disabled title="沿用当前任务配置，从已有数据和断点继续">开始 / 继续采集</button><button id="stop" type="button">停止任务</button></div></div><div id="overview" class="notice" role="status">尚未取得状态，暂不能判断任务是否运行。</div><div id="listing-recovery" class="notice danger" hidden><strong>准备未完成，采集尚未开始</strong><p class="small">可以直接重试自动定位；也可以粘贴正确的 Amazon 榜单链接，按原来的数量和路数继续准备。</p><label for="retry-listing-url">Amazon Best Sellers 榜单链接（可选）</label><input id="retry-listing-url" type="url" placeholder="https://www.amazon.com/…/zgbs/…"><button id="retry-generation" type="button">重试准备任务</button><p class="small">沿用本机已配置的 API key。需要更换密钥时，请到“新建任务”填写后重试。</p></div><p id="runtime-version" class="small"></p><p id="network-readiness" class="notice" aria-live="polite"></p><div id="local-proxy-choice" hidden><label>检测到多个出口，请选择 <select id="local-proxy-endpoint"></select></label><button id="local-proxy-save" type="button">准备时使用所选出口</button><span id="local-proxy-choice-result" class="small"></span></div><section id="collection-total" class="notice" aria-live="polite" hidden><strong id="collection-total-label"></strong><div id="collection-total-track" class="progress-track" role="progressbar" aria-label="采集总进度" aria-valuemin="0"><div id="collection-total-fill" class="progress-fill" style="width:0%"></div></div><p id="collection-total-count" class="small"></p><p id="collection-total-eta" class="small"></p></section><div id="scope" class="small" aria-live="polite"></div><div id="alerts" aria-live="polite"></div><div id="lane-toolbar"><strong id="lane-totals">等待读取采集路数</strong><label class="inline-filter"><input type="checkbox" id="only-errors">只看需处理的采集路</label></div><div id="modules"></div><details class="technical"><summary>运行详情</summary><pre id="raw">等待读取</pre></details><footer id="updated">尚未更新</footer></section><section class="card page-panel" id="results-panel"><h2>结果与导出</h2><div id="result-scope" class="small"></div><div id="stage3-controls" class="notice span-all"><strong>第三层 · 付费视觉分析</strong><p class="small">先识别出售主体，再对照两边实际款式的造型、结构和图案布局；仅有相同部件或同类外观不能确认同款。模块分数仅作辅助。</p><p id="stage3-phase" class="small">等待读取任务状态。</p><div class="actions"><button type="button" id="start-stage3" disabled>启动第三层付费分析</button><button type="button" id="stop-stage3" disabled>停止第三层</button></div><p id="stage3-count" class="small"></p><div id="stage3-progress-track" class="progress-track" role="progressbar" aria-label="第三层处理进度" aria-valuemin="0" aria-valuemax="100"><div id="stage3-progress-fill" class="progress-fill" style="width:0%"></div></div><p id="stage3-speed" class="small"></p><p class="small">只有点击此按钮后才会向视觉 API 发送付费请求。采集及前两层可以继续运行。</p></div><div id="codex-review-controls" class="notice span-all" hidden aria-live="polite"><strong>独立 Codex 看图复核</strong><p id="codex-review-phase" class="small"></p><p id="codex-review-pool" class="small" hidden></p><p id="codex-review-count" class="small"></p><div id="codex-review-progress-track" class="progress-track" role="progressbar" aria-label="Codex看图复核进度" aria-valuemin="0" aria-valuemax="100"><div id="codex-review-progress-fill" class="progress-fill" style="width:0%"></div></div><p id="codex-review-target" class="small"></p><p id="codex-review-publisher" class="small" hidden></p><p class="small">全候选数量和处理进度以上方第三层计数为准；本区的分片与队列数字只描述 Codex 派单状态。</p><p class="small">独立任务直接查看商品图片，结果单独记录；上方付费 API 的停止状态和完成数保持原口径。</p></div><details id="visual-review" class="review-divider"><summary>为什么待复核 / 查看判断证据</summary><div id="visual-review-content" class="small">展开后读取最近已发布结果，不启动分析或付费。</div></details><div id="excel-controls" class="notice span-all"><strong>Excel 持续更新</strong><p class="small">点击后打开当前任务的最新查看文件；尚未生成时按钮不可用。</p><div class="excel-actions"><button type="button" data-excel="amazon" disabled>打开 Amazon 数据 Excel</button><button type="button" data-excel="temu" disabled>打开 TEMU 数据 Excel</button><button type="button" data-excel="layer12" disabled>打开第一、二层 Excel</button><button type="button" data-excel="layer123" disabled>打开第一、二、三层 Excel</button></div><p id="excel-open-status" class="small" role="status" aria-live="polite"></p><a id="excel-download" hidden>下载当前最新 Excel</a><p id="excel-hint" class="small" aria-live="polite">等待读取四份文件状态。</p></div><details class="review-divider"><summary>更多市场数据 · 极鲸云</summary><div id="market-status" class="notice">等待读取</div><button id="refresh-market" type="button">刷新市场数据 / 登录后继续</button><p class="small">新任务自动查询。首次未授权时在此显示登录入口，授权后点击继续；不会启动第三层付费分析。</p></details><section id="operator-panel" class="review-divider"><h2>运营候选与每日推荐</h2><p class="small">按当前采样中已完成的三层同款核验筛选。每天按北京时间选一个新品销量候选；缺少证据时显示数据未齐；只有完成核验且不达标时才显示无符合条件商品。价格区间来自页面或已采集规格，单个标价不冒充全部规格的最高／最低价。</p><div class="two"><div><label for="op-label">运营 / 订阅名称</label><input id="op-label" value="运营"></div><div><label for="op-time">每日推荐时间（北京时间）</label><input id="op-time" type="time" value="08:30"></div><div><label for="op-limit">同款数严格少于 N</label><input id="op-limit" type="number" min="1" max="10000" value="5"></div><div><label for="op-sales">同款页面显示销量至少</label><input id="op-sales" type="number" min="1" value="100"></div><div><label for="op-days">最近多少天上架</label><input id="op-days" type="number" min="1" max="365" value="90"></div><div><label for="op-repeat">多少天内不重复推荐</label><input id="op-repeat" type="number" min="1" max="365" value="30"></div></div><label><input id="op-new" type="checkbox" checked> 必须有真实上架时间，满足新品条件</label><label><input id="op-enabled" type="checkbox" checked> 启用本地每日推荐</label><label><input id="op-collect" type="checkbox" checked> 每日重新采集，使用当天新证据推荐</label><div><label for="op-lead">提前多少分钟开始采集</label><input id="op-lead" type="number" min="1" max="720" value="120"></div><p class="small">已有任务未结束时排队，不停止现有浏览器；到推荐时间仍无完整证据则记录数据未齐，暂时无法推荐。第三层付费分析需单独启动。</p><div class="actions"><button id="op-save" type="button">保存当前品类订阅</button><button id="op-refresh" type="button">查看运营候选与今日推荐</button></div><p id="op-status" class="small" role="status"></p><div id="op-products"></div><p class="small">本地日报保存在工作台。程序与电脑需保持运行；外部消息推送尚未配置渠道及收件人。</p></section><section id="frontend-market" class="review-divider" aria-live="polite"><h2>TEMU 网页市场参考</h2><p>等待销量最高与最近上架两轮采集。</p></section><section id="commercial" class="review-divider" aria-live="polite"><h2>商业选品判断</h2><p>等待本轮数据。</p></section></section><section class="card page-panel" id="history-panel"><h2>历史记录</h2><p class="small">过去的任务和文件会保留，新建任务不会覆盖它们。</p><button id="reload-history" type="button">刷新记录</button><div id="history-list"></div><div id="history-detail"></div></section>
+</div></main>
+<script>
+'use strict';
+
+function businessSettings(){const result={};for(const input of document.querySelectorAll('[id^="biz-"]')){const key=input.id.slice(4);result[key]=['growth_period','same_operator'].includes(key)?input.value:Number(input.value);if(key==='min_sales_coverage')result[key]/=100;}return result;}
+function renderBusinessDetails(report,box=$('commercial'),historical=false){
+ box.replaceChildren();const heading=document.createElement('h2');heading.textContent='商业选品判断';box.append(heading);
+ const line=(content,parent=box)=>{const p=document.createElement('p');p.textContent=content;parent.append(p);return p;};
+ if(!report?.market){line(historical?'该历史任务未保存商业判断结果。':'等待本轮数据，尚不能评估。');return;}
+ const market=report.market,policy=report.policy;if(market.provider){line('极鲸云样本 '+market.provider.products+' 件 · 近期上架 '+market.provider.new_products+' 件 · '+market.provider.pages+' 页 · '+(market.provider.complete?'已覆盖所选类目的接口命中':'部分分页')).className='small';for(const c of market.provider.categories){if(c.link){const a=document.createElement('a');a.textContent=c.path||c.name;a.href=c.link;a.target='_blank';a.rel='noopener noreferrer';box.append(a,document.createElement('br'));}}}
+ line('满足一两条也可继续考虑；采样信号不是利润结论。');
+ line('本次判断条件：同款'+(policy.same_operator==='lt'?'严格少于 ':'不超过 ')+policy.same_limit+' 个；'+policy.new_days+' 天内上架的新品，'+({week:'周环比',month:'月环比',either:'周环比或月环比'}[policy.growth_period]||'销量增长')+'超过 '+policy.growth_min_percent+'%；销量前 '+policy.top_n+' 名占比低于 '+policy.top_share_max_percent+'%。').className='small';
+ line('TEMU 网页类目基础词样本 '+market.market_products+' 件'+(market.primary_category_query?'（'+market.primary_category_query+'）':'')+' · 所有关键词共采集 '+(market.all_frontend_products??market.market_products)+' 件 · 已积累 '+market.history_days+' 个观测日 · 网页提供真实上架日期的新品 '+market.dated_new_products+' 件（与极鲸云数据分别统计）').className='small';
+ if(market.frontend_sort)line('网页销量排序：'+market.frontend_sort.reason).className='notice'+(market.frontend_sort.state==='UI_CONFIRMED'?'':' danger');
+ for(const [name,m] of [['新品增长',market.growth],['头部集中度',market.concentration]]){const card=document.createElement('div');card.className='notice'+(m.state==='SAMPLE_PASS'?' success':'');line(name+'：'+m.label,card);line(m.reason,card).className='small';if(name==='新品增长'){for(const [period,p] of Object.entries(m.periods))line((period==='week'?'周':'月')+'环比：'+(p.value==null?'未知':p.value.toFixed(1)+'%')+' · '+p.label+' · 有效新品 '+p.valid_products+' 件 · 已满观察期 '+(p.eligible_products??p.new_products)+' 件 · 未满观察期 '+(p.too_young_products??0)+' 件',card).className='small';}else line('销量前 '+m.top_n+' 名占比：'+(m.value_percent==null?'未知':m.value_percent+'%')+' · 有效销量 '+m.valid_products+'/'+m.sample_products+' 件'+(m.value_percent==null&&m.known_sample_percent!=null?' · 已知样本占比 '+m.known_sample_percent+'%（覆盖不足，仅供参考）':''),card).className='small';box.append(card);}
+ for(const product of report.products||[]){const m=product.match,card=document.createElement('div');card.className='notice'+(m.state==='SAMPLE_PASS'?' success':'');line(product.asin+' · '+(product.title||'标题缺失'),card);line('同款 '+(policy.same_operator==='lt'?'< ':'≤ ')+policy.same_limit+'：'+m.label,card);line('已确认 '+m.confirmed+' · 疑似待复核 '+m.possible+' · 尚未分析 '+m.pending+' · 向量未入围 '+m.screened_out,card).className='small';line(m.reason,card).className='small';line('正向信号 '+product.signals+'/3 · 待补证据 '+product.unknown+' 项 · '+product.priority,card);box.append(card);}
+ line(report.scope+'。已生成的 Excel 均附有“商业选品”和“市场证据”页；第三层文件需完成付费分析后生成。').className='small';
+}
+
+const $=id=>document.getElementById(id);
+const redFlags=/failed|error|存在阻断|失败|错误|需要处理/i;
+function statusTone(row={}){
+ const state=String(first(row,['采集状态','status','状态','phase'])||'');
+ if(/^REPLACING_.*_ENVIRONMENT$/.test(state)||/正在自动更换环境/.test(state)||/WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY/.test(state))return 'success';
+ if(/FAILED|ERROR|BINDING_FAILED|失败|错误/i.test(state))return 'danger';
+ if(row.manual_action_required||row['需人工介入']||/CAPTCHA|VERIFICATION|HUMAN_ACTION|STOPPED_LOGIN_REQUIRED|ACTION_REQUIRED|验证码|等待人工|待人工|需要人工|等待手动|需要.*登录|监督进程已退出/i.test(state))return 'warning';
+ if(row['阻断']||/STOPPED_HTTP|STOPPED_PROXY|ACCESS_DENIED|PROVIDER_BLOCKED|存在阻断/i.test(state))return 'danger';
+ if(/尚无|未启动|尚未|等待状态|状态未知|已停止|停止中/.test(state))return '';
+ if(/RUNNING|STARTING|COLLECTING|COMPLETE|RESUMING|SESSION_REPLACED|WAITING_|RETRYING_|SELECTING_|采集中|运行中|启动中|生成|采集|完成|已就绪|恢复|自动重试|自动继续/.test(state))return 'success';
+ return '';
+}
+function noticeClass(row){return 'notice'+(statusTone(row)?' '+statusTone(row):'');}
+let statusFresh=false,lastGenerationFeedback='',preparationFeedback=false;
+function updateControls(data=lastStatus){
+ const active=Boolean(data?.active),updating=Boolean(data?.release_update?.pending),locked=busy||active||!statusFresh||updating;
+ $('start').disabled=locked;
+ $('start').title=updating?data.release_update.message:!statusFresh?'正在核对本地服务状态':active?'当前任务尚未结束，请先查看采集监控':'';
+ for(const id of ['category','bestsellers-url','new-same-limit','amazon','quantity','worker-count','api-key'])if($(id))$(id).disabled=false;
+ for(const id of ['plain-rule','plain-rule3','stage1-rule','stage2-threshold','stage3-rule','stage3-modules','apply-plain','apply-plain3'])if($(id))$(id).disabled=locked;
+ for(const node of document.querySelectorAll('[id^="biz-"]'))node.disabled=locked;
+ const unapplied=Boolean(draftId)&&($('plain-rule').value!==plainApplied||$('plain-rule3').value!==plainApplied3);
+ $('run').disabled=locked||!draftId||!keywordReady||unapplied;
+ const applicationFailed=Object.entries(data?.plain_application||{}).filter(([scope,row])=>row.state==='failed').map(([scope,row])=>(scope==='stage1'?'第一层':scope==='stage3'?'第三层':'规则')+'：'+row.message).join('；');
+ const hint=updating?data.release_update.message:!statusFresh?'状态尚未确认，请等服务重新连接。':active?'当前任务运行中，规则不能修改。可去“采集监控”查看或停止任务。':unapplied?(applicationFailed||'要求有未应用的修改，请点击对应的“解释 / 应用”按钮。'):!draftId?'先生成规则和关键词。':!keywordReady?'关键词尚未准备好，暂不能开始采集。':'检查规则后即可开始；第三层不会自动付费。';
+ $('run').title=hint;if($('run-hint'))$('run-hint').textContent=hint;
+ $('stop').disabled=busy||!statusFresh||!active;
+ $('resume').disabled=busy||!statusFresh||updating||active||!data?.can_resume;
+ $('resume').title=active?'当前任务已在运行':data?.can_resume?'沿用已有任务配置和断点继续':'没有可继续的任务，请先新建任务';
+ $('retry-generation').disabled=busy||!statusFresh||updating||active||!data?.can_retry_generation;
+ stage3Button(data);excelButtons(data);rotationButtons();
+ $('refresh-market').disabled=busy||!statusFresh||Boolean(data?.release_update?.pending)||data?.market_busy||!data?.category_key||!('market_status' in data);
+}
+function nextStep(data){
+ const node=$('next-step');if(!node)return;
+ const waiting=(data.workers||[]).filter(w=>statusTone(workerCardRow(w))==='warning');
+ let message='第一步：填写品类和采集数量，再生成规则。',tone='';
+ if(waiting.length){message='需要你处理：'+waiting.map(w=>'第 '+Number((w.name||w.worker||'').match(/worker-(\d+)/)?.[1]||'?')+' 路（环境 '+(w.serial_number||w.profile_serial||'见采集详情')+'）').join('、')+'。请在对应浏览器完成登录或验证码，保留页面，完成后观察是否自动继续；未恢复时查看该路详情。';tone='warning';}
+ else if(data.generation_error){message='准备失败，采集尚未开始。请按错误提示修正，原可用草稿仍可查看；有“重试准备任务”时可直接重试。';tone='danger';}
+ else if(data.stage3_control?.codex_review?.running){message=data.stage3_control.codex_review.phase+'。独立任务正在看图并保存结果，可到“结果与导出”查看复核进度。';tone='success';}
+ else if(data.active){const preparing=!data.category_key&&data.generation?.stage!=='complete';message=data.stage3_control?.running?'第三层图片分析正在进行，请等待结果更新。可到“结果与导出”查看已完成的结果。':preparing?'正在准备规则与 Amazon 关键词，请等待。准备好后回来检查规则，再开始采集。':'正在采集并自动做第一、二层分析。可到“结果与导出”查看已生成的部分结果；第三层仍需你手动启动。';tone='success';}
+ else if(data.draft){message='第二步：检查规则和关键词。改过人话要求后先点对应“解释 / 应用”，再点“确认规则，开始采集与本地分析”。';}
+ else if(data.category_key){message='当前任务已结束或暂停。可查看结果；需要继续时点击“开始 / 继续采集”，需要另一品类时去“新建任务”。第三层只分析候选，未启动不代表已确认同款。';}
+ node.textContent=message;node.className='notice'+(tone?' '+tone:'');
+}
+const secretKey=/api.?key|password|authorization|proxy_user|proxy_password|session_sha256|secret/i;
+function safe(value){if(Array.isArray(value))return value.map(safe);if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,secretKey.test(k)?'[已隐藏]':safe(v)]));return value;}
+function text(value){return typeof value==='string'?value:JSON.stringify(safe(value),null,2);}
+function feedback(message,error=false){for(const id of ['feedback','global-feedback']){const node=$(id);if(node){node.textContent=message;node.className='notice '+(error?'danger':'success');}}}
+$('refresh-market').addEventListener('click',()=>action('/api/refresh-market',{}));
+let busy=false,draftId=null,keywordReady=false,plainApplied='',plainApplied3='',applyingScope=null,lastStatus=null;
+function stage3Button(data){
+ const state=data?.stage3_control||{},p=state.progress||{},running=Boolean(state.running),enabled=Boolean(state.enabled);
+ const refreshing=Boolean(p.refreshing||p.current_inputs_pending);
+ const unavailable=!statusFresh||busy||!data?.category_key||data?.scope?.execution_mode==='collection';
+ $('start-stage3').textContent=enabled?'第三层已启动':'启动 / 继续第三层付费分析';
+ $('start-stage3').disabled=unavailable||Boolean(data?.release_update?.pending)||state.can_start===false||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||running;
+ $('stop-stage3').disabled=unavailable||!state.can_stop;
+ $('stage3-phase').textContent=refreshing?'最近核验快照；新增输入核对中，当前待处理尚未确认':p.counting?(p.message||state.phase||'正在核对已处理候选，请等待进度读取完成'):state.phase||'等待手动启动';
+ const reviewed=p.api_completed!=null?Number(p.completed||0):Number(p.completed||0)+Number(p.codex_completed||0),remaining=p.pending_after_codex??p.pending??0;
+ $('stage3-count').textContent=`已进入第三层 ${(p.total||0).toLocaleString()} 对 · 已处理 ${reviewed.toLocaleString()} 对（API ${(p.api_completed??p.completed??0).toLocaleString()} / Codex ${(p.codex_completed||0).toLocaleString()}） · ${refreshing?'快照待处理':'待处理'} ${Number(remaining).toLocaleString()} 对${p.failed?` · 失败 ${p.failed} 对`:''}${p.billing_unknown_pairs?` · ${p.billing_unknown_pairs.toLocaleString()} 对费用待核对，继续时不会重发`:''}${p.billing_hold_fail_closed?' · 费用记录无法对应，已暂停付费请求':''}`;
+ if(p.counting&&!Number.isInteger(p.total)){$('stage3-count').textContent=(p.message||'正在核对候选')+'；完整候选、已处理和待处理数量核对后显示';}
+ if(p.billing_retry_consumed_pairs){$('stage3-count').textContent+=` · ${p.billing_retry_consumed_pairs.toLocaleString()} 对旧版本已补试，当前需免费看图复核，不自动付费`;}
+ if(refreshing){$('stage3-count').textContent+=` · 最近核验时间：${p.updated_at?new Date(p.updated_at*1000).toLocaleString('zh-CN'):'未记录'} · 当前输入待核对`;}
+ const percent=Math.max(0,Math.min(100,p.total?(reviewed+Number(p.failed||0))*100/p.total:Number(p.percent)||0));
+ $('stage3-progress-fill').style.width=percent+'%';$('stage3-progress-track').setAttribute('aria-valuenow',percent);
+ let eta='预计剩余时间：积累处理速度后显示';
+ if(refreshing){eta='预计剩余时间：新增输入核对后显示'}
+ else if(remaining===0&&p.total){eta='当前候选已全部处理，剩余 0 分钟'}
+ else if(p.eta_seconds!=null){const m=Math.ceil(p.eta_seconds/60);eta=`预计剩余 ${Math.floor(m/60)} 小时 ${m%60} 分钟`}
+ const source=p.rate_source==='history_group_normalized'?`按历史 ${p.historical_sample_groups||0} 个成功组平均 ${p.historical_group_seconds||'未知'} 秒和当前并发推算，尚非本任务实测`:p.rate_source==='current'?'本任务已完成请求实测':'历史速度（旧口径，尚未归一）';
+ const speed=p.rate_per_hour!=null?`约 ${Number(p.rate_per_hour).toLocaleString()} 对 / 小时（${source}）`:'速度统计中';
+ $('stage3-speed').textContent=`每组最多 ${p.batch_size||12} 对 · 并发最多 ${p.max_concurrency||4} 组 · ${speed} · ${eta} · 按当前候选估算，新增候选会更新进度`;
+ if(!data?.stage3_control?.running&&data?.stage3_control?.codex_review?.running){$('stage3-speed').textContent='付费 API 当前未运行；Codex 看图由下方独立任务推进，API 历史速度不用于估算本轮看图时间。';}
+ codexReviewPanel(data);
+}
+function codexReviewPanel(data){
+ const state=data?.stage3_control||{},p=state.progress||{},c=state.codex_review||{};
+ const box=$('codex-review-controls');box.hidden=data?.scope?.execution_mode==='collection'||!c.available&&!Number(p.codex_completed);
+ if(box.hidden)return;
+ const phase=c.phase||(p.pending_after_codex===0?'Codex看图复核已完成':'Codex看图复核结果已保存');
+ $('codex-review-phase').textContent=[phase,c.counting?'首次读取复核状态中':c.refreshing?'复核快照刷新中':'',c.refresh_error?'状态读取失败：'+c.refresh_error:''].filter(Boolean).join(' · ');
+ const count=value=>Number(value||0).toLocaleString();
+ const counted=Number.isFinite(p.codex_completed);
+ $('codex-review-count').textContent=counted?`最近全量核验：Codex已复核 ${count(p.codex_completed)} 对 · 不同款 ${count(p.codex_different)} 对 · 证据不足 ${count(p.codex_unknown)} 对 · 同款 ${count(p.codex_same)} 对 · 复核后剩余 ${count(p.pending_after_codex)} 对${p.updated_at?' · '+new Date(p.updated_at*1000).toLocaleTimeString('zh-CN')+' 核验':''}${p.refreshing?' · 新结果核对中':''}`:`已完成 ${count(c.imported)} 对 · 同款、不同款与证据不足分类统计中`;
+ const pool=c.pool||{},poolLine=$('codex-review-pool');
+ poolLine.hidden=!pool.enabled&&!pool.running;
+ if(poolLine.hidden){poolLine.textContent='';}
+ else if(pool.running){
+  const groups=count(pool.running_groups),pending=count(pool.pending_pairs),done=count(pool.completed_groups);
+  poolLine.textContent=`持续看图队列运行中 · ${count(pool.workers)} 路 ${pool.model||'Codex'} ${pool.effort||'high'} · 每组 ${count(pool.group_size||12)} 对 · 当前处理 ${groups} 组 · 已分配待处理 ${pending} 对 · 已完成 ${done} 组 · 队列空闲时自动接续下一组`;
+ }else{poolLine.textContent='持续看图队列已配置，但当前没有通过进程身份校验的运行进程。';}
+ const publisherLine=$('codex-review-publisher'),publisher=c.publisher||{};
+ if(publisher.phase||publisher.error){publisherLine.hidden=false;publisherLine.textContent=`Excel发布：${publisher.phase||'状态未知'}${publisher.error?' · '+publisher.error:''}`;}
+ else if(c.all_reviews_complete&&!c.excel_current){publisherLine.hidden=false;publisherLine.textContent='复核结果已保存；最新 Excel 尚未确认，发布器可能仍在更新。完成后可用下方按钮打开最新文件。';}
+ else{publisherLine.hidden=true;publisherLine.textContent='';}
+ const completed=Number(c.imported||0),target=Number(c.target||0);
+ const percent=target?Math.max(0,Math.min(100,Math.round(completed*1000/target)/10)):0;
+ $('codex-review-progress-fill').style.width=percent+'%';$('codex-review-progress-track').setAttribute('aria-valuenow',percent);
+ $('codex-review-target').textContent=`${c.expected_tasks?count(c.expected_tasks)+' 个累计分片 · ':''}已导入分片结果 ${count(completed)} / ${count(target)} 对${target?' · '+percent+'%':''}${c.all_reviews_complete?(c.excel_current?' · Excel已更新':' · 等待Excel更新'):''}`;
+}
+const excelOpening=new Set();
+function excelButtons(data){const files=data?.excel_files||{};const labels={amazon:'Amazon',temu:'TEMU',layer12:'第一、二层',layer123:'第一、二、三层'};const states=[];for(const [kind,label] of Object.entries(labels)){const info=files[kind]||{};const button=document.querySelector('[data-excel="'+kind+'"]');button.disabled=busy||!statusFresh||!info.available||excelOpening.has(kind);button.title=info.available?'当前文件：'+info.filename:'当前任务尚无可打开的文件';const stamp=info.updated_at?new Date(info.updated_at*1000).toLocaleTimeString('zh-CN'):'';states.push(label+'：'+(info.available?'已生成'+(stamp?'（'+stamp+' 更新）':''):'等待生成'));}$('excel-hint').textContent=states.join(' · ');}
+async function openExcel(kind){
+ const button=document.querySelector('[data-excel="'+kind+'"]');if(!button||button.disabled||excelOpening.has(kind))return;
+ const stamp=lastStatus?.excel_files?.[kind]?.updated_at;
+ const when=stamp?'（文件更新于 '+new Date(stamp*1000).toLocaleString('zh-CN')+'）':'';
+ const label=button.textContent,controller=new AbortController();
+ const status=$('excel-open-status'),download=$('excel-download');
+ const notify=(message,error=false)=>{status.textContent=message;feedback(message,error);};
+ excelOpening.add(kind);button.disabled=true;button.textContent='正在打开…';
+ download.href='/api/excel/'+kind;download.hidden=false;
+ notify('正在打开已发布的 Excel '+when+'，请等待本机表格程序加载。');
+ const timer=setTimeout(()=>controller.abort(),45000);
+ try{
+  const response=await fetch('/api/open-excel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind}),cache:'no-store',signal:controller.signal});
+  const data=await response.json();
+  if(!response.ok||data.ok===false)throw Error(data.error?.message||'打开 Excel 失败');
+  const updated=data.updated_at?'（文件更新于 '+new Date(data.updated_at*1000).toLocaleString('zh-CN')+'）':when;
+  notify('已交给本机表格程序打开：'+data.filename+updated+'。大表加载需要一些时间；也可使用下方下载入口。');
+ }catch(error){notify(error.name==='AbortError'?'打开等待超时，可点击下方下载最新 Excel。':(error.message||'打开 Excel 失败')+'；可点击下方下载最新 Excel。',true);}
+ finally{clearTimeout(timer);excelOpening.delete(kind);button.textContent=label;excelButtons(lastStatus);}
+}
+for(const button of document.querySelectorAll('[data-excel]'))button.addEventListener('click',()=>openExcel(button.dataset.excel));
+const rotationSubmitting=new Set();
+function rotationButtons(){for(const button of document.querySelectorAll('[data-rotate-worker]')){const n=Number(button.dataset.rotateWorker);const name='worker-'+String(n).padStart(2,'0')+'-new';const control=(lastStatus?.workers||[]).find(w=>w.name===name)?.rotation_control;const worker=(lastStatus?.workers||[]).find(w=>w.name===name);const complete=['WORKER_COMPLETE','本轮完成'].includes(first(workerCardRow(worker||{}),['采集状态','status','状态']));button.disabled=busy||!statusFresh||!lastStatus?.active||complete||rotationSubmitting.has(n)||['QUEUED','RUNNING'].includes(control?.status);button.title=complete?'该路已完成，不需要更换环境':!statusFresh?'等待服务状态':!lastStatus?.active?'任务未运行，暂不能更换环境':'重新创建该路环境并从断点继续；其他路不受影响';}}
+async function retryPreparation(){if(busy||!statusFresh||!lastStatus?.can_retry_preparation)return;return action('/api/retry-preparation',{category_key:lastStatus?.category_key});}
+
+async function rotateSession(worker){if(rotationSubmitting.has(worker))return;rotationSubmitting.add(worker);rotationButtons();try{const response=await fetch('/api/change-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({worker}),cache:'no-store'});const data=await response.json();if(!response.ok||data.ok===false)throw Error(data.error?.message||'换 session 提交失败');feedback('第 '+worker+' 路已提交，其他路可同时更换');await poll();}catch(error){feedback(error.message,true);}finally{rotationSubmitting.delete(worker);rotationButtons();}}
+async function action(endpoint,body){if(busy||!statusFresh)return;if(lastStatus?.release_update?.pending&&!['/api/stop','/api/stop-stage3','/api/open-excel'].includes(endpoint)){feedback(lastStatus.release_update.message,true);return;}if(['/api/plain-rules','/api/run','/api/start-stage3'].includes(endpoint)&&$('api-key').value.trim()){body.api_key=$('api-key').value.trim();$('api-key').value='';}busy=true;updateControls();try{const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store'});const data=await response.json();if(!response.ok||data.ok===false||data.error)throw Error(data.error?.message||text(data.error||data.message||data));preparationFeedback=['/api/generate','/api/plain-rules','/api/run'].includes(endpoint);feedback(typeof(data.message||data.phase)==='string'?(data.message||data.phase):'操作已提交，请查看当前进度。');if(['/api/generate','/api/run','/api/resume'].includes(endpoint))showPage('monitor');await poll();}catch(error){feedback(error.message||'请求失败，请检查本地服务。',true);}finally{busy=false;updateControls();}}
+$('retry-generation').addEventListener('click',()=>{const scope=lastStatus?.scope;if(!scope?.category||lastStatus?.active)return;const url=$('retry-listing-url').value.trim();$('bestsellers-url').value=url;const key=$('api-key').value;$('api-key').value='';action('/api/generate',{category_name:scope.category,amazon_count:scope.amazon_count,per_keyword:scope.per_keyword,worker_count:scope.worker_count,bestsellers_url:url,api_key:key});});
+$('task-form').addEventListener('submit',event=>{event.preventDefault();const body={category_name:$('category').value.trim(),amazon_count:Number($('amazon').value),per_keyword:Number($('quantity').value),worker_count:Number($('worker-count').value),commercial:{same_limit:Number($('new-same-limit').value),same_operator:'lt'},bestsellers_url:$('bestsellers-url').value.trim(),api_key:$('api-key').value};$('api-key').value='';action('/api/generate',body);});
+function renderPlainApplication(states={}){for(const scope of ['stage1','stage3']){const row=states[scope]||states.all,node=$('plain-status-'+scope);if(!node)continue;node.hidden=!row;if(row){const label=scope==='stage1'?'第一层':'第三层';node.className='notice '+(row.state==='failed'?'danger':row.state==='applied'?'success':'warning');node.textContent=label+' · '+row.message;if(row.state==='failed'&&applyingScope===scope)applyingScope=null;}}}
+function applyLayer(scope,id){if(!draftId||busy||lastStatus?.active)return;applyingScope=scope;const node=$('plain-status-'+scope);node.hidden=false;node.className='notice warning';node.textContent=(scope==='stage1'?'第一层':'第三层')+' · 正在提交应用请求…';action('/api/plain-rules',{draft_id:draftId,instruction:$(id).value,scope});}
+$('apply-plain').addEventListener('click',()=>applyLayer('stage1','plain-rule'));
+$('apply-plain3').addEventListener('click',()=>applyLayer('stage3','plain-rule3'));
+$('plain-rule3').addEventListener('input',()=>{$('plain-changes').textContent='第三层有未应用的修改，请先应用第三层要求。';updateControls();});
+$('plain-rule').addEventListener('input',()=>{$('plain-changes').textContent=$('plain-rule').value===plainApplied?'当前说明已应用。':'有尚未应用的要求，请先点击“解释 / 应用第一层要求”。';updateControls();});
+$('run').addEventListener('click',()=>action('/api/run',{draft_id:draftId,stage1_text:$('stage1-rule').value,stage2_threshold:Number($('stage2-threshold').value),stage3_text:$('stage3-rule').value,stage3_modules_json:$('stage3-modules').value,commercial:businessSettings(),worker_count:Number($('worker-count').value)}));
+$('start-stage3').addEventListener('click',()=>action('/api/start-stage3',{}));
+$('stop-stage3').addEventListener('click',()=>action('/api/stop-stage3',{}));
+$('stop').addEventListener('click',()=>action('/api/stop',{}));
+$('resume').addEventListener('click',()=>action('/api/resume',{}));
+const statusLabels={WAITING_FLEET_SLOT:'并发调度排队，自动继续',WAITING_HTTP_COOLDOWN:'请求限流，等待后自动重试',WAITING_SITE_COOLDOWN:'站点拒绝当前会话，冷却后自动换环境',WAITING_SORT_RETRY:'排序未就绪，自动重试',RETRYING_SALES_SORT:'正在自动重试销量排序',SELECTING_SALES_SORT:'正在选择销量排序',STOPPED_SALES_SORT_UNCONFIRMED:'多次重试后仍未确认销量排序',RUNNING:'采集中',STARTING:'启动中',WORKER_COMPLETE:'本轮完成',QUERY_COMPLETE:'当前关键词完成',KEYWORD_COMPLETE:'当前关键词完成',KEYWORD_LIMIT_REACHED:'达到本词采集数量',WAITING_CAPTCHA:'等待验证码',WAITING_HUMAN_VERIFICATION:'等待人工验证',WAITING_SEARCH_VERIFICATION:'等待搜索验证',WAITING_EMPTY_SEARCH_VERIFICATION:'等待搜索验证',HUMAN_ACTION_REQUIRED:'需要人工处理',STOPPED_LOGIN_REQUIRED:'登录受阻',STOPPED_HTTP_403:'访问受限',STOPPED_HTTP_429:'访问频率受限',STOPPED_PROXY_CONNECTION:'代理连接中断',STOPPED_BROWSER_COMMAND_TIMEOUT:'浏览器控制超时，连接保持；恢复后可继续',REPLACING_LOGIN_ENVIRONMENT:'登录受阻，正在换环境',REPLACING_TRANSPORT_ENVIRONMENT:'连接中断，正在换环境',FAILED_AFTER_3_ATTEMPTS:'重试后仍失败',SESSION_REPLACED:'新环境已就绪',RESUMING:'正在恢复断点'};
+function first(row,keys){for(const key of keys){const value=row?.[key];if(value!==undefined&&value!==null&&value!=='')return value;}return undefined;}
+function workerCardRow(actual={},stage={},metrics={}){
+const live=actual.live_snapshot;const row={...actual,...stage,...metrics,...(live||{})};
+// Current collector evidence takes priority over an older supervisor alert.
+if(live){row['建议动作']=live['建议动作']||'';row.recovery_action='';row.action='';row.manual_action_required=live['需人工介入']===true;if(live['唯一商品数']!=null){row.unique_goods=live['唯一商品数'];row.completed=live['唯一商品数'];}if(live['当前排序目标']!=null)row.total=live['当前排序目标'];if(live['采集更新时间'])row['更新时间']=live['采集更新时间'];}
+if(/^REPLACING_.*_ENVIRONMENT$/.test(actual.status||'')){Object.assign(row,{'状态':'正在自动更换环境，保留当前关键词断点','采集状态':actual.status,'建议动作':'','需人工介入':false,'阻断':false,manual_action_required:false});}
+if(/_RECOVERY_FAILED$/.test(actual.status||'')){Object.assign(row,{status:actual.status,'状态':'环境恢复失败，未完成换环境','采集状态':actual.status,'建议动作':actual.rotation_control?.message||'恢复未完成，浏览器和数据已保留；可点击重启重新尝试','需人工处理':true,'异常':true,manual_action_required:true,browser_preserved:true});}
+return row;
+}
+const expandedWorkers=new Set();
+const expandedStages=new Set();
+function compactWorker(card,row,n,blocked){
+ card.className+=' lane-card';
+ const done=Number(row.completed??0),total=Number(row.total??0),goods=Number(row.unique_goods??row['唯一商品数']??row.actual_count??row.products_count??0);
+ const count=document.createElement('div');count.className='lane-count';count.textContent=goods.toLocaleString('zh-CN')+' ';const suffix=document.createElement('small');suffix.textContent='件';count.append(suffix);card.append(count);
+ const round=first(row,['采集轮次','round']),updated=first(row,['status_updated_at','状态更新时间']);
+ const activity=document.createElement('p');activity.className='small worker-activity';
+ const activityParts=[];
+ if(round!==undefined)activityParts.push('第 '+round+' 轮');
+ if(updated!==undefined){const date=new Date(typeof updated==='number'?updated*1000:updated);if(!Number.isNaN(date.getTime()))activityParts.push('状态更新 '+date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'}));}
+ const workerState=String(first(row,['采集状态','status','状态'])||'').toUpperCase();
+ const completedPass=workerState==='WORKER_COMPLETE'||workerState==='本轮完成'||/已完成|完成批次/i.test(String(row.scope_label||''));
+ activityParts.push(completedPass?'件数为已完成关键词 / 排序累计商品':'件数为当前关键词 / 排序去重商品');activity.textContent=activityParts.join(' · ');card.append(activity);
+ if(total>0){const track=document.createElement('div');track.className='progress-track';track.setAttribute('role','progressbar');track.setAttribute('aria-valuenow',done);track.setAttribute('aria-valuemax',total);const fill=document.createElement('div');fill.className='progress-fill';fill.style.width=Math.min(100,100*done/total)+'%';track.append(fill);const label=document.createElement('small');label.textContent=Math.round(Math.min(100,100*done/total))+'%';track.title=done+' / '+total+'（'+(row.scope_label||'当前进度')+'）';card.append(track,label);}
+ const advice=first(row,['建议动作','recovery_action','action']);if(blocked&&advice){card.title=String(advice);const tip=document.createElement('p');tip.className='advice';tip.textContent=advice;card.append(tip);}
+ const details=document.createElement('details');details.open=expandedWorkers.has(n);const summary=document.createElement('summary');summary.textContent='详情';details.append(summary);if(blocked&&advice){const message=document.createElement('p');message.className='advice';message.textContent=advice;details.append(message);}
+for(const [label,keys] of [['关键词',['关键词','current_query','query']],['排序',['排序方式','current_sort']],['采集轮次',['采集轮次','round']],['更新时间',['更新时间','采集更新时间','updated_at']],['已完成关键词',['已完成关键词','completed_queries']]]){const value=first(row,keys);if(value!==undefined&&value!==null){const line=document.createElement('p');line.textContent=label+'：'+(Array.isArray(value)?value.length:value);details.append(line);}}
+ if(row.scope_label){const line=document.createElement('p');line.textContent=row.scope_label;details.append(line);}
+ details.addEventListener('toggle',()=>{if(!details.isConnected)return;if(details.open)expandedWorkers.add(n);else expandedWorkers.delete(n);});
+ const actions=document.createElement('div');actions.className='actions';const button=document.createElement('button');button.type='button';button.textContent='重启';button.title='新建浏览器环境，从断点继续采集';button.dataset.rotateWorker=String(n);button.setAttribute('aria-label','重启第 '+n+' 路');button.disabled=busy||!statusFresh||!lastStatus?.active||!lastStatus?.category_key||rotationSubmitting.has(n)||['QUEUED','RUNNING'].includes(row.rotation_control?.status)||['WORKER_COMPLETE','本轮完成'].includes(first(row,['采集状态','status','状态']));button.addEventListener('click',()=>rotateSession(n));actions.append(button);card.append(actions,details);$('modules').append(card);
+}
+function addProgressCard(title,row={},wide=false,workerNumber=null){
+const card=document.createElement('div');let state=first(row,['状态','status','采集状态']);if(state===undefined&&[row.completed,row.total,row.remaining].every(v=>typeof v==='number'&&Number.isFinite(v)&&v>=0)&&row.total>0&&row.completed<=row.total){state=row.completed===row.total&&row.remaining===0?'当前已入库数据处理完成':'已取得部分处理结果';}state=state===undefined?'尚无状态':statusLabels[state]||state;
+const tone=statusTone({...row,状态:state});const blocked=['danger','warning'].includes(tone);if(blocked&&!first(row,['建议动作','recovery_action','action']))row={...row,建议动作:tone==='warning'?'请在对应浏览器完成登录或验证码，保留页面后查看是否继续。':'请展开详情查看原因；修正后重试，或停止当前任务。'};card.className='progress-card'+(tone?' '+tone:'')+(wide?' span-all':'');
+const heading=document.createElement('div');heading.className='progress-heading';const name=document.createElement('strong');name.textContent=title;heading.append(name);const serial=first(row,['serial_number','profile_no','环境序号']);if(serial!==undefined){const label=document.createElement('span');label.className='serial';label.textContent='环境 '+serial;heading.append(label);}card.append(heading);
+const stateNode=document.createElement('div');stateNode.className='progress-state';stateNode.textContent=state;stateNode.title=state;card.append(stateNode);if(workerNumber!==null){compactWorker(card,row,workerNumber,blocked);return;}
+const fields=[['当前准备',['启动阶段']],['已创建环境',['初始化已创建']],['已绑定环境',['初始化已绑定']],[title.startsWith('Excel')?'文件数':'商品数',['唯一商品数','unique_goods','products_count','actual_count']],['详情与主图已完成',['detail_complete_count']],['自动补齐高清图',['public_original_image_count']],['正在获取或队尾补采',['detail_retry_pending']],['需要人工处理的详情',['detail_manual_count']],['等待下次重试',['detail_retry_wait_count']],['已处理商品对',['processed_pairs','已处理商品对']],['待分析候选',['candidate_count','pending_pairs','候选数']],['已分析商品对',['completed_pairs','success_count','已完成商品对']],['失败商品对',['failed_pairs']],['关键词',['关键词','current_query','search_query']],['排序方式',['排序方式','current_sort']],['采集轮次',['采集轮次','round']],['更新时间',['采集更新时间','updated_at','时间']]];
+for(const [label,keys] of fields){let value=first(row,keys);if(value===undefined||typeof value==='object')continue;if(label==='排序方式')value=({sales:'销量最高',recent:'最近上架'})[value]||value;if(label==='更新时间'){const date=new Date(typeof value==='number'?value*1000:value);if(!Number.isNaN(date.getTime()))value=date.toLocaleTimeString('zh-CN');}const metric=document.createElement('div');metric.className='metric';const key=document.createElement('span');key.textContent=label;const val=document.createElement('strong');val.textContent=value;metric.append(key,val);card.append(metric);}
+const done=row.completed,total=row.total,remaining=row.remaining;if([done,total,remaining].every(v=>typeof v==='number'&&Number.isFinite(v)&&v>=0)&&done<=total){const line=document.createElement('div');line.className='small';line.textContent='已完成 '+done+' / 当前总量 '+total+' · 剩余 '+remaining;card.append(line);if(total>0){const bar=document.createElement('div');bar.className='progress-track';bar.setAttribute('role','progressbar');bar.setAttribute('aria-valuenow',done);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax',total);const fill=document.createElement('div');fill.className='progress-fill';fill.style.width=(100*done/total)+'%';bar.append(fill);card.append(bar);}const scope=document.createElement('p');scope.className='small';scope.textContent=row.scope_label||'当前已入库范围；采集新增时总量会变化。';card.append(scope);}
+const completed=first(row,['已完成关键词','completed_queries']);if(Array.isArray(completed)){const metric=document.createElement('div');metric.className='metric';metric.textContent='已完成关键词：'+completed.length;card.append(metric);}
+if(row.count_scope){const scope=document.createElement('p');scope.className='small';scope.textContent='统计口径：'+row.count_scope;card.append(scope);}if(row.metrics_catching_up){const pending=document.createElement('p');pending.className='small';pending.textContent='正在读取已有结果，完整数量尚未统计完。';card.append(pending);}
+let advice=first(row,['建议动作','recovery_action','action']);if(!advice&&['WAITING_CAPTCHA','WAITING_HUMAN_VERIFICATION','WAITING_SEARCH_VERIFICATION','WAITING_EMPTY_SEARCH_VERIFICATION'].includes(String(first(row,['采集状态','status'])||'')))advice='请在该路浏览器中完成验证码，完成后等待自动恢复。';if(advice&&typeof advice==='string'&&(workerNumber===null||blocked)){const tip=document.createElement('p');tip.className='advice';tip.textContent=advice;card.append(tip);}if(workerNumber!==null){if(row.rotation_control){const control=document.createElement('p');const labels={QUEUED:'换 session 排队中',RUNNING:'正在更换 session',COMPLETE:'换 session 已完成',FAILED:'换 session 失败，请查看该路错误',INTERRUPTED:'换 session 未完成：监督器已退出'};control.textContent=(labels[row.rotation_control.status]||row.rotation_control.status)+(row.rotation_control.message?'：'+row.rotation_control.message:'');control.className=['FAILED','INTERRUPTED'].includes(row.rotation_control.status)?'notice danger':'small';card.append(control);}const actions=document.createElement('div');actions.className='actions';const button=document.createElement('button');button.type='button';button.textContent='重启';button.dataset.rotateWorker=String(workerNumber);button.setAttribute('aria-label','重启第 '+workerNumber+' 路');button.disabled=busy||!statusFresh||!lastStatus?.active||!lastStatus?.category_key||rotationSubmitting.has(workerNumber)||['QUEUED','RUNNING'].includes(row.rotation_control?.status);button.addEventListener('click',()=>rotateSession(workerNumber));actions.append(button);card.append(actions);}if(workerNumber===null){card.className+=' stage-summary';const details=document.createElement('details');details.open=expandedStages.has(title);const summary=document.createElement('summary');summary.textContent='详情';details.append(summary);if(blocked&&advice){const message=document.createElement('p');message.className='advice';message.textContent=advice;details.append(message);}for(const child of [...card.children].slice(2))details.append(child);details.addEventListener('toggle',()=>{if(!details.isConnected)return;if(details.open)expandedStages.add(title);else expandedStages.delete(title);});const amount=first(row,['actual_count','unique_goods','唯一商品数','products_count']);if(amount!==undefined){const metric=document.createElement('span');metric.className='stage-amount';metric.textContent=amount+(title.startsWith('Excel')?' 份文件':' 件');card.append(metric);}card.append(details);if(title==='准备环境'){const retry=document.createElement('button');retry.type='button';retry.textContent='重试准备环境';retry.style.marginLeft='auto';retry.disabled=busy||!lastStatus?.can_retry_preparation;retry.addEventListener('click',retryPreparation);card.insertBefore(retry,details);}}$('modules').append(card);
+}
+function sectionLabel(text){const label=document.createElement('div');label.className='section-label';label.textContent=text;$('modules').append(label);}
+function renderKeywordPreview(draft){const keywordRows=draft?.keyword_plan||[];$('draft-keywords').textContent=keywordRows.length?'TEMU 关键词（总数不设上限；仅保留补充商品或结构款式覆盖的词，按工作量分配，空闲路自动接力）：\n'+keywordRows.map((row,index)=>row.query+(row.purpose==='CATEGORY_SAMPLE'?'（类目采样词）':'（'+row.amazon_products+' 件 Amazon 商品）')).join('\n'):'Amazon 关键词尚未生成，请等待采集完成。';const coverage=draft?.keyword_coverage;if(coverage?.amazon_products){$('draft-keywords').textContent+='\n特征词覆盖 '+coverage.specific_products+' / '+coverage.amazon_products+' 件商品。';if(coverage.without_specific_query?.length)$('draft-keywords').textContent+='尚无特征词覆盖：'+coverage.without_specific_query.join('、')+'（仅参与类目采样）';}if(coverage?.coverage_gap_counts){const gaps=coverage.coverage_gap_counts;if(gaps.NO_SUPPORTED_TITLE_FEATURES)$('draft-keywords').textContent+='\n'+gaps.NO_SUPPORTED_TITLE_FEATURES+' 个商品标题缺少可支持的细化特征，仅保留大类目搜索。';if(gaps.QUERY_SELECTION_GAP)$('draft-keywords').textContent+='\n'+gaps.QUERY_SELECTION_GAP+' 个商品有标题线索，但尚未纳入关键词计划，需重新生成计划。';}if(coverage&&coverage.category_feature_terms_supplied===false)$('draft-keywords').textContent+='\n未提供品类细化词，当前查询依据标题中的明确数量和结构等信息。';$('draft-keywords').style.whiteSpace='pre-line';}
+$('worker-count').addEventListener('input',()=>renderKeywordPreview(lastStatus?.draft));
+function placeDraftEditor(){const editor=$('draft-editor');if(!editor)return;const target=$('create-panel').hidden?$('monitor-panel'):$('create-panel');if(editor.parentElement!==target)target.append(editor);}
+function renderDraft(draft){placeDraftEditor();if(!draft||!draft.id){draftId=null;keywordReady=false;$('draft-editor').hidden=true;return;}if(draft.id===draftId)return;const keep1=applyingScope==='stage3'&&$('plain-rule').value!==plainApplied?$('plain-rule').value:null;const keep3=applyingScope==='stage1'&&$('plain-rule3').value!==plainApplied3?$('plain-rule3').value:null;draftId=draft.id;$('worker-count').value=draft.worker_count??4;for(const [key,value] of Object.entries(draft.commercial||{})){const input=$('biz-'+key);if(input)input.value=key==='min_sales_coverage'?value*100:value;}plainApplied=draft.plain_stage1||'';plainApplied3=draft.plain_stage3||'';$('plain-rule').value=keep1??plainApplied;$('plain-rule3').value=keep3??plainApplied3;applyingScope=null;$('plain-changes').textContent=(Array.isArray(draft.change_summary)?draft.change_summary.join('\n'):draft.change_summary)||(plainApplied?'这是当前规则的中文说明。可以修改后应用，也可以直接运行。':'已有草稿已保留。填写 API key 后点击应用，生成这份规则的中文说明；也可以直接输入你的要求。');$('draft-editor').hidden=false;const keywordRows=Array.isArray(draft.keyword_plan)?draft.keyword_plan:[];keywordReady=keywordRows.length>0;renderKeywordPreview(draft);$('draft-category').textContent=draft.category_name||'当前品类';$('draft-title').textContent=draft.amazon_title||draft.amazon_bestsellers_title||'Amazon 榜单（标题尚未提供）';const url=draft.amazon_url||'';$('draft-url').textContent=url;try{const parsed=new URL(url);if(parsed.protocol==='https:'&&parsed.hostname==='www.amazon.com')$('draft-url').href=url;else $('draft-url').removeAttribute('href');}catch{$('draft-url').removeAttribute('href');}$('stage1-rule').value=draft.stage1_text||'';$('stage2-threshold').value=draft.stage2_threshold??'';$('stage3-rule').value=draft.stage3_text||'';$('stage3-modules').value=typeof draft.stage3_modules_json==='string'?draft.stage3_modules_json:JSON.stringify(draft.stage3_modules_json||{},null,2);$('run').disabled=busy||Boolean(lastStatus?.active)||!keywordReady;}
+function renderFrontendMarketDetails(report,box=$('frontend-market'),historical=false){
+ box.replaceChildren();const title=document.createElement('h2');title.textContent='TEMU 网页市场参考';box.append(title);
+ const observationNote=document.createElement('p');observationNote.className='muted';observationNote.textContent='自然商品只统计完整可见卡片中已检查广告标识的记录；未检查、只显示一部分或旧记录仍为未知。未展示销量不会按零处理。';box.append(observationNote);
+ function line(value,parent=box){const p=document.createElement('p');p.textContent=value;p.className='small';parent.append(p);return p;}
+ const amount=value=>value==null?'未知':Number(value).toLocaleString('zh-CN');
+ if(report?.criteria_evidence)line(Object.values(report.criteria_evidence).join('；'));
+ line(report?.note||'同一关键词先采销量最高，再采最近上架，用网页现成销量观察热卖和新品表现。');
+ if(!report?.queries?.length){line(historical?'该历史任务未保存两种排序的采集数据。':'等待两种排序的采集数据。');return;}
+ if(report.sampling_efficiency){const e=report.sampling_efficiency;line('各轮累计 '+e.pass_products+' 条，去重后 '+e.unique_products+' 件，重复约 '+(e.duplicate_percent??0)+'%。');}
+ if(report.read_issues)line('部分数据正在写入或未能读取，将在下次刷新重试。');
+ for(const row of report.queries){const card=document.createElement('div');card.className='notice';const heading=document.createElement('strong');heading.textContent='关键词：'+row.query;card.append(heading);
+ for(const [mode,label] of [['sales','销量最高'],['recent','最近上架']]){const sample=row[mode];if(!sample)continue;if(!sample.sample_products&&!sample.progress?.length){line(label+(historical?'：该历史任务未保存此轮样本。':'：尚未采集；新任务会自动执行此轮。'),card);continue;}
+ line(label+'：已采 '+(sample.captured_products??sample.sample_products)+' 件 · 非广告商品中有销量展示 '+sample.sales_display_products+' 件 · 可读数量 '+sample.interpretable_sales_products+' 件 · 销量未知 '+sample.unknown_sales_products+' 件',card);
+ if(sample.progress?.length)line('采集状态：'+sample.progress.map(p=>p.worker+' '+(statusLabels[p.status]||p.status||'未知')).join('；'),card);
+ line('自然商品 '+sample.sample_products+' 件；广告 '+(sample.sponsored_products??0)+' 件；广告属性未知 '+(sample.unknown_sponsorship_products??0)+' 件。下列市场指标只统计已识别的自然商品。',card);
+ if(mode==='recent')line('在销量可读的商品中，已有销量 '+sample.with_sales_products+' / '+sample.interpretable_sales_products+' 件（'+(sample.with_sales_percent==null?'未知':sample.with_sales_percent+'%')+'）；展示销量中位数约 '+amount(sample.displayed_sales_median_approx)+'。用于观察新品是否卖得动，不是环比增长率。',card);
+ else line('销量最高轮样本中，前5件展示量占比约 '+(sample.top5_displayed_share_approx==null?'未知（至少需要6件有可读销量的商品）':sample.top5_displayed_share_approx+'%')+'；只作样本粗略参考，不是整个类目或精确月销量占比。',card);
+ for(const p of sample.progress||[]){const s=p.sampling;if(s?.reduced)line('重复扩展词已缩短：原上限 '+s.requested_products+'，实际 '+s.observed_products+'，与此前同排序样本重复 '+Math.round(s.duplicate_fraction*100)+'%。'+s.reason,card);}
+ if(sample.examples?.length){const examples=document.createElement('details');const summary=document.createElement('summary');summary.textContent=label+' · 查看展示销量较高的样本';examples.append(summary);for(const product of sample.examples){const p=line(product.title+' · '+(product.sales_text||'销量未展示'),examples);if(product.url){try{const url=new URL(product.url);if(url.protocol==='https:'&&(url.hostname==='temu.com'||url.hostname.endsWith('.temu.com'))){const a=document.createElement('a');a.textContent=' 打开商品';a.href=url.href;a.target='_blank';a.rel='noopener noreferrer';p.append(a);}}catch{}}}card.append(examples);}}
+ box.append(card);}
+}
+const expandedEvidence=new Set();
+function collapseEvidence(box,label){const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent=label;details.open=expandedEvidence.has(box.id);details.addEventListener('toggle',()=>{if(!details.isConnected)return;if(details.open)expandedEvidence.add(box.id);else expandedEvidence.delete(box.id);});details.append(summary);for(const child of [...box.children].slice(1))details.append(child);box.append(details);return details;}
+let businessRenderKey='',marketRenderKey='';
+function renderBusiness(report,box=$('commercial'),historical=false){const key=JSON.stringify(report);if(!historical){if(key===businessRenderKey)return;businessRenderKey=key;}renderBusinessDetails(report,box,historical);collapseEvidence(box,'查看判断条件与商品明细');const p=document.createElement('p');p.textContent=report?.market?'三条条件分别判断；同款数量以第三层分析完成后的结果为准。':historical?'该历史任务未保存商业判断结果。':'尚无商业判断结果。';box.insertBefore(p,box.children[1]);}
+function renderFrontendMarket(report,box=$('frontend-market'),context=lastStatus){
+ const historical=context?.historical===true,key=JSON.stringify(report);if(!historical){if(key===marketRenderKey)return;marketRenderKey=key;}renderFrontendMarketDetails(report,box,historical);collapseEvidence(box,'查看各关键词和商品证据');
+ const rows=report?.queries||[],base=rows.find(r=>r.purpose==='CATEGORY_SAMPLE')||rows.find(r=>r.query===(report?.primary_category_query||context?.commercial?.market?.primary_category_query));
+ const area=document.createElement('div');area.className='market-summary';
+ function tile(title,value,note){const card=document.createElement('div');card.className='notice';const name=document.createElement('strong');name.textContent=title;const metric=document.createElement('div');metric.className='metric-head';metric.textContent=value;const p=document.createElement('p');p.className='small';p.textContent=note;card.append(name,metric,p);area.append(card);}
+ const recent=report?.all_keywords?.recent,sales=report?.all_keywords?.sales;
+ const sampleNote=sample=>{
+  if(!sample?.sample_products)return historical?' 该历史任务未保存可用关键词样本。':' 等待关键词采集样本。';
+  const time=sample.sample_updated_at?new Date(sample.sample_updated_at).toLocaleString('zh-CN'):'';
+  return ' 跨'+(sample.keyword_count??0)+'个关键词去重后，已识别自然商品'+sample.sample_products+'件'+(time?'；最近更新 '+time:'')+'。'+(!historical&&context?.active?'采集继续时自动更新。':'');
+ };
+ const baseRecent=base?.recent,baseSales=base?.sales;
+ const recentCompare=baseRecent?.sample_products?' 大类目词“'+base.query+'”单独有'+baseRecent.sample_products+'件自然商品，其中'+baseRecent.with_sales_products+'件显示已售。':'';
+ const salesCompare=baseSales?.top5_displayed_share_approx!=null?' 大类目词“'+base.query+'”单独统计为'+baseSales.top5_displayed_share_approx+'%。':'';
+ tile('新上架商品卖得动吗？',recent?.signal?.confirmed_sold_lower_bound_percent!=null?'至少 '+recent.signal.confirmed_sold_lower_bound_percent+'% 显示已售':historical?'样本不足':'等待样本',(recent?.signal?.label||'证据不足')+'：'+(recent?.signal?.reason||(historical?'未保存可用的最近上架样本。':'等待最近上架样本。'))+sampleNote(recent)+recentCompare);
+ tile('销量是否挤在头部？',sales?.top5_displayed_share_approx!=null?sales.top5_displayed_share_approx+'%':historical?'样本不足':'等待样本',(sales?.signal?.label||'证据不足')+'：'+(sales?.signal?.reason||(historical?'未保存足够的销量最高样本。':'等待销量最高样本。'))+sampleNote(sales)+'跨关键词搜索样本不是全类目份额。'+salesCompare);
+ box.insertBefore(area,box.children[1]);
+}
+function renderCollectionTotal(data){
+ const box=$('collection-total'),row=data.details?.['阶段']?.temu?.overall;
+ if(!box)return;box.hidden=!row;if(!row)return;
+ const percent=Math.max(0,Math.min(100,Number(row.percent)||0));
+ $('collection-total-label').textContent='采集总进度 '+percent.toFixed(1)+'%';
+ const track=$('collection-total-track');track.setAttribute('aria-valuenow',row.completed);track.setAttribute('aria-valuemax',row.total);
+ $('collection-total-fill').style.width=percent+'%';
+ const count=n=>Number(n||0).toLocaleString('zh-CN');
+ $('collection-total-count').textContent='已采 '+count(row.completed)+' / '+count(row.total)+' 条 · '+row.keyword_count+' 个关键词 · 已完成 '+row.finished_passes+' / '+row.total_passes+' 轮'+(row.shortfall?' · 原计划 '+count(row.planned_total)+' 条，已结束轮次少于目标 '+count(row.shortfall)+' 条':'')+'。按各关键词及排序累计，同一商品在不同轮次分别计数。';
+ let eta;
+ if(row.remaining===0)eta='采集计划已完成。';
+ else if(row.eta_seconds==null&&row.blocked_lanes)eta='采集等待恢复，恢复后重新估算剩余时间。';
+ else if(row.eta_seconds==null)eta='预计剩余时间：暂无足够的采集速度记录。';
+ else{const minutes=Math.max(1,Math.ceil(row.eta_seconds/60));eta='预计还需约 '+Math.floor(minutes/60)+' 小时 '+minutes%60+' 分钟（按'+(row.source==='history'?'历史 '+row.history_tasks+' 个任务':'本任务已完成轮次')+'速度，约 '+count(row.rate_per_hour)+' 条/小时估算）。';}
+ if(row.remaining>0&&(!data.active||row.blocked_lanes))eta+=' '+(!data.active?'任务已暂停；预计时间从恢复后计算。':row.blocked_lanes+' 路需处理；预计时间按全部采集路恢复后计算。');
+ $('collection-total-eta').textContent=eta;
+}
+function render(data){if(typeof renderCollectionTotal==='function')renderCollectionTotal(data);const choices=data.network_readiness?.candidates||[];const choiceBox=$('local-proxy-choice');const choiceSelect=$('local-proxy-endpoint');if(choiceBox&&choiceSelect){choiceBox.hidden=choices.length<1||data.active;const options=choices.map(c=>({value:JSON.stringify({host:c.host,port:c.port,protocol:c.protocol==='HTTP'?'HTTP':'SOCKS5'}),label:c.name+' · '+c.protocol+' · '+c.host+':'+c.port}));const signature=JSON.stringify(options);if(choiceSelect.dataset&&choiceSelect.dataset.signature!==signature){choiceSelect.replaceChildren(...options.map(o=>{const element=document.createElement('option');element.value=o.value;element.textContent=o.label;return element;}));choiceSelect.dataset.signature=signature;}}const network=$('network-readiness');if(network){network.textContent=data.network_readiness?.message||'网络模式尚未读取；目标访问尚未验证。';network.className=data.network_readiness?.probe_level==='NOT_READY'?'notice danger':'notice';}const reviewBox=$('visual-review-content');if(reviewBox?.dataset&&reviewBox.dataset.runKey!==(data.category_key||'')){reviewBox.textContent='任务已切换，展开后读取当前任务已发布结果。';reviewBox.dataset.runKey=data.category_key||'';}lastStatus=data;const version=data.loaded_runtime;const release=data.release_update;const versionLabel=$('runtime-version');if(versionLabel)versionLabel.textContent=version?'当前服务版本 '+(version.commit?.slice(0,7)||'未知')+' · 加载于 '+new Date(version.loaded_at*1000).toLocaleString('zh-CN')+(release?' · '+release.message:''):'';const releaseBanner=$('release-update');if(releaseBanner){releaseBanner.hidden=!release?.pending;releaseBanner.textContent=release?.message||'';}const releaseIdentity=version?JSON.stringify([version.commit,version.source_sha256]):null;if(render.connectedRelease&&releaseIdentity&&render.connectedRelease!==releaseIdentity&&!release?.pending){location.reload();return;}if(releaseIdentity)render.connectedRelease=releaseIdentity;const ms=data.market_status||{};const mb=$('market-status');mb.textContent=ms.message||('market_status' in data?'新任务开始后自动读取市场数据':'代码已更新，本地网页服务重启后启用市场数据功能');mb.className=noticeClass(ms);if(ms.jumpUrl){try{const u=new URL(ms.jumpUrl);if(u.protocol==='https:'&&(u.hostname==='geekbi.com'||u.hostname.endsWith('.geekbi.com'))){const a=document.createElement('a');a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';a.textContent='打开极鲸云完成授权';mb.append(document.createElement('br'),a);}}catch{}}$('refresh-market').disabled=busy||data.market_busy||!data.category_key||!('market_status' in data);$('refresh-market').textContent=data.market_busy?'正在读取极鲸云…':['FAILED','ACTION_REQUIRED','CATEGORY_UNRESOLVED'].includes(ms.status)?'重试极鲸云 / 登录后继续':'刷新极鲸云市场数据';renderFrontendMarket(data.frontend_market);renderBusiness(data.commercial);if(data.commercial_error){const notice=document.createElement('p');notice.className='notice danger';notice.textContent=data.commercial_error;$('commercial').append(notice);}renderDraft(data.draft);$('run').disabled=busy||Boolean(data.active)||!draftId||!keywordReady;$('stop').disabled=busy||!data.active;$('resume').disabled=busy||data.active||!data.can_resume;$('raw').textContent=JSON.stringify(safe(data),null,2);$('raw').title='运行进程版本、配置摘要与原始状态；loaded_runtime 是服务实际加载的版本';const stage3Controls=$('stage3-controls'),excelControls=$('excel-controls');$('modules').replaceChildren();$('modules').className='module-grid';$('alerts').replaceChildren();const state=data.phase??data.status??data.state??data['状态'];$('overview').textContent=state===undefined?'服务已连接；任务总状态尚未提供。':String(state);if(data.preparation_error){const notice=document.createElement('p');notice.className='notice danger';notice.textContent=data.preparation_error;$('alerts').append(notice);} const generationFailed=Boolean(data.generation_error||data.generation?.stage==='error');$('overview').className='notice'+(generationFailed?' danger':data.active?(statusTone({status:state})==='danger'?' danger':statusTone({status:state})==='warning'?' warning':' success'):data.severity==='yellow'?' warning':data.severity==='red'?' danger':statusTone({状态:state})?' '+statusTone({状态:state}):'');$('listing-recovery').hidden=!data.can_retry_generation;$('retry-generation').disabled=busy||Boolean(data.active);if(generationFailed){lastGenerationFeedback=String(data.generation_error?.message||data.generation?.message||state);feedback(lastGenerationFeedback,true);}else if(lastGenerationFeedback){if($('feedback').textContent===lastGenerationFeedback)feedback('');lastGenerationFeedback='';}if(!generationFailed&&(!data.generation?.stage||data.generation.stage==='complete')&&(data.draft||data.active&&data.category_key)&&typeof preparationFeedback!=='undefined'&&preparationFeedback){feedback('');preparationFeedback=false;}const scope=data.scope||{};$('lane-totals').textContent='计划 '+(scope.worker_count??4)+' 路 · 尚未启动';stage3Controls.hidden=scope.execution_mode==='collection';$('scope').textContent=scope.category?(data.category_key?'当前任务：':'正在准备新任务：')+scope.category+' · Amazon 前 '+(scope.amazon_count??'未知')+' 名 · 每关键词 '+(scope.per_keyword??'未知')+' 条 · TEMU '+(scope.worker_count??4)+' 路':'当前没有已启动的任务';
+const stages=data.details?.['阶段']||data.modules||data.services||{};
+if(!generationFailed&&(String(state||'').includes('生成')||String(state||'').includes('正在采集 Amazon'))){addProgressCard('生成规则、Amazon 商品与关键词',{状态:String(state),建议动作:'正在采集榜单前 N 件商品并按所选路数分配关键词。'},true);}else{
+addProgressCard('准备环境',stages.bootstrap,true);sectionLabel('采集进度');addProgressCard('Amazon 采集',stages.amazon,true);
+const workers=Array.isArray(data.workers)?data.workers:Object.values(data.workers||{});const laneRows=[];for(let i=1;i<=(scope.worker_count??4);i++){const key='worker-'+String(i).padStart(2,'0')+'-new';const actual=workers.find(w=>w.name===key)||{};const metrics=(Array.isArray(stages.temu?.workers)?stages.temu.workers:[]).find(w=>w.name===key)||{};const row=workerCardRow(actual,stages[key]||{},metrics);const blocked=['danger','warning'].includes(statusTone(row));const laneState=String(first(row,['采集状态','status','状态'])||'');const running=Boolean(data.active)&&/RUNNING|COLLECTING|REPLACING|STARTING|SCANNING|WAITING_SEE_MORE|RETRYING_|SELECTING_|SALES_SORT_CHECKED|RESUMING|SESSION_REPLACED|运行|采集中|启动中|更换/i.test(laneState);if(!laneState)row['状态']='未启动';laneRows.push({i,row,blocked,running,complete:first(row,['采集状态','status'])==='WORKER_COMPLETE'||String(row['状态']||'').includes('完成')});}
+const abnormal=laneRows.filter(r=>r.blocked).length,completed=laneRows.filter(r=>r.complete&&!r.blocked).length,running=laneRows.filter(r=>r.running&&!r.blocked&&!r.complete).length;$('lane-totals').textContent='共 '+laneRows.length+' 路 · 运行 '+running+' · 需处理 '+abnormal+' · 完成 '+completed+' · 准备/等待 '+(laneRows.length-running-abnormal-completed);
+if(scope.execution_mode==='collection'&&completed===laneRows.length&&completed>0&&Number(stages.amazon?.remaining)===0&&!stages.excel?.['阻断']){$('overview').textContent='采集已完成';$('overview').className='notice success';}
+laneRows.sort((a,b)=>Number(b.blocked)-Number(a.blocked)||a.i-b.i);for(const item of laneRows){if($('only-errors').checked&&!item.blocked)continue;addProgressCard('TEMU 第 '+item.i+' 路',item.row,false,item.i);}
+addProgressCard('TEMU 去重汇总',stages.temu_union,true);if(scope.execution_mode!=='collection'){sectionLabel('三层分析进度');addProgressCard('第一层 · 文字筛选',stages.stage1);addProgressCard('第二层 · 图片向量',stages.stage2);addProgressCard('第三层 · 视觉分析',stages.stage3,true);}else{stage3Controls.hidden=true;}addProgressCard('Excel 持续更新',stages.excel,true);}stage3Button(data);excelButtons(data);$('result-scope').textContent=$('scope').textContent;
+for(const key of ['error','blocked_reason','human_action','message','提示']){const value=data[key];if(value&&redFlags.test(text(value))){const alert=document.createElement('div');alert.className=noticeClass({状态:text(value),manual_action_required:key==='human_action'});alert.textContent=typeof value==='object'?value.message||'请查看详细状态':value;$('alerts').append(alert);}}
+$('connection').textContent='本地服务已连接';$('updated').textContent='最近读取：'+new Date().toLocaleTimeString('zh-CN');renderPlainApplication(data.plain_application);nextStep(data);updateControls();}
+
+let polling=false;async function poll(){if(polling)return;polling=true;let received=false;const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);try{const response=await fetch('/api/status',{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error('状态接口返回 '+response.status);const data=await response.json();received=true;statusFresh=true;render(data);}catch(error){statusFresh=false;updateControls();$('connection').textContent=received?'本地服务已连接，页面显示异常':error.name==='AbortError'?'本地服务连接超时，正在自动重试':'本地服务未连接';$('overview').textContent=received?'已收到任务状态，但页面显示失败。后台任务可能仍在运行，请勿重复启动。':'无法取得最新状态，将自动重试；后台任务和断点不会因此停止。当前进度未知。';$('overview').className='notice warning';console.error('工作台状态刷新失败',error);}finally{clearTimeout(timeout);polling=false;}}
+
+function showPage(page){
+ if(!['create','monitor','results','history'].includes(page))page='create';
+ for(const name of ['create','monitor','results','history'])$(name+'-panel').hidden=name!==page;
+ for(const button of document.querySelectorAll('[data-page]'))button.setAttribute('aria-selected',String(button.dataset.page===page));
+ if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);
+ placeDraftEditor();if(page==='history')loadHistory();
+}
+let historyLoading=false,historyRequest=0;
+async function loadHistory(){
+ if(historyLoading)return;historyLoading=true;const box=$('history-list');box.className='';
+ try{const response=await fetch('/api/history',{cache:'no-store'});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'历史记录读取失败');box.replaceChildren();
+ if(!data.runs?.length){box.textContent='还没有历史任务。';return;}
+ const quantity=value=>Number.isInteger(value)&&value>=0?value.toLocaleString('zh-CN')+' 件':'数量未记录';
+ for(const row of data.runs){const card=document.createElement('div');card.className='history-row';const info=document.createElement('div');const name=document.createElement('strong');name.textContent=row.category_name||row.category_key;const detail=document.createElement('p');detail.className='small';detail.textContent=(row.status||'状态未知')+' · Amazon '+quantity(row.counts?.amazon)+' · TEMU '+quantity(row.counts?.temu)+(row.updated_at?' · '+new Date(typeof row.updated_at==='number'?row.updated_at*1000:row.updated_at).toLocaleString('zh-CN'):'');info.append(name,detail);const button=document.createElement('button');button.textContent='查看结果';button.addEventListener('click',()=>openHistory(row.category_key));card.append(info,button);box.append(card);}
+ }catch(error){box.textContent=error.message;box.className='notice danger';}finally{historyLoading=false;}
+}
+function historyExcelLinks(key,files){
+ const links=document.createElement('div');links.className='excel-actions';
+ for(const [kind,label] of Object.entries({amazon:'Amazon 数据',temu:'TEMU 数据',layer12:'第一、二层',layer123:'第一、二、三层'})){
+  const file=files?.[kind];const a=document.createElement(file?.available?'a':'span');a.className='notice';
+  a.textContent=label+(file?.available?' · 下载最新 Excel':' · 尚未生成');
+  if(file?.available){
+   a.href='/api/history/'+encodeURIComponent(key)+'/excel/'+kind;
+   const version=document.createElement('small');version.className='small';version.style.display='block';version.style.overflowWrap='anywhere';
+   version.textContent=(file.updated_at?'Excel 更新：'+new Date(file.updated_at*1000).toLocaleString('zh-CN')+' · ':'')+(file.filename||'');
+   a.title='当前下载文件：'+(file.filename||'');a.append(version);
+  }
+  links.append(a);
+ }
+ return links;
+}
+async function openHistory(key){const request=++historyRequest;
+ const box=$('history-detail');box.replaceChildren();box.textContent='正在读取历史结果…';
+ try{const response=await fetch('/api/history/'+encodeURIComponent(key),{cache:'no-store'});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'读取失败');if(request!==historyRequest)return;box.replaceChildren();const heading=document.createElement('h2');heading.textContent=(data.scope?.category||key)+' · 历史结果';box.append(heading);const state=document.createElement('p');state.textContent=data.phase||data.status||data['状态']||'已保存';box.append(state);
+ const latest=data.excel_files?.layer123;
+ if(latest?.available){const published=document.createElement('p');published.className='notice';published.textContent='综合 Excel 已发布'+(latest.updated_at?' · 最新更新时间：'+new Date(latest.updated_at*1000).toLocaleString('zh-CN'):'')+'。下方市场数据日期为原始采集时间。';box.insertBefore(published,state);state.textContent='采集任务保存状态：'+state.textContent;}
+ box.append(historyExcelLinks(key,data.excel_files));
+ for(const worker of data.workers||[]){const line=document.createElement('p');line.className='small';line.textContent=(worker.name?.match(/worker-(\d+)/)?'第 '+Number(worker.name.match(/worker-(\d+)/)[1])+' 路':'采集路')+'：'+(worker.live_snapshot?.['状态']||statusLabels[worker.status]||worker.status||'已保存');box.append(line);}
+ const marketBox=document.createElement('section');marketBox.id='history-frontend-market';box.append(marketBox);renderFrontendMarket(data.frontend_market,marketBox,{...data,historical:true});
+ const businessBox=document.createElement('section');businessBox.id='history-commercial';box.append(businessBox);renderBusiness(data.commercial,businessBox,true);if(data.commercial_error){const warning=document.createElement('p');warning.className='notice danger';warning.textContent='该任务保存的商业判断异常：'+data.commercial_error;businessBox.append(warning);}
+ const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='查看保存的市场结果和进度';const pre=document.createElement('pre');pre.textContent=JSON.stringify(safe({market:data.frontend_market,progress:data.details}),null,2);details.append(summary,pre);box.append(details);
+ box.scrollIntoView({behavior:'smooth',block:'start'});
+ }catch(error){if(request===historyRequest)box.textContent=error.message;}
+}
+async function loadVisualReview(){
+ const requestedKey=lastStatus?.category_key;
+ const box=$('visual-review-content');box.replaceChildren();box.textContent='正在读取已发布结果…';
+ try{const response=await fetch('/api/visual-review',{cache:'no-store'});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'读取失败');if(requestedKey!==lastStatus?.category_key){box.textContent='任务已切换，请重新展开读取当前结果。';return;}box.replaceChildren();
+ const line=value=>{const p=document.createElement('p');p.textContent=value;box.append(p);};line(data.message);
+ if(data.available){line(data.source+' · '+data.filename+' · '+new Date(data.updated_at*1000).toLocaleString('zh-CN'));
+ if(!data.examples?.length)line('当前检查范围内没有待核验记录；这不代表全部商品已经确认同款。');
+ for(const row of data.examples||[]){line('Amazon '+row.asin+' / TEMU '+row.goods_id+'：'+row.state);line(row.reason||'尚无判断依据');line(row.evidence||'尚未取得视觉事实，请看判断依据。');}}
+ }catch(error){box.textContent=error.message;}
+}
+$('visual-review').addEventListener('toggle',()=>{if($('visual-review').open)loadVisualReview();});
+for(const button of document.querySelectorAll('[data-page]'))button.addEventListener('click',()=>showPage(button.dataset.page));
+$('reload-history').addEventListener('click',loadHistory);
+$('only-errors').addEventListener('change',()=>{if(statusFresh&&lastStatus)render(lastStatus);});
+window.addEventListener('hashchange',()=>showPage(location.hash.slice(1)||'create'));
+showPage(location.hash.slice(1)||'create');
+
+
+function opText(parent,text,tag='p'){const el=document.createElement(tag);el.textContent=text;parent.append(el);return el;}
+function opLink(parent,label,url,site){try{const u=new URL(url);if(u.protocol!=='https:'||!(u.hostname===site||u.hostname.endsWith('.'+site)))return;const a=opText(parent,label,'a');a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';}catch{}}
+let operatorData=null;
+function opOutcome(row){
+ if(row?.status==='DELIVERED'&&row.product)return 'RECOMMENDED';
+ return ['RECOMMENDED','NO_MATCH','ALL_RECENTLY_RECOMMENDED','ALREADY_HANDLED','DATA_INCOMPLETE'].includes(row?.outcome)?row.outcome:'DATA_INCOMPLETE';
+}
+function opOutcomeText(row){return {RECOMMENDED:'今日一个运营候选',NO_MATCH:'已核验范围内没有符合条件的商品',ALL_RECENTLY_RECOMMENDED:'近期已推荐，本次不重复推送',ALREADY_HANDLED:'候选已有跟进记录，本次不重复推荐',DATA_INCOMPLETE:'数据或核验未完成，暂时无法推荐'}[opOutcome(row)];}
+function opTime(value){const time=new Date(value);return value&&!Number.isNaN(time.getTime())?time.toLocaleString('zh-CN'):'未取得';}
+function opFeedback(parent,asin){
+ if(!operatorData?.subscription)return;
+ const row=operatorData.feedback?.[asin]||{};
+ const panel=document.createElement('div');panel.style.cssText='display:flex;gap:8px;flex-wrap:wrap;margin-top:12px';
+ const choice=document.createElement('select');choice.setAttribute('aria-label','商品跟进状态');
+ for(const [value,label] of Object.entries({NEW:'未处理',INQUIRY:'询价中',SAMPLE:'打样中',HOLD:'暂缓',REJECT:'不做'})){const option=document.createElement('option');option.value=value;option.textContent=label;choice.append(option);}choice.value=row.state||'NEW';
+ const note=document.createElement('input');note.type='text';note.maxLength=1000;note.placeholder='原因或跟进备注';note.setAttribute('aria-label','跟进备注');note.value=row.reason||'';
+ const button=document.createElement('button');button.type='button';button.textContent='保存跟进';
+ const result=document.createElement('span');result.setAttribute('role','status');
+ button.addEventListener('click',async()=>{button.disabled=true;try{const response=await fetch('/api/operator/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asin,state:choice.value,reason:note.value})});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'保存失败');operatorData.feedback={...operatorData.feedback,[asin]:data.feedback};result.textContent=data.message;}catch(error){result.textContent=error.message;}finally{button.disabled=false;}});
+ panel.append(choice,note,button,result);parent.append(panel);
+}
+function opCard(parent,item){
+ const card=document.createElement('div');card.className='notice';
+ opText(card,item.reason||'运营候选','h3');
+ opText(card,'当前采样确认同款 '+(item.same_count??'未取得')+' 个；门槛：严格少于 '+(item.same_limit??'未设置')+' 个。'+(item.scope||'仅限已核验样本'));
+ if(item.why?.length){opText(card,'入选依据','strong');for(const reason of item.why)opText(card,reason);}
+ const sides=document.createElement('div');sides.style.cssText='display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px';card.append(sides);
+ for(const [name,row,site] of [['Amazon',item.amazon,'amazon.com'],['TEMU',item.temu,'temu.com']]){
+  const side=document.createElement('div');sides.append(side);
+  opText(side,name+' · '+(row?.title||row?.id||'商品证据未取得'),'strong');if(!row)continue;
+  if(row.image){try{const u=new URL(row.image);if(u.protocol==='https:'){const img=document.createElement('img');img.src=u.href;img.alt=name+'主图';img.loading='lazy';img.style.cssText='display:block;width:140px;height:140px;object-fit:contain';side.append(img);}}catch{}}
+  opLink(side,'打开 '+name+' 商品',row.url,site);
+  const price=row.price||{};
+  opText(side,price.min!=null&&price.max!=null?'价格区间 $'+price.min+'–$'+price.max+' · '+price.basis:'规格价格区间未取得'+(price.observed_price!=null?'；当前已见标价 $'+price.observed_price:''));
+  opText(side,'销量：'+(row.sales?.text||'未取得')+' · '+(row.sales?.basis||'口径未取得'));
+  opText(side,'评分：'+(row.rating!=null?row.rating+' / 5':'未取得')+'；评价数量：'+(row.review_count??'未取得'));
+  opText(side,'上架时间：'+(row.listed_at||'未取得')+' · '+(row.listed_at_source||'来源未取得'));
+  opText(side,'采集时间：'+opTime(row.observed_at)+(row.observed_at_source==='snapshot.observed_at'?'（快照时间，非逐条观测时间）':''));
+  const sources={VISIBLE_TEMU_FRONTEND:'TEMU真实页面',AMAZON_FRONTEND:'Amazon真实页面',VISIBLE_AMAZON_FRONTEND:'Amazon真实页面'};
+  opText(side,'数据来源：'+(sources[row.source]||row.source||'未记录'));
+  opText(side,'差评：'+(row.negative_review_status||'尚未采集真实差评'));
+  for(const review of row.negative_reviews||[]){opText(side,review.rating+' 星：'+review.text);opLink(side,'查看差评来源',review.source_url,site);}
+  const fields={url:'商品链接',image:'图片',price:'价格',price_range:'规格价格区间',sales:'销量',rating:'评分',listed_at:'真实上架时间',negative_reviews:'差评原文',observed_at:'采集时间',source:'来源'};
+  const missing=Object.entries(row.evidence||{}).filter(([,value])=>value.status==='MISSING').map(([key])=>fields[key]||key);
+  if(missing.length)opText(side,'待补证据：'+missing.join('、'));
+ }
+ if(item.next_actions?.length){opText(card,'下一步','strong');for(const action of item.next_actions)opText(card,action);}
+ opFeedback(card,item.asin);
+ parent.append(card);
+}
+async function loadOperator(){
+ const status=$('op-status'),box=$('op-products');status.textContent='正在读取已核验的运营结果…';
+ const requestedKey=lastStatus?.category_key;
+ try{
+  const response=await fetch('/api/operator',{cache:'no-store'}),data=await response.json();if(!response.ok)throw Error(data.error?.message||'读取失败');
+  if(requestedKey!==lastStatus?.category_key){status.textContent='任务已切换，请刷新当前品类结果。';box.replaceChildren();return;}
+  operatorData=data;box.replaceChildren();status.textContent=data.snapshot.message;
+  if(data.collection?.message)opText(box,'今日采集：'+data.collection.message);
+  const delivery=data.delivery;
+  if(delivery?.status){
+   opText(box,opOutcomeText(delivery),'h3');
+   if(delivery.message)opText(box,delivery.message);
+   if(delivery.status==='DELIVERED'&&delivery.product)opCard(box,delivery.product);
+   for(const category of delivery.category_outcomes||[])opText(box,(category.category_name||'订阅品类')+'：'+opOutcomeText(category)+'。'+(category.message||''));
+  }
+  const products=data.snapshot.products||[];
+  opText(box,'当前品类候选 '+products.length+' 个；仅展示前 10 个','p');
+  for(const product of products.slice(0,10)){if(delivery?.status==='DELIVERED'&&product.asin===delivery.product?.asin)continue;opCard(box,product);}
+  if(data.snapshot.rejected)opText(box,'未入选原因：'+Object.entries(data.snapshot.rejected).map(([k,v])=>k+' '+v+' 个').join('；'));
+  const followed=Object.values(data.feedback||{}).filter(row=>row.state!=='NEW');
+  if(followed.length){opText(box,'跟进清单','h3');for(const row of followed){const entry=document.createElement('div');entry.className='notice';opText(entry,row.asin+' · '+row.label+' · '+(row.reason||'暂无备注'));opText(entry,'更新于 '+opTime(row.updated_at));opFeedback(entry,row.asin);box.append(entry);}}
+  const row=data.subscription;
+  if(row&&$('operator-panel').dataset.loaded!==row.category_key+'|'+row.label){for(const [id,key] of [['label','label'],['time','time'],['limit','same_limit'],['sales','min_sales'],['days','new_days'],['repeat','repeat_days']])$('op-'+id).value=row[key];$('op-new').checked=row.require_new;$('op-enabled').checked=row.enabled;$('op-collect').checked=row.collect_daily!==false;$('op-lead').value=row.lead_minutes??120;$('operator-panel').dataset.loaded=row.category_key+'|'+row.label;}
+ }catch(e){status.textContent=e.message;}
+}
+
+$('op-refresh').addEventListener('click',loadOperator);
+window.addEventListener('hashchange',()=>{if(location.hash==='#results')loadOperator();});
+setInterval(()=>{if(location.hash==='#results'&&!document.hidden)loadOperator();},60000);
+$('op-save').addEventListener('click',async()=>{const body={label:$('op-label').value,time:$('op-time').value,same_limit:Number($('op-limit').value),min_sales:Number($('op-sales').value),new_days:Number($('op-days').value),repeat_days:Number($('op-repeat').value),require_new:$('op-new').checked,enabled:$('op-enabled').checked,collect_daily:$('op-collect').checked,lead_minutes:Number($('op-lead').value)};try{const response=await fetch('/api/operator/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await response.json();$('op-status').textContent=data.message||data.error?.message||'保存失败';}catch(e){$('op-status').textContent=e.message;}});
+
+updateControls();poll();setInterval(poll,2500);
+</script>
+<script>document.getElementById('local-proxy-save').addEventListener('click',async()=>{const output=document.getElementById('local-proxy-choice-result');try{const endpoint=JSON.parse(document.getElementById('local-proxy-endpoint').value);const response=await fetch('/api/network/proxy-choice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(endpoint)});const result=await response.json();output.textContent=result.message||result.error?.message||'选择未保存，请重试';}catch{output.textContent='选择未保存，请重试';}});
+</script>
+</body></html>
+

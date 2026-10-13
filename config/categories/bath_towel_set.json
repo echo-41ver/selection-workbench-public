@@ -1,0 +1,136 @@
+{
+  "schema_version": "category-automation-v1",
+  "category_key": "bath_towel_set",
+  "category_name_zh": "浴巾套装",
+  "category_name_en": "Bath Towel Sets",
+  "market": "US",
+  "currency": "USD",
+  "stage12_output_dir": "stage12_v2",
+  "amazon": {
+    "mode": "BEST_SELLERS_FRONTEND",
+    "bestsellers_url": "https://www.amazon.com/Best-Sellers-Bath-Towel-Sets/zgbs/home-garden/3731761",
+    "search_url": "https://www.amazon.com/s?k=bath+towel+sets",
+    "target_count": 30,
+    "detail_concurrency": 4,
+    "require_user_confirmed_bestsellers_url_when_null": true
+  },
+  "temu": {
+    "base_queries": [
+      "bath towel set"
+    ],
+    "keyword_limit": 60,
+    "keywords_per_product": 6,
+    "max_products_per_keyword": 500,
+    "idle_complete_rounds": 10,
+    "include_terms": [
+      "bath towel",
+      "towel set",
+      "bath sheet",
+      "hand towel",
+      "washcloth",
+      "wash cloth",
+      "浴巾",
+      "毛巾",
+      "方巾"
+    ],
+    "severe_exclude_terms": [
+      "paper towel",
+      "kitchen towel holder",
+      "towel rack",
+      "towel warmer",
+      "bath mat",
+      "bathrobe",
+      "hooded baby towel",
+      "beach blanket"
+    ],
+    "collection_source": "VISIBLE_TEMU_FRONTEND",
+    "merge_key": "goods_id"
+  },
+  "stage1": {
+    "text_gate": "bath_towel_set_v5"
+  },
+  "stage2": {
+    "model": "torchvision/resnet50-imagenet1k-v2",
+    "candidate_threshold": 60,
+    "threshold_status": "PROVISIONAL_UNCALIBRATED_HIGH_RECALL",
+    "below_threshold_action": "NOT_SELECTED_NOT_MANUAL_REVIEW",
+    "included_in_final_score": false
+  },
+  "stage3": {
+    "rule_version": "bath-towel-set-structure-position-pattern-variant-v4.1",
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "prompt_version": "bath-towel-set-human-reviewed-20260930",
+    "schema_version": "bath-towel-set-image-only-four-module-v3.0-compact",
+    "module_policy": "CATEGORY_FIXED_VISUAL_ONLY",
+    "input_scope": "TWO_IMAGES_ONLY",
+    "legacy_result_policy": "REUSE_UNCHANGED_PAIR_VISIBLE_MODULES_ONLY",
+    "request_mode": "one_amazon_to_many_temu",
+    "batch_size": 12,
+    "fallback_split": "halve_until_single",
+    "max_concurrency": 4,
+    "reasoning_effort": "low",
+    "high_rerun_policy": {
+      "condition": "accepted_hard_conflict_and_confidence_below_threshold",
+      "confidence_below": 0.65,
+      "scope": "single_candidate_only"
+    },
+    "retry_policy": {
+      "primary_attempts_per_pair": 1,
+      "tail_retry_rounds": 1,
+      "cooldown_seconds": 15
+    },
+    "same_threshold": 88,
+    "different_score_ceiling": 69,
+    "threshold_status": "PROVISIONAL_PENDING_HUMAN_GROUND_TRUTH_CALIBRATION",
+    "modules": {
+      "surface_design_weave_border": 40,
+      "towel_construction_pile_edge": 27,
+      "set_composition": 21,
+      "color_pattern_variant": 12
+    },
+    "confirmation_minimums": {
+      "surface_design_weave_border": 34,
+      "towel_construction_pile_edge": 21,
+      "set_composition": 15,
+      "known_modules": 4,
+      "evidence_quality": [
+        "HIGH",
+        "MEDIUM"
+      ]
+    },
+    "identity_hard_conflicts": [
+      "DIFFERENT_PRODUCT_SUBTYPE",
+      "DIFFERENT_WEAVE_OR_SURFACE_DESIGN",
+      "DIFFERENT_EDGE_OR_BORDER_LAYOUT"
+    ],
+    "variant_fields": [
+      "visible_color",
+      "brand_overlay",
+      "packaging",
+      "decorative_pattern"
+    ],
+    "module_descriptions": {
+      "surface_design_weave_border": "比较本体织法、阴刻/装饰带的数量、宽窄布局及相对短边/长边的位置。同款前提是主体构造与这些位置布局一致；带内局部花纹、普通颜色变化允许，不能仅因花纹不同判D。无装饰与有装饰、整幅条纹与局部装饰带不同仍属身份差异。",
+      "towel_construction_pile_edge": "可见毛圈、华夫格、剪绒等织法和绒面外观以及缝边、包边、挂环；不得猜测棉或涤纶等确切纤维成分。",
+      "set_composition": "主图实际可见的毛巾件数、类型及套装构成；折叠遮挡时标UNKNOWN，不猜总件数。",
+      "color_pattern_variant": "同款主体构造、织法及阴刻/装饰带布局一致时，颜色和带内花纹可以变化，分别用visible_color、decorative_pattern记录；不能由此放宽织法、构造、装饰位置或套装构成。"
+    },
+    "module_labels": {
+      "surface_design_weave_border": "表面设计织法边框",
+      "towel_construction_pile_edge": "毛巾结构绒面缝边",
+      "set_composition": "可见套装组成",
+      "color_pattern_variant": "颜色图案变体"
+    },
+    "visual_instructions": "先定位毛巾本体，以边缘、角和折线建立图案相对位置；优先比较本体图案和装饰条带样式及位置，颜色其次。允许旋转、镜像、折叠及不同视角；只有两图对应区域均清晰可见才可判设计位置不同，遮挡、裁切或折在背面使用UNKNOWN，不把没看到当作没有。忽略背景、摆放顺序、光线、水印与包装。确切纤维成分由第一层文字证据判断；精确尺寸、GSM不从图片猜测。仅双边明确身份级可见结构冲突允许硬排除。 用户人工确认标准：白色与紫色四条浴巾，只要织法构造与阴刻条带位置对应，彩色线纹可以不同；蓝色与米色混合毛巾套装，主体构造及装饰带布局对应时，带内花卉纹样可以不同。这是品类标准例子，仍须独立检查当前两图，不得仅因都带条纹、花纹或都折叠堆放就判同款。共同证据应指出阴刻/装饰带相对边缘的具体位置、条带布局与织法构造，明确哪些差异是允许变体。",
+    "module_variant_fields": {
+      "surface_design_weave_border": [
+        "decorative_pattern"
+      ],
+      "color_pattern_variant": [
+        "decorative_pattern",
+        "visible_color"
+      ]
+    }
+  }
+}

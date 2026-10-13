@@ -1,0 +1,11 @@
+{
+  "schema_version": "temu-browser-sessions-v1",
+  "workers": [
+    {
+      "name": "worker-01",
+      "webdriver_url": "http://127.0.0.1:4444",
+      "session_id_file": "runtime/worker-01/flower_session_id.txt",
+      "bidi_url_file": "runtime/worker-01/flower_bidi_url.txt"
+    }
+  ]
+}

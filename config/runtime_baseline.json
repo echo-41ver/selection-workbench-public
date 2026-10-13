@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "platform": "Windows",
+  "python_minor": "3.12",
+  "node_min_major": 20,
+  "observed_reference": {
+    "python": "3.12.14",
+    "node": "24.19.0",
+    "powershell": "7.6.5",
+    "adspower": "8.7.23.0"
+  },
+  "adspower_compatible_versions": [
+    "8.7.23.0"
+  ],
+  "scope": "本机已验证的程序环境基线；不等同于另一台电脑已完成真实采集验收"
+}

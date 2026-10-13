@@ -1,0 +1,70 @@
+{
+  "schema_version": "category-automation-v1",
+  "category_key": "agent_desktop_rack_review_20261005",
+  "category_name_zh": "桌面收纳架",
+  "market": "US",
+  "currency": "USD",
+  "amazon": {"mode": "BEST_SELLERS_FRONTEND", "bestsellers_url": null, "target_count": null, "detail_concurrency": 4},
+  "temu": {
+    "base_queries": ["desktop organizer rack", "desk storage shelf", "desktop file organizer"],
+    "keyword_limit": 6,
+    "keywords_per_product": 6,
+    "max_products_per_keyword": null,
+    "merge_key": "goods_id",
+    "keyword_features": ["tiered", "stackable", "adjustable", "drawer", "file sorter", "letter tray", "mesh", "clamp mounted"],
+    "include_terms": ["desk organizer", "desktop organizer", "desk shelf", "desktop shelf", "file organizer", "letter tray"],
+    "severe_exclude_terms": [],
+    "collection_source": "VISIBLE_TEMU_FRONTEND"
+  },
+  "stage1": {
+    "text_gate": "declarative",
+    "rule_version": "desktop-rack-current-agent-draft-v1",
+    "attributes": [
+      {"name": "mounting_design", "hard_conflict": true, "values": {"clamp_mount": ["clamp-mounted desk organizer", "clamp mounted desk organizer", "desk clamp mounting"], "freestanding": ["freestanding desk organizer", "free standing desk organizer"]}, "ambiguous_phrases": ["replacement", "spare parts", "compatible with", "for use with", "accessory", "parts only", "适用于", "替换", "配件"]},
+      {"name": "storage_layout", "hard_conflict": true, "values": {"vertical_files": ["vertical file sorter", "vertical file organizer"], "horizontal_trays": ["horizontal letter tray", "horizontal document tray"]}, "ambiguous_phrases": ["replacement", "spare parts", "compatible with", "for use with", "accessory", "parts only", "vertical and horizontal", "vertical or horizontal", "适用于", "替换", "配件"]},
+      {"name": "surface_color", "hard_conflict": false, "values": {"black": ["black"], "white": ["white"], "blue": ["blue"]}, "ambiguous_phrases": ["assorted colors", "random color", "多色随机"]},
+      {"name": "nominal_size", "hard_conflict": false, "values": {"30_cm": ["30 cm", "30cm"], "40_cm": ["40 cm", "40cm"]}, "ambiguous_phrases": ["package size", "box size", "包装尺寸"]}
+    ]
+  },
+  "stage2": {
+    "candidate_threshold": 60,
+    "threshold_status": "PROVISIONAL_UNCALIBRATED_HIGH_RECALL",
+    "below_threshold_action": "NOT_SELECTED_NOT_MANUAL_REVIEW",
+    "included_in_final_score": false,
+    "calibration_basis": "只是空合同60起点，不是本品类实图统计；没有真实正负例验证，不声称该阈值能保障召回。低分不改写为最终不同款。"
+  },
+  "stage3": {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com",
+    "rule_version": "desktop-rack-current-agent-draft-v1",
+    "prompt_version": "desktop-rack-current-agent-draft-v1",
+    "schema_version": "desktop-rack-current-agent-draft-v1",
+    "modules": {"frame_design": 55, "storage_structure": 35, "finish": 10},
+    "module_labels": {"frame_design": "可见架体款式布局", "storage_structure": "可见分格及固定方式", "finish": "非结构表面颜色"},
+    "module_descriptions": {},
+    "confirmation_minimums": {},
+    "identity_hard_conflicts": [],
+    "variant_fields": [],
+    "visual_instructions": "按统一身份策略编译；辨别真正售卖架体与摆拍文件/笔/装饰物。只比较实际看得到的框架、分格和连接，不强求抽屉、背板、螺丝、安装夹或隐藏底部存在。",
+    "prompt_override": "桌面收纳架范围包含不同储物布局，但同为三层/有框架/能放文件不是足够款式证据。先剔除架上摆拍书本、笔和植物，比较具体架体轮廓、层间比例、分格顺序、接缝/支撑布置。可抽拉托盘的位置、抽屉打开关闭、伸缩/折叠姿态和多个同款单元的摆放不能直接当款式差异；须有对应构造证据，不能反过来假设都是可调。固定分隔/托盘/支架本身明确改变则属于身份差异。常见没有抽屉/背板/夹具的简单架不要被要求补这些不存在的部件；关键主体设计不可辨认时保持未知，不从展示物或宣传尺寸补事实。",
+    "same_threshold": 88,
+    "different_score_ceiling": 69,
+    "threshold_status": "PROVISIONAL_PENDING_HUMAN_GROUND_TRUTH_CALIBRATION",
+    "batch_size": 12,
+    "max_concurrency": 4,
+    "reasoning_effort": "low",
+    "identity_policy": {
+      "version": "category-identity-policy-v2-effects",
+      "product_scope": "比较实际售卖、用于桌面储物的基础架体，包括独立放置或夹装的置物/文件收纳架，不把笔、书、植物、电脑等展示内容当主体。不在仅有类别名称时假定层数、材质或带抽屉；成套商品先对应基础架体，分离包装/赠品数量不是款式证据。",
+      "features": [
+        {"id": "frame_design", "label": "架体具体整体设计", "role": "identity", "evidence": "image", "region": "body", "effects": ["shape", "layout", "connection"], "preserves": [], "scope": "实际可见架体轮廓、构件之间的层间比例、固定支撑/接缝布置及可对应的轮廓细节；不把展示物和阴影算作架体构件。", "rule": "确认须有双边具体架体款式对应证据，不能只凭同为矩形、同三层或同用途。明确不同的固定结构/构件比例布局为身份差异；拍摄角度、可证明的伸缩姿态或同款单元摆放先规范比较。关键可见设计不可辨认时保持未知，不要求每种架都有背板、抽屉、网孔或螺丝。", "modules": ["frame_design"], "required_visual": true},
+        {"id": "storage_layout", "label": "可见储物分格结构", "role": "identity", "evidence": "both", "region": "component", "effects": ["layout", "shape", "function"], "preserves": [], "scope": "实际可见的固定隔板、槽位、托盘和抽屉与主体的关系，及商品明确自述的唯一文件收纳布局类型；混合储物结构不能被拆成单一类型。", "rule": "文字只有双方明确唯一、不同的布局类型且非兼容/混合描述才硬排；泛称desk organizer、未述层数、混合vertical/horizontal均不能推断。图中固定分格/槽位顺序及构造明确不同为身份差异，抽屉开关/可移动托盘姿态不是自动差异；被书本遮挡、单边没展示或不能确认固定性时未知。", "modules": ["storage_structure"], "required_visual": false},
+        {"id": "mounting_design", "label": "可见支撑固定构造", "role": "identity", "evidence": "both", "region": "component", "effects": ["connection", "shape", "function"], "preserves": [], "scope": "商品明确自述的夹装/独立放置类型，以及图片实际可见的夹持件、支脚与主体连接；不从桌面场景或看不见的底部推断安装方式。", "rule": "文字只在双边各自唯一明确自述类型不同、无替换兼容歧义时硬排。双边可见固定方式确实不同记身份差异；没看到夹具不等于无夹具，不要求独立置物架拥有夹具/背面安装孔。", "modules": ["storage_structure"], "required_visual": false},
+        {"id": "surface_color", "label": "非结构表面颜色", "role": "variant", "evidence": "both", "region": "body", "effects": ["color"], "preserves": ["frame_design"], "scope": "已对应同一架体设计的黑白蓝等涂装颜色，不涵盖结构面板增减、透明板替换或隔板/网孔变化。", "rule": "主体具体设计对应且无明确储物/固定构造冲突时允许单纯颜色差异。颜色相同不能掩盖固定隔板、支撑和开口布局的身份差异。", "modules": ["finish"], "required_visual": false},
+        {"id": "nominal_size", "label": "文字标称尺寸", "role": "context", "evidence": "text", "region": "specification", "effects": ["nominal_size"], "preserves": [], "scope": "标题明确写出的架体尺寸而非书本/包装尺寸；30/40cm仅为字面识别例值，不是支持规格清单。", "rule": "只记录规格给人审阅，不能由标称尺寸不同直接硬排或由相同尺寸确认；不能用图估计厘米。实际层间比例和固定构件布局的变化由可见身份特征判断。", "modules": [], "required_visual": false},
+        {"id": "load_and_material", "label": "承重及材料宣传", "role": "context", "evidence": "unverifiable", "region": "specification", "effects": ["performance_claim", "material_composition"], "preserves": [], "scope": "承重公斤数、金属/塑料牌号、抗锈和厚度等仅凭本次列表及主图不能可靠核实的宣传。", "rule": "不从网孔/亮泽/颜色推断材质成分或承重，不把相同宣传作为同款证据，不因缺少内部支撑、螺丝尺寸等隐藏信息要求补全虚构细节。", "modules": [], "required_visual": false}
+      ]
+    }
+  }
+}
