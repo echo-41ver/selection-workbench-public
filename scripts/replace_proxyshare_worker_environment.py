@@ -354,7 +354,7 @@ def replace_worker(args) -> dict:
     transport=read(ROOT/'runtime/secrets/proxyshare.settings.json',{})
     local=local_vpn(transport)
     chain = None if local else measured('proxy_session_ready',run_background_launcher,
-        [shell, "-NoProfile", "-File", str(ROOT / "scripts" / "proxyshare_chain_manager.ps1"),
+        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "scripts" / "proxyshare_chain_manager.ps1"),
          "-Action", "start" if phase in ('PROXY_READY','PROFILE_CREATE_PENDING','PROFILE_CREATED','BIND_FAILED') else "prepare-replacement", "-Worker", str(args.worker),
          "-StateFile", f"runtime/proxyshare-chains/state-worker-{args.worker}.json"],
         cwd=ROOT, timeout=180,
@@ -420,7 +420,7 @@ def replace_worker(args) -> dict:
     for bind_attempt in range(1, 3):
         try:
             bind = measured(f'bind_browser_attempt_{bind_attempt}',run_background_launcher,
-                [shell, "-NoProfile", "-File", str(ROOT / "scripts" / "bind_flower_worker.ps1"),
+                [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "scripts" / "bind_flower_worker.ps1"),
                  "-WorkerName", worker_name, "-ProfileId", str(new_profile), "-MarionettePort", str(marionette), "-WebDriverPort", str(port),
                  "-GeckoDriverPath", geckodriver, "-WaitSeconds", "60"],
                 cwd=ROOT, timeout=75,

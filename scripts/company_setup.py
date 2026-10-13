@@ -19,6 +19,7 @@ from selection_automation.background_launch import run_background_launcher
 def rebind_existing_worker(base, worker, port, api):
     """Rebind a running profile without ever closing and reopening it."""
     import urllib.parse
+    from replace_proxyshare_worker_environment import powershell
     profile = str(worker['profile_id'])
     for attempt in range(1):
         started = api(base, '/api/v1/browser/start?' + urllib.parse.urlencode({
@@ -26,7 +27,7 @@ def rebind_existing_worker(base, worker, port, api):
         driver = started.get('webdriver')
         if not driver or not Path(driver).is_file():
             raise RuntimeError('AdsPower 未返回 Firefox WebDriver；检查公司内核权限')
-        result = run_background_launcher([shutil.which('pwsh'),'-NoProfile','-File',str(ROOT/'scripts/bind_flower_worker.ps1'),
+        result = run_background_launcher([powershell(),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(ROOT/'scripts/bind_flower_worker.ps1'),
             '-WorkerName',worker['name'],'-ProfileId',profile,'-MarionettePort',str(started.get('marionette_port') or 0),
             '-WebDriverPort',str(port),'-GeckoDriverPath',driver], cwd=ROOT, timeout=75)
         if not result.returncode: return
