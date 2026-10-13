@@ -32,6 +32,39 @@ def test_ready_runtime_never_reinstalls(tmp_path):
     assert len(calls) == 1
 
 
+def test_scheduled_install_uses_verified_local_proxy_without_api_key(tmp_path,monkeypatch):
+    from selection_automation import browser_transport
+    root=tmp_path/'project';root.mkdir()
+    states=iter(['BROWSER_MISSING','BROWSER_MISSING','READY']);installs=[];messages=[]
+    monkeypatch.delenv('HTTPS_PROXY',raising=False)
+    monkeypatch.delenv('https_proxy',raising=False)
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_NOT_FOR_INSTALLER')
+    monkeypatch.setattr(browser_transport,'amazon_environment',lambda root:{'AMAZON_BROWSER_PROXY':'http://127.0.0.1:7890'})
+    def run(command,**kwargs):
+        if command[1]=='-e':return SimpleNamespace(returncode=0,stdout=json.dumps({'status':next(states)}))
+        installs.append(kwargs)
+        return SimpleNamespace(returncode=0)
+    result=ensure_node_runtime(root,run=run,which=lambda _: 'node',progress=lambda **fields:messages.append(fields))
+    assert result['repaired'] and len(installs)==1
+    assert installs[0]['env']['HTTPS_PROXY']=='http://127.0.0.1:7890'
+    assert 'DEEPSEEK_API_KEY' not in installs[0]['env']
+    assert installs[0]['timeout']==120
+    assert 'HTTP 下载代理' in messages[0]['message']
+    assert json.loads((root/'runtime/node-dependencies-status.json').read_text('utf-8'))['status']=='READY'
+
+
+def test_install_timeout_records_actionable_state(tmp_path,monkeypatch):
+    import subprocess
+    from selection_automation import browser_transport
+    monkeypatch.setattr(browser_transport,'amazon_environment',lambda root:{})
+    def run(command,**kwargs):
+        if command[1]=='-e':return SimpleNamespace(returncode=0,stdout='{"status":"BROWSER_MISSING"}')
+        raise subprocess.TimeoutExpired(command,120)
+    with pytest.raises(NodeRuntimeError):ensure_node_runtime(tmp_path,run=run,which=lambda _: 'node')
+    record=json.loads((tmp_path/'runtime/node-dependencies-status.json').read_text('utf-8'))
+    assert record['status']=='ERROR' and record['error']=='TimeoutExpired'
+
+
 def test_clean_checkout_installs_locked_dependencies_and_browser(tmp_path):
     root, ensure, calls = harness(tmp_path, ['DEPENDENCY_MISSING', 'DEPENDENCY_MISSING', 'BROWSER_MISSING', 'READY'])
     assert ensure()['repaired']
@@ -72,7 +105,7 @@ def test_generation_stops_before_site_or_paid_model_if_repair_fails(monkeypatch)
     import generate_category as generator
     import selection_automation.node_runtime as runtime
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'TEST_ONLY_KEY')
-    def fail(root):
+    def fail(root,**kwargs):
         raise NodeRuntimeError('依赖修复失败；请运行 deploy.cmd')
     monkeypatch.setattr(runtime, 'ensure_node_runtime', fail)
     monkeypatch.setattr(generator, 'read_listing', lambda *_: pytest.fail('site read must not run'))

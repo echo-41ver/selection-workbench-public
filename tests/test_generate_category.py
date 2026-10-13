@@ -71,7 +71,7 @@ def fixture_config():
 @pytest.mark.parametrize('manual_url', [False, True])
 def test_transfer_pump_rejects_engine_parts_before_rule_generation(monkeypatch, manual_url):
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
-    monkeypatch.setattr('selection_automation.node_runtime.ensure_node_runtime', lambda _: None)
+    monkeypatch.setattr('selection_automation.node_runtime.ensure_node_runtime', lambda _,**kw: None)
     evidence = {'url': 'https://www.amazon.com/zgbs/automotive/15726131',
                 'heading': 'Best Sellers in Automotive Replacement Oil Pumps', 'rank_count': 50, 'links': []}
     monkeypatch.setattr(generator, 'read_listing', lambda _: evidence)
@@ -183,8 +183,9 @@ def test_generation_progress_is_structured_and_secret_free(monkeypatch):
     setup(monkeypatch)
     events=[]
     generator.generate_category('电钻',3,40,progress=lambda **x:events.append(x))
-    assert [x['stage'] for x in events]==['dependencies','discovering','validating','generating','validating']
-    assert events[1]['depth']==1
+    stages=[x['stage'] for i,x in enumerate(events) if i==0 or x['stage']!=events[i-1]['stage']]
+    assert stages==['dependencies','discovering','validating','generating','validating']
+    assert next(x for x in events if x['stage']=='discovering')['depth']==1
     assert 'test-secret' not in str(events)
 
 

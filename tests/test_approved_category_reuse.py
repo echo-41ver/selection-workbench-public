@@ -13,7 +13,7 @@ def fixture(monkeypatch,tmp_path):
                 'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,'exclude_subject_terms':['keyboard','键盘']}}}
     p=tmp_path/'runs/mice/category.json';p.parent.mkdir(parents=True);p.write_text(json.dumps(config),encoding='utf-8')
     monkeypatch.setattr(generator,'ROOT',tmp_path);monkeypatch.setattr(generator,'validate',lambda config:None)
-    monkeypatch.setattr('selection_automation.node_runtime.ensure_node_runtime',lambda root:None)
+    monkeypatch.setattr('selection_automation.node_runtime.ensure_node_runtime',lambda root,**kw:None)
     monkeypatch.setattr(generator,'model_json',lambda *a,**k:pytest.fail('Must not charge a model for an existing category'))
     monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
     return config

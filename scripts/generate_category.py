@@ -292,7 +292,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
     from selection_automation.node_runtime import ensure_node_runtime, NodeRuntimeError
     report(stage='dependencies', message='正在检查网页采集依赖，缺失时自动安装（不调用模型 API）')
     try:
-        ensure_node_runtime(ROOT)
+        ensure_node_runtime(ROOT,progress=report)
     except (NodeRuntimeError, RuntimeError) as error:
         raise CategoryGenerationError(str(error), 'NODE_DEPENDENCIES_NOT_READY') from error
     if cached:

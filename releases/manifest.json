@@ -1,8 +1,8 @@
 {
-  "source_commit": "2d0e5c64077d2154b063c547b88ea72d2d093e21",
+  "source_commit": "5166f5a71fe58ef3cd89bb5dda91bf755d9f8318",
   "channel": "public",
-  "package": "选品工作台-2d0e5c6-GitHub展示版.zip",
-  "sha256": "a073c803544df2994284a71546e1b332b9494670a0922800edbbac722061e99c",
-  "built_at_utc": "2026-10-13T09:11:40.562272+00:00",
+  "package": "选品工作台-5166f5a-GitHub展示版.zip",
+  "sha256": "f030bc452e39571539a0c157388bd54103b2085ccbf6c15512595e4d1fd192d4",
+  "built_at_utc": "2026-10-13T09:35:46.482339+00:00",
   "contains_company_credentials": false
 }
