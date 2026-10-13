@@ -642,13 +642,24 @@ def test_layer_application_failure_is_reported_per_layer_and_preserves_draft(tmp
 
 def test_amazon_invocation_uses_node_not_python(tmp_path,monkeypatch):
     import selection_automation.node_runtime as runtime
-    monkeypatch.setattr(runtime,'ensure_node_runtime',lambda root:{'ready':True})
+    monkeypatch.setattr(runtime,'ensure_node_runtime',lambda root:pytest.fail('网页采集不得自动安装依赖'))
     console=web.Console(tmp_path);calls=[]
     child=SimpleNamespace(poll=lambda:0,returncode=0)
     monkeypatch.setattr(web.shutil,'which',lambda executable:'C:/node.exe' if executable=='node' else None)
     monkeypatch.setattr(web.subprocess,'Popen',lambda command,**kwargs:(calls.append(command) or child))
     console.invoke(['node','collector.mjs','--config','category.json'])
     assert calls==[['C:/node.exe','collector.mjs','--config','category.json']]
+
+
+def test_legacy_install_failure_is_labelled_previous_attempt_and_retains_scope(tmp_path):
+    scope={'category':'键盘','amazon_count':20,'per_keyword':200,'worker_count':4,
+        'api_base_url':'https://provider.example/v1','api_model':'test-model'}
+    web.selection.save(tmp_path/'runtime/web-console/pending-generation.json',{
+        'scope':scope,'code':'GENERATION_FAILED','message':'安装网页采集浏览器未完成；请检查网络后重试，或运行 deploy.cmd。'})
+    console=web.Console(tmp_path)
+    assert console.pending_scope==scope
+    assert '上次任务' in console.phase and '新版已移除该步骤' in console.phase
+    assert console.generation_error['message']==console.phase and not console.busy
 
 
 def test_failed_new_web_task_is_not_hidden_by_old_completion(tmp_path,monkeypatch):

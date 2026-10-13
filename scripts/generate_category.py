@@ -289,12 +289,6 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
     cached=approved_category(category_name,bestsellers_url) if reuse_approved else None
     if not cached and not os.environ.get('DEEPSEEK_API_KEY', '').strip():
         raise CategoryGenerationError('本机没有已运行的同品类规则；新品类需要 API key 才能生成规则')
-    from selection_automation.node_runtime import ensure_node_runtime, NodeRuntimeError
-    report(stage='dependencies', message='正在检查网页采集依赖，缺失时自动安装（不调用模型 API）')
-    try:
-        ensure_node_runtime(ROOT,progress=report)
-    except (NodeRuntimeError, RuntimeError) as error:
-        raise CategoryGenerationError(str(error), 'NODE_DEPENDENCIES_NOT_READY') from error
     if cached:
         report(stage='validating',message='已找到本机同品类规则，正在重新核实真实 Amazon 榜单，不调用品类模型')
         evidence=read_listing(bestsellers_url or cached['amazon']['bestsellers_url'])

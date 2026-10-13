@@ -184,7 +184,7 @@ def test_generation_progress_is_structured_and_secret_free(monkeypatch):
     events=[]
     generator.generate_category('电钻',3,40,progress=lambda **x:events.append(x))
     stages=[x['stage'] for i,x in enumerate(events) if i==0 or x['stage']!=events[i-1]['stage']]
-    assert stages==['dependencies','discovering','validating','generating','validating']
+    assert stages==['discovering','validating','generating','validating']
     assert next(x for x in events if x['stage']=='discovering')['depth']==1
     assert 'test-secret' not in str(events)
 

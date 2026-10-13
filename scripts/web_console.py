@@ -214,6 +214,8 @@ class Console:
         if isinstance(pending.get('scope'),dict) and pending['scope'].get('category'):
             self.pending_scope=pending['scope']; self.key=None
             self.phase=pending.get('message') or '准备任务被中断，请重试'
+            if self.phase.startswith('安装网页采集浏览器'):
+                self.phase='上次任务在旧版自动安装阶段失败；新版已移除该步骤，请重新填写 API Key 后重试生成'
             self.generation_error={'code':pending.get('code') or 'GENERATION_INTERRUPTED','message':self.phase}
 
 
@@ -297,11 +299,6 @@ class Console:
             if any(Path(arg).name=='collect_amazon_search_frontend.mjs' for arg in argv):
                 from selection_automation.browser_transport import amazon_environment
                 env={**(env if env is not None else os.environ),**amazon_environment(self.root)}
-            from selection_automation.node_runtime import ensure_node_runtime, NodeRuntimeError
-            try:
-                ensure_node_runtime(self.root)
-            except (NodeRuntimeError, RuntimeError) as error:
-                raise ConsoleError('NODE_DEPENDENCIES_NOT_READY',str(error)) from error
         command=([shutil.which('node') or 'node',*argv[1:]] if argv and argv[0]=='node'
                  else [sys.executable,*argv])
         child=subprocess.Popen(command,cwd=self.root,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

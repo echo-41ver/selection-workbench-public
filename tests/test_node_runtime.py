@@ -101,15 +101,16 @@ def test_missing_lockfile_refuses_unpinned_install(tmp_path):
     assert all(command[1] == '-e' for command in calls)
 
 
-def test_generation_stops_before_site_or_paid_model_if_repair_fails(monkeypatch):
+def test_generation_goes_directly_to_listing_without_runtime_installation(monkeypatch):
     import generate_category as generator
     import selection_automation.node_runtime as runtime
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'TEST_ONLY_KEY')
     def fail(root,**kwargs):
-        raise NodeRuntimeError('依赖修复失败；请运行 deploy.cmd')
+        pytest.fail('新建任务不得自动检查或安装依赖')
     monkeypatch.setattr(runtime, 'ensure_node_runtime', fail)
-    monkeypatch.setattr(generator, 'read_listing', lambda *_: pytest.fail('site read must not run'))
+    class ListingStarted(Exception):pass
+    def listing(*args):raise ListingStarted()
+    monkeypatch.setattr(generator, 'read_listing', listing)
     monkeypatch.setattr(generator, 'model_json', lambda *_: pytest.fail('paid model must not run'))
-    with pytest.raises(generator.CategoryGenerationError, match='deploy.cmd') as error:
+    with pytest.raises(ListingStarted):
         generator.generate_category('抽油泵', 50, 400)
-    assert error.value.code == 'NODE_DEPENDENCIES_NOT_READY'
