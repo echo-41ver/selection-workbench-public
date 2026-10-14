@@ -319,22 +319,24 @@ def doctor():
             'API请求数':0}
 
 
-def ready_after_verification(session, query=None):
+def ready_after_verification(session, query=None, *, allow_empty_search=False):
     import urllib.request
     try:
         sid=(ROOT/session['session_id_file']).read_text(encoding='utf-8').strip()
         body={'script':r"""
-            const target = arguments[0], url = new URL(location.href);
+            const target = arguments[0], allowEmpty = arguments[1], url = new URL(location.href);
             const visible = e => { const r=e.getBoundingClientRect(), s=getComputedStyle(e); return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden'; };
             if (!/(^|\.)temu\.com$/.test(url.hostname) || !url.pathname.includes('search_result')) return false;
-            if (target && url.searchParams.get('search_key') !== target) return false;
+            const emptySearch = allowEmpty === true && url.pathname === '/search_result.html' && !String(url.searchParams.get('search_key') || '').trim();
+            if (!emptySearch && target && url.searchParams.get('search_key') !== target) return false;
             if (/captcha|verification|login|access.denied|proxyconnectfailure|neterror/i.test(url.pathname+' '+document.title)) return false;
-            if (/access denied|verify you are human|unusual traffic|too many requests|proxyconnectfailure/i.test((document.body?.innerText||'').slice(0,5000))) return false;
+            if (/access denied|verify you are human|unusual traffic|too many requests|proxyconnectfailure|安全验证|安全驗證|请完成验证|請完成驗證|人机验证|人機驗證|拒绝访问|拒絕存取/i.test((document.body?.innerText||'').slice(0,5000))) return false;
             if (/no connection|please check your network connection/i.test((document.body?.innerText||'').slice(0,5000))) return false;
             if ([...document.querySelectorAll('button,a,[role="button"],div,span')].some(e => visible(e) && /^(?:try again|retry|重试)$/i.test((e.textContent||'').trim()))) return false;
             if ([...document.querySelectorAll('[role="dialog"],iframe[src*="captcha"],input[type="password"]')].some(e => visible(e) && (e.tagName==='IFRAME' || e.tagName==='INPUT' || /captcha|verify|verification|sign in|log in|access denied/i.test(e.innerText||'')))) return false;
+            if (emptySearch) return ['interactive','complete'].includes(document.readyState) && [...document.querySelectorAll('input[type="search"]')].some(e => visible(e) && !e.disabled && !e.readOnly);
             return [...document.querySelectorAll('[data-goods-id],a[href*="-g-"]')].some(visible);
-        """,'args':[query]}
+        """,'args':[query,allow_empty_search]}
         request=urllib.request.Request(session['webdriver_url']+'/session/'+sid+'/execute/sync',data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})
         with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=5) as r: return json.load(r).get('value') is True
     except Exception: return False
@@ -514,7 +516,8 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
         from selection_automation.browser_control_recovery import recovery_page_ready
         ready=recovery_page_ready(ROOT,session,worker.get('current_query')) if verify is ready_after_verification else verify(session,worker.get('current_query'))
     else:
-        ready=recovery['verify_to_resume'] and verify(session,worker.get('current_query'))
+        ready=recovery['verify_to_resume'] and (verify(session,worker.get('current_query'),allow_empty_search=verification_wait)
+            if verify is ready_after_verification else verify(session,worker.get('current_query')))
     if not ready:
         return True
     attempts[name]=0; next_at[name]=0
