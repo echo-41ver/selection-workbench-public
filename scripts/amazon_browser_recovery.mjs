@@ -1,9 +1,11 @@
 import {amazonDetailBlock} from './amazon_detail_queue.mjs';
+import {readAmazonDocument} from './amazon_page_read.mjs';
 
 // Refresh only ordinary loading/transport errors. Verification is not a load error.
 export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep=ms=>page.waitForTimeout(ms),
     readySelector='#productTitle',hasContent=evidence=>evidence.has_product_title}) {
   let lastError;
+  const readEvidence=()=>readAmazonDocument(page,inspect,{sleep});
   for(let load=0;load<2;load++) {
     let response=null,loadError=null;
     try {
@@ -12,7 +14,7 @@ export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep
         : await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
       onResponse(response);
     } catch(error) {loadError=error;}
-    let evidence=await inspect();
+    let evidence=await readEvidence();
     let block=amazonDetailBlock(evidence);
     if(block) throw Object.assign(new Error(block.message),block);
     if(evidence.continue_shopping) {
@@ -23,7 +25,7 @@ export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep
         page.getByRole('button',{name:'Continue shopping',exact:true}).click({timeout:10000}),
       ]);
       onResponse(response);
-      evidence=await inspect();
+      evidence=await readEvidence();
       block=amazonDetailBlock(evidence);
       if(block) throw Object.assign(new Error(block.message),block);
       if(evidence.continue_shopping) throw new Error('Amazon继续购物入口未完成，保留队列等待重试');
@@ -32,7 +34,7 @@ export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep
       if(!hasContent(evidence)) {
         response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
         onResponse(response);
-        evidence=await inspect();
+        evidence=await readEvidence();
         block=amazonDetailBlock(evidence);
         if(block) throw Object.assign(new Error(block.message),block);
         if(evidence.continue_shopping) throw new Error('Amazon再次显示继续购物入口，保留队列等待重试');
@@ -47,9 +49,9 @@ export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep
     } catch(error) {
       lastError=error;
       // A challenge may appear while waiting for the title, not just at navigation.
-      const after=amazonDetailBlock(await inspect());
+      const after=amazonDetailBlock(await readEvidence());
       if(after) throw Object.assign(new Error(after.message),after);
-      const transient=/timeout|timed.out|ERR_(?:CONNECTION|NETWORK|INTERNET|NAME_NOT_RESOLVED)|HTTP (?:unknown|5\d\d)/i.test(error.message);
+      const transient=/timeout|timed.out|Execution context was destroyed|Cannot find context with specified id|ERR_(?:CONNECTION|NETWORK|INTERNET|NAME_NOT_RESOLVED)|HTTP (?:unknown|5\d\d)/i.test(error.message);
       if(!transient || load===1) throw error;
       await sleep(1000);
     }

@@ -186,10 +186,11 @@ def read_listing(url: str) -> dict:
             _save_listing_diagnostic(diagnostic, url, failures, recovered=False)
             # Retry one transient navigation failure only; never retry gates or broken dependencies.
             transient = isinstance(error, subprocess.TimeoutExpired) or (
-                detail.get('stage') == 'page_navigation' and not detail.get('blocked') and (
+                detail.get('stage') in ('page_navigation','page_content') and not detail.get('blocked') and
+                detail.get('http_status') not in (403,429) and (
                     detail.get('http_status') in (502, 503, 504) or
                     detail.get('exception_type') == 'TimeoutError' or
-                    re.search(r'net::ERR_(?:CONNECTION_RESET|CONNECTION_CLOSED|TIMED_OUT|NETWORK_CHANGED)', detail.get('message', ''))))
+                    re.search(r'net::ERR_(?:CONNECTION_RESET|CONNECTION_CLOSED|TIMED_OUT|NETWORK_CHANGED)|Execution context was destroyed|Cannot find context with specified id', detail.get('message', ''))))
             if attempt == 1 and transient:
                 continue
             stages = {'browser_launch': '启动榜单浏览器', 'page_navigation': '打开榜单页面', 'page_content': '读取榜单内容'}

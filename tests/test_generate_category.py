@@ -8,15 +8,18 @@ spec.loader.exec_module(generator)
 
 
 @pytest.mark.parametrize('recover', [True, False])
-def test_listing_transient_failure_retained_with_one_retry(monkeypatch, tmp_path, recover):
+@pytest.mark.parametrize('stage,kind,message',[
+    ('page_navigation','TimeoutError','page.goto: Timeout 45000ms exceeded'),
+    ('page_navigation','Error','page.evaluate: Execution context was destroyed, most likely because of a navigation'),
+    ('page_content','Error','page.evaluate: Execution context was destroyed, most likely because of a navigation')])
+def test_listing_transient_failure_retained_with_one_retry(monkeypatch, tmp_path, recover,stage,kind,message):
     import json
     import subprocess
     from types import SimpleNamespace
     monkeypatch.setattr(generator, 'ROOT', tmp_path)
     calls = []
     url = 'https://www.amazon.com/zgbs/electronics/172541'
-    stderr = json.dumps({'stage': 'page_navigation', 'exception_type': 'TimeoutError',
-                         'message': 'page.goto: Timeout 45000ms exceeded'})
+    stderr = json.dumps({'stage':stage,'exception_type':kind,'message':message})
     def run(*args, **kwargs):
         calls.append(args)
         if len(calls) == 1 or not recover:
@@ -26,7 +29,7 @@ def test_listing_transient_failure_retained_with_one_retry(monkeypatch, tmp_path
     if recover:
         assert generator.read_listing(url)['rank_count'] == 30
     else:
-        with pytest.raises(generator.CategoryGenerationError, match='打开榜单页面失败') as error:
+        with pytest.raises(generator.CategoryGenerationError, match='榜单.*失败') as error:
             generator.read_listing(url)
         assert error.value.code == 'AMAZON_LISTING_READ_FAILED'
     assert len(calls) == 2
@@ -37,7 +40,8 @@ def test_listing_transient_failure_retained_with_one_retry(monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize('stage,status,blocked', [('page_content', None, True),
-    ('page_navigation', 403, False), ('page_navigation', 429, False), ('browser_launch', None, False)])
+    ('page_navigation', 403, False), ('page_navigation', 429, False), ('page_content',403,False),
+    ('page_content',429,False), ('browser_launch', None, False)])
 def test_listing_gates_and_dependencies_not_retried(monkeypatch, tmp_path, stage, status, blocked):
     import json
     import subprocess
