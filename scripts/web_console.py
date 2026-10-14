@@ -183,6 +183,7 @@ class Console:
         self.draft_provider=settings()
         self.plain_application={}
         self.stage3_busy=False; self.stage3_phase='等待手动启动'; self.stage3_key=None
+        self.stage3_keys={}
         self.market_busy=False
         self._frontend_cache={}; self._frontend_refreshing=set()
         self._frontend_cache_lock=threading.Lock()
@@ -697,11 +698,13 @@ class Console:
         if not isinstance(name,str) or not name: return None
         filenames={'amazon':f'Amazon_US_{name}_Best_Sellers.xlsx',
                    'temu':f'TEMU_US_{name}_关键词采集明细.xlsx',
-                   'layer12':f'{name}_第一二层.xlsx',
-                   'layer123':f'{name}_第一二三层.xlsx'}
+                   'layer12':f'{name}_选品结果.xlsx',
+                   'layer123':f'{name}_选品结果.xlsx'}
         directory=base/'excel'
         if not directory.is_dir() or not directory.resolve().is_relative_to(base.resolve()): return None
         filename=filenames[kind]
+        if kind in ('layer12','layer123') and not (directory/filename).is_file() and not any(directory.glob(filename[:-5]+'_查看快照_*.xlsx')):
+            filename=f'{name}_{"第一二层" if kind=="layer12" else "第一二三层"}.xlsx'
         if (directory/filename).parent!=directory: return None
         stem=filename[:-5]+'_查看快照_'
         candidates=[]
@@ -953,8 +956,11 @@ class Console:
             self.market_busy=True
             def work():
                 try:
+                    selection.save(category.parent/'market/status.json',{'status':'RUNNING','message':'正在检查已有授权并读取极鲸云市场数据'})
                     self.invoke([str(self.root/'scripts/collect_market_evidence.py'),'--category',str(category),'--force'],timeout=600)
-                    self.invoke([str(self.root/'scripts/publish_all.py'),'--category',str(category)],timeout=180)
+                    state=selection.read(category.parent/'market/status.json',{})
+                    if state.get('status') in ('COMPLETE','PARTIAL'):
+                        self.invoke([str(self.root/'scripts/publish_all.py'),'--category',str(category)],timeout=180)
                 except Exception:
                     selection.save(category.parent/'market/status.json',{'status':'FAILED','message':'市场数据刷新失败或超时，请重试'})
                 finally:
@@ -1233,11 +1239,15 @@ class Console:
 
     def launch_stage3_controller(self,key,category_path,api_key):
         import psutil
+        from selection_automation.stage3_provider import from_category
+        provider=from_category(selection.read(category_path))
         folder=self.root/'runs'/key/'stage123'
         with (folder/'controller.log').open('ab') as log:
             child=subprocess.Popen([sys.executable,str(self.root/'scripts/watch_stage3.py'),
                 '--category',str(category_path)],cwd=self.root,
-                env={**os.environ,'DEEPSEEK_API_KEY':api_key,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'},
+                env={**os.environ,'DEEPSEEK_API_KEY':api_key if provider['base_url']=='https://api.deepseek.com' else '',
+                     'SELECTION_STAGE3_API_KEY':api_key,'SELECTION_STAGE3_ENDPOINT':provider['base_url'],
+                     'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'},
                 stdin=subprocess.DEVNULL,stdout=log,stderr=log,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
         selection.save(folder/'controller.json',{'pid':child.pid,'created':psutil.Process(child.pid).create_time(),
@@ -1249,7 +1259,7 @@ class Console:
 
     def start_stage3(self, body):
         from selection_automation.stage3_progress import controller_alive
-        if set(body)-{'api_key'}: raise ConsoleError('INVALID_INPUT','第三层启动参数无效')
+        if set(body)-{'api_key','provider'}: raise ConsoleError('INVALID_INPUT','第三层启动参数无效')
         with self.lock:
             if self.busy: raise ConsoleError('ALREADY_RUNNING','请等待当前操作完成',409)
             key,active=self.current_run_key()
@@ -1260,34 +1270,69 @@ class Console:
             if category.get('execution_mode')=='collection':
                 raise ConsoleError('COLLECTION_ONLY','本任务仅获取数据，分析部分保持不动',409)
             if category.get('category_key')!=key: raise ConsoleError('NO_TASK','当前任务配置缺失',409)
+            from selection_automation.stage3_provider import settings as provider_settings, from_category, apply as apply_provider, LABELS
+            try: provider=provider_settings(body['provider']) if 'provider' in body else from_category(category)
+            except ValueError as exc: raise ConsoleError('INVALID_INPUT',str(exc)) from None
+            provider_changed=provider!=from_category(category)
             if controller_alive(base): return {'ok':True,'phase':'第三层已启动，持续处理新增候选'}
+            codex_state=codex_review_control(base)
+            if codex_state.get('running'):
+                raise ConsoleError('ALREADY_RUNNING','本机Agent正在分析；请先停止第三层再更换方案',409)
             if self.stage3_busy and self.stage3_key==key: return {'ok':True,'phase':'第三层启动中'}
             progress=self.stage3_snapshot(key)
             if progress.get('counting') or progress.get('refreshing') or type(progress.get('total')) is not int:
                 raise ConsoleError('PROGRESS_NOT_READY','正在核对已处理候选，请等待进度读取完成后再启动',409)
-            if not active and progress.get('total',0)>0 and progress.get('pending_after_codex',progress.get('pending'))==0:
+            if not provider_changed and not active and progress.get('total',0)>0 and progress.get('pending_after_codex',progress.get('pending'))==0:
                 raise ConsoleError('NO_PENDING_CANDIDATES','当前第三层候选已全部处理，无需重复启动付费分析',409)
             supplied=body.get('api_key')
             if supplied is not None and (not isinstance(supplied,str) or not supplied.strip() or len(supplied)>4096 or any(ord(c)<32 for c in supplied)):
                 raise ConsoleError('INVALID_INPUT','API key无效')
             from selection_automation.rule_provider import DEFAULT_URL
-            if supplied is not None and self.draft_provider['base_url']!=DEFAULT_URL:
-                raise ConsoleError('VISION_PROVIDER_UNSUPPORTED','第三层仍使用 DeepSeek 视觉接口；其他服务的 Key 只用于规则生成，请使用已导入的 DeepSeek 配置',409)
-            api_key=supplied.strip() if supplied is not None else ((self.draft_key if self.key==key and self.draft_provider['base_url']==DEFAULT_URL else None) or self.saved_credential())
-            if not api_key: raise ConsoleError('KEY_REQUIRED','未检测到 DeepSeek API key，请导入公司配置',409)
+            api_key=supplied.strip() if supplied is not None else ''
+            if not api_key:api_key=self.stage3_keys.get((key,provider['base_url']),'')
+            if not api_key and self.key==key and self.draft_key and provider['mode']=='multimodal_api':
+                generated=provider_settings({'base_url':self.draft_provider['base_url'],'model':self.draft_provider['model']})
+                if generated['base_url']==provider['base_url']:api_key=self.draft_key
+            if not api_key and provider['mode']=='multimodal_api' and provider['base_url']==DEFAULT_URL:
+                api_key=(self.draft_key if self.key==key and self.draft_provider['base_url']==DEFAULT_URL else None) or self.saved_credential() or ''
+            if not api_key and provider['mode'] in {'multimodal_api','liquid_d1'}:
+                raise ConsoleError('KEY_REQUIRED','请填写与第三层服务地址配套的 API key',409)
+            if api_key:self.stage3_keys[(key,provider['base_url'])]=api_key
             folder=base/'stage123'; folder.mkdir(parents=True,exist_ok=True)
+            if provider['mode']=='local_agent':
+                from run_codex_visual_pool import codex_executable
+                try: codex_executable({})
+                except (RuntimeError,OSError) as exc:
+                    raise ConsoleError('AGENT_UNAVAILABLE','本机Agent程序不可用，请先安装并登录Codex CLI',409) from exc
+            if provider_changed:
+                backup=folder/'category.before-provider.json'
+                if not backup.exists(): selection.save(backup,category)
+                apply_provider(category,provider)
+                selection.save(category_path,category)
+                with self._stage3_cache_lock:self._stage3_cache.pop(key,None)
             (folder/'STOP').unlink(missing_ok=True)
             selection.save(folder/'paid_enabled.json',{'category_key':key,'enabled_at':time.time(),
-                'source':'web-console','controller':'independent'})
+                'source':'web-console','controller':'independent','provider':provider['mode']})
+            if provider['mode']=='local_agent':
+                from run_codex_visual_pool import ensure_pool
+                selection.save(folder/'codex_pool_config.json',{
+                    **selection.read(folder/'codex_pool_config.json',{}),'enabled':True,
+                    'workers':provider['workers'],'model':provider['model'],'group_size':12})
+                ensure_pool(category_path,self.root)
+                self.stage3_key=key;self.stage3_phase='本机Agent并行看图已启动'
+                return {'ok':True,'phase':self.stage3_phase,'provider':provider}
             self.stage3_busy=True; self.stage3_key=key; self.stage3_phase='持续分析新增候选'
             try:self.launch_stage3_controller(key,category_path,api_key)
             except Exception:
                 self.stage3_busy=False;selection.save(folder/'STOP',{'time':time.time()});raise
-            return {'ok':True,'phase':self.stage3_phase}
+            return {'ok':True,'phase':self.stage3_phase,'provider':provider}
 
     def stop_stage3(self,body):
         if body: raise ConsoleError('INVALID_INPUT','停止第三层无需参数')
         key,_=self.current_run_key()
+        pool_config=self.root/'runs'/key/'stage123/codex_pool_config.json' if key else None
+        if pool_config and pool_config.exists():
+            selection.save(pool_config,{**selection.read(pool_config,{}),'enabled':False})
         if not key: raise ConsoleError('NO_TASK','当前没有任务',409)
         selection.save(self.root/'runs'/key/'stage123/STOP',{'time':time.time()})
         self.stage3_phase='停止中：等待已发出的请求返回并保存，采集和前两层继续运行'
@@ -1525,7 +1570,8 @@ class Console:
                       'commercial_error': '商业判断更新失败，暂不展示旧结论，请检查任务发布状态' if business_error else None,
                       'market_status':market_state,'market_busy':self.market_busy,
                       'frontend_market':self.frontend_market_snapshot(key) if key and not preparing_new else {},
-                      'stage3_control':{'enabled':stage3_enabled,'can_start':stage3_ready,'running':stage3_running,'can_stop':stage3_enabled or stage3_running,'progress':stage3_progress,
+                      'stage3_provider':__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category),
+                      'stage3_control':{'enabled':stage3_enabled,'can_start':stage3_ready,'running':stage3_running,'can_stop':stage3_enabled or stage3_running or bool(codex_control.get('running')),'progress':stage3_progress,
                                         'phase':stage3_phase,'codex_review':codex_control}})
 
 
@@ -1630,7 +1676,7 @@ class Handler(BaseHTTPRequestHandler):
             if not 0<length<=524288: raise ConsoleError('INVALID_INPUT','请求体大小无效')
             body=json.loads(self.rfile.read(length))
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
-            if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel'):
+            if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)

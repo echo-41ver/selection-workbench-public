@@ -58,12 +58,13 @@ def test_old_service_rejects_new_tasks_but_still_accepts_stop(tmp_path):
     server=web.LocalConsoleServer(('127.0.0.1',0),web.Handler)
     called=[]
     server.console=SimpleNamespace(start=lambda body:called.append('start'),
-        action=lambda action,body:called.append(action) or {'ok':True})
+        action=lambda action,body:called.append(action) or {'ok':True},
+        refresh_market=lambda body:called.append('market') or {'ok':True})
     server.release=ReleaseReload(tmp_path,{'commit':'old','source_sha256':'old'},
         read_version=lambda root:{'commit':'new','source_sha256':'new'})
     thread=threading.Thread(target=server.serve_forever);thread.start()
     try:
-        for endpoint,expected in (('/api/generate',409),('/api/resume',409),('/api/stop',200)):
+        for endpoint,expected in (('/api/generate',409),('/api/resume',409),('/api/stop',200),('/api/refresh-market',202)):
             conn=http.client.HTTPConnection(*server.server_address,timeout=3)
             conn.request('POST',endpoint,'{}',{'Content-Type':'application/json',
                 'Origin':f'http://127.0.0.1:{server.server_port}'})
@@ -71,7 +72,7 @@ def test_old_service_rejects_new_tasks_but_still_accepts_stop(tmp_path):
             assert response.status==expected
             if expected==409:assert payload['error']['code']=='UPDATE_PENDING'
             conn.close()
-        assert called==['stop']
+        assert called==['stop','market']
     finally:server.shutdown();server.server_close();thread.join(3)
 
 

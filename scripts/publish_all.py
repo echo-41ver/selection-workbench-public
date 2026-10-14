@@ -57,6 +57,8 @@ def publish(category_path):
         current = dict(prior)
         pending = dict(prior.get('pending_views', {}))
         deliveries = dict(prior.get('deliveries', {}))
+        pending.pop('layer12',None)
+        deliveries.pop('layer12',None)
         errors = {}
 
         # Retry a locked view even when the source signature has not changed.
@@ -84,6 +86,8 @@ def publish(category_path):
                   ROOT / 'src' / 'selection_automation' / 'identity.py',
                   ROOT / 'src' / 'selection_automation' / 'jsonl_records.py',
                   ROOT / 'src' / 'selection_workflow' / 'excel_delivery.py']
+        common += [ROOT/'scripts/export_selection_result.py', ROOT/'src/selection_automation/selection_delivery.py',
+                   ROOT/'src/selection_automation/operations.py', ROOT/'src/selection_automation/stage3_provider.py']
         config = base / 'stage12_config.json'
         cfg = read(config, {})
         db = Path(cfg['output_dir']) / 'stage12.sqlite3' if cfg.get('output_dir') and not only_collection else None
@@ -140,14 +144,15 @@ def publish(category_path):
         business_changed = current.get('commercial') != prior.get('commercial')
         if db and db.exists() and (analysis_changed or business_changed) and 'analysis' not in errors:
             try:
-                record('layer12', export(category_path, 'layer12'))
+                from watch_stage3_excel import source_paths, signature as stage3_signature
+                stage3_before=stage3_signature(source_paths(category_path.absolute(),base.absolute()))
+                stage3_database_before=current.get('analysis_database',database_before)
+                # One focused delivery also describes unfinished analysis honestly.
+                record('layer123', export(category_path, 'layer123'))
                 if codex_available or (paid_marker.exists() and vision_results.exists() and vision_results.stat().st_size):
                     from watch_stage3_excel import source_paths, signature as stage3_signature, database_paths
                     # Both publishers deliver the same workbook under the same lock.
                     # Capture inputs BEFORE export: later arrivals must stay dirty.
-                    stage3_before = stage3_signature(source_paths(category_path.absolute(), base.absolute()))
-                    stage3_database_before = current.get('analysis_database',database_before)
-                    record('layer123', export(category_path, 'layer123'))
                     current['stage3_excel'] = stage3_before
                     current['stage3_excel_database'] = stage3_database_before
                     current['stage3_excel_updated_at'] = time.time()

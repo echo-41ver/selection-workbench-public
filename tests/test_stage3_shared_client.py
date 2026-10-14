@@ -61,3 +61,35 @@ def test_one_direct_pool_is_shared_and_closed_after_workers(tmp_path,monkeypatch
     assert events==['transport-created','client-created','client-closed','transport-closed']
     starts=[r for r in runner.rows(tmp_path/'request_intents.jsonl') if r['status']=='started']
     assert len(starts)==count and len({r['request_id'] for r in starts})==count
+
+
+def test_truncated_paid_response_pauses_without_sending_next_pair(tmp_path,monkeypatch):
+    calls=[]
+    class Transport:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+    class Client:
+        def __init__(self,**kwargs):self.responses=self
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def create(self,**kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(id='truncated_fixture',status='incomplete',output_text='',
+                usage=SimpleNamespace(model_dump=lambda:{'total_tokens':8}),incomplete_details={'reason':'max_output_tokens'})
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY')
+    monkeypatch.setattr(openai,'DefaultHttpxClient',Transport)
+    monkeypatch.setattr(openai,'OpenAI',Client)
+    monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'protocol',lambda cat,n:('fixture',{}))
+    cat={'stage3':{'modules':{'one':100},'batch_size':1,'max_concurrency':1}}
+    rows=[{'asin':'A','goods_id':str(i),'amazon_image_path':'a','temu_image_path':str(i),
+           'pair_revision':str(i),'vision_revision_key':str(i),'attempt':1} for i in range(2)]
+    args=SimpleNamespace(results=tmp_path/'results.jsonl',validate_only=False,max_requests=0)
+    with pytest.raises(SystemExit,match='不自动重复请求'):
+        runner.consume(args,cat,tmp_path/'blocked.json','fixture',iter(rows))
+    assert len(calls)==1
+    results=list(runner.rows(args.results))
+    assert len(results)==1 and results[0]['response_id']=='truncated_fixture'
+    ledger=list(runner.rows(tmp_path/'requests.jsonl'))
+    assert ledger[0]['usage']['total_tokens']==8

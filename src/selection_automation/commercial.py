@@ -256,7 +256,7 @@ def report_signature(root, category):
              *sorted((base/'temu/workers').glob('*/*/products.jsonl')),
              *sorted((base/'temu/workers').glob('*/*/progress.json')),
              *(Path(__file__).parent/name for name in ('commercial.py','codex_visual_review.py',
-                                                       'rules.py','vision.py','market_provider.py'))]
+                 'rules.py','vision.py','market_provider.py','operations.py','selection_delivery.py','stage3_provider.py'))]
     sources = []
     for path in paths:
         try:
@@ -280,7 +280,7 @@ def report_signature(root, category):
         except FileNotFoundError:
             name=str(path.relative_to(root)) if path.is_relative_to(root) else '/'.join(path.parts[-2:])
             sources.append((name,None,None))
-    payload = {'version':4,'category':category,'sources':sources,
+    payload = {'version':5,'category':category,'sources':sources,
                'date':datetime.now(timezone.utc).date().isoformat()}
     return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
@@ -358,12 +358,15 @@ def build_report(root, category, *, as_of=None):
             results.pop(pair)
     counts = defaultdict(Counter)
     confirmed_goods=defaultdict(set)
+    confirmed_pairs=defaultdict(dict)
     for pair in jsonl(frozen/f'layer12_rows_{key}.jsonl'):
         status = pair.get('pair_status'); asin = pair['asin'];bucket=None
         if status == 'STAGE1_EXCLUDED': counts[asin]['text_excluded'] += 1
         elif status == 'BELOW_VECTOR_THRESHOLD': counts[asin]['screened_out'] += 1
         elif status == 'CANDIDATE' and (asin, pair['goods_id']) in results:
-            result = score(category, results[(asin, pair['goods_id'])]['visual_facts'])['state']
+            result_row = results[(asin, pair['goods_id'])]
+            scored = score(category, result_row['visual_facts'])
+            result = scored['state']
             bucket = 'confirmed' if result in ('确认同款', '同款（存在规格变体）') else 'different' if result.startswith('不同款') else 'possible'
             counts[asin][bucket] += 1
         elif status == 'CANDIDATE' and (asin, pair['goods_id']) in reviews:
@@ -371,20 +374,46 @@ def build_report(root, category, *, as_of=None):
             bucket = {'SAME':'confirmed', 'DIFFERENT':'different', 'UNKNOWN':'possible'}[review['review_status']]
             counts[asin][bucket] += 1
         else: counts[asin]['pending'] += 1
-        if bucket=='confirmed':confirmed_goods[asin].add(str(pair['goods_id']))
+        if bucket=='confirmed':
+            gid=str(pair['goods_id'])
+            confirmed_goods[asin].add(gid)
+            if (asin,pair['goods_id']) in results:
+                from .review_evidence import visual_evidence_text, review_explanation
+                facts=result_row['visual_facts']
+                confirmed_pairs[asin][gid]={'goods_id':gid,'state':scored['state'],
+                    'reason':review_explanation(category,facts,scored),
+                    'evidence':visual_evidence_text(category,facts) or scored['reason'],
+                    'model':result_row.get('model'),'score':scored['total_score'],
+                    'probability':scored.get('decision_probability')}
+            else:
+                confirmed_pairs[asin][gid]={'goods_id':gid,'state':'确认同款（Agent看图核验）',
+                    'reason':review['reason'],'evidence':f"Amazon：{review['amazon_evidence']}；TEMU：{review['temu_evidence']}",
+                    'model':review.get('model'),'score':(review.get('module_result') or {}).get('total_score')}
     amazon = read_json(base/'amazon/amazon_frontend_latest.json').get('records', [])
     entries = []
     for item in amazon:
+        counts[str(item['asin'])]['confirmed']=len(confirmed_goods[str(item['asin'])])
         match = match_metric(counts[str(item['asin'])], len(products), policy)
         states = [match, market['growth'], market['concentration']]
         signals = sum(m['state'] in ('PASS', 'SAMPLE_PASS') for m in states)
         unknown = sum(m['state']=='UNKNOWN' for m in states)
         entries.append({'asin': item['asin'], 'title': item.get('title'), 'rank': item.get('rank'),
                         'confirmed_goods_ids':sorted(confirmed_goods[item['asin']]),
+                        'confirmed_pairs':list(confirmed_pairs[item['asin']].values()),
                         'product_url': item.get('product_url'), 'match': match, 'signals': signals,
                         'unknown': unknown, 'priority': '优先核实并评估成本' if signals >= 2 else '有单项机会，继续观察' if signals else '等待证据' if unknown else '当前信号较弱',
                         'profitability': '成本与利润未评估，采样信号不是盈利保证'})
     entries.sort(key=lambda row: (-row['signals'], row['unknown'], row['rank'] or 999))
+    from .operations import product_card
+    from .selection_delivery import recommendation
+    amazon_by_id={str(row['asin']):row for row in amazon}
+    temu_by_id={str(row['goods_id']):row for row in products}
+    for entry in entries:
+        if entry['match']['confirmed'] >= policy['same_limit']:continue
+        card=product_card(amazon_by_id[str(entry['asin'])],'amazon')
+        rivals=[product_card(temu_by_id[g],'temu') for g in entry['confirmed_goods_ids'] if g in temu_by_id]
+        entry['selection_advice']=recommendation(card,rivals,entry['match'],market)
+        entry['amazon_card']=card
     return {'schema_version': 1, 'category_key': key, 'category_name': category.get('category_name_zh'),
             'evidence_signature': evidence_signature,
             'as_of': (as_of or datetime.now(timezone.utc)).isoformat(), 'policy': policy,

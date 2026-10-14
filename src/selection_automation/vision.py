@@ -11,6 +11,13 @@ from .identity import PROMPT, PROTOCOL_VERSION, validate_identity
 REL = {"S": "SAME", "V": "VARIANT", "L": "SIMILAR", "D": "DIFFERENT", "U": "UNKNOWN"}
 GROUP_WIRE_VERSION = 'shared-amazon-features-v2-short'
 
+def _provider_revision(stage):
+    provider=stage.get('provider')
+    if not isinstance(provider,dict):return {}
+    if provider.get('mode')=='multimodal_api' and provider.get('protocol')=='responses':return {}
+    # Throughput and local probability thresholds do not change model evidence.
+    return {'provider':{k:provider[k] for k in ('mode','protocol')}}
+
 def parse_visual_response_compatible(text: str, *, allow_preamble: bool = False):
     """Opt-in framing-only normalization, followed by the unchanged strict decoder."""
     from .response_envelope import parse_envelope,NotApplicable
@@ -46,6 +53,9 @@ def parse_visual_response(text: str, *, allow_preamble: bool = False) -> dict:
 
 
 def protocol(category: dict, count: int) -> tuple[str, dict]:
+    if isinstance(category.get('stage3',{}).get('provider'),dict) and category['stage3']['provider'].get('protocol')=='decisions':
+        from .stage3_provider import decision_instructions
+        return decision_instructions(category),{'decision_protocol_version':'product-choice-v1'}
     stage = category["stage3"]
     def obj(props):
         return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
@@ -346,6 +356,7 @@ class VisionRevisionContext:
         self._legacy = _RevisionTemplate({'rules': stage, 'protocol': fixed_protocol,
             'endpoint': stage.get('base_url', 'https://api.deepseek.com')})
         self._current = _RevisionTemplate({
+            **_provider_revision(stage),
             'version': 3 if stage.get('reasoning_effort', 'low') == 'low' else 4,
             'protocol': fixed_protocol, 'model': stage.get('model', 'deepseek-flash'),
             'endpoint': stage.get('base_url', 'https://api.deepseek.com').rstrip('/'),
@@ -382,7 +393,7 @@ def _vision_revision(category: dict, pair: dict, images: list[str], context=None
     # The old consumer labelled configured medium/high requests in the cache,
     # but actually sent low. Keep valid low facts; never reuse those mislabelled
     # higher-effort results after fixing the request path.
-    extra = {}
+    extra = _provider_revision(stage)
     from .visual_text_evidence import used_product_text
     text_evidence = used_product_text(pair)
     if text_evidence:
@@ -405,6 +416,6 @@ def _vision_revision(category: dict, pair: dict, images: list[str], context=None
 def compatible_vision_keys(category: dict, pair: dict, *, context=None) -> tuple[str, ...]:
     # Legacy reuse is accepted only when the full original frozen rule hash agrees.
     images = _pair_image_digests(pair)
-    if category['stage3'].get('reasoning_effort', 'low') != 'low':
+    if isinstance(category['stage3'].get('provider'),dict) or category['stage3'].get('reasoning_effort', 'low') != 'low':
         return (_vision_revision(category, pair, images, context),)
     return _vision_revision(category, pair, images, context), _legacy_vision_revision(category, pair, images, context)

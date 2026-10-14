@@ -259,7 +259,7 @@ def test_resume_uses_current_saved_task_and_never_regenerates_or_enables_paid_an
     calls=[]
     monkeypatch.setattr(console,'invoke',lambda argv:(calls.append(argv) or SimpleNamespace(returncode=0)))
     assert console.resume_current({})['category_key']=='current'
-    assert calls[0][1:]==['start','--category',str(base/'category.json')]
+    assert calls[0][1:]==['start','--preserve-prepared','--category',str(base/'category.json')]
     assert '--paid' not in calls[0]
     assert data.read_text()=='existing-data'
     monkeypatch.setattr(console,'owner',lambda:{'category_key':'current'})
@@ -429,6 +429,31 @@ def test_market_auth_block_is_red_and_old_report_is_hidden(tmp_path,monkeypatch)
     state=console.status()
     assert state['severity']=='red' and state['commercial']=={}
     assert state['commercial_error']
+
+
+@pytest.mark.parametrize('status', ['ACTION_REQUIRED', 'FAILED', 'CATEGORY_UNRESOLVED'])
+def test_market_retry_does_not_publish_while_login_or_source_is_unavailable(tmp_path, monkeypatch, status):
+    console=web.Console(tmp_path);console.key='market_fixture'
+    monkeypatch.setattr(console,'owner',lambda:{'category_key':'market_fixture'})
+    base=tmp_path/'runs/market_fixture'
+    web.selection.save(base/'category.json',{'category_key':'market_fixture','category_name_zh':'测试'})
+    calls=[]
+    def invoke(args, **kwargs):
+        calls.append(Path(args[0]).name)
+        assert web.selection.read(base/'market/status.json')['status']=='RUNNING'
+        web.selection.save(base/'market/status.json',{'status':status,'message':'fixture'})
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(console,'invoke',invoke)
+    threads=[];original_thread=web.threading.Thread
+    def thread(*args, **kwargs):
+        item=original_thread(*args, **kwargs);threads.append(item);return item
+    monkeypatch.setattr(web.threading,'Thread',thread)
+    assert console.refresh_market({})['ok']
+    threads[0].join(3)
+    assert not threads[0].is_alive()
+    assert calls==['collect_market_evidence.py']
+    assert console.market_busy is False
+    assert web.selection.read(base/'market/status.json')['status']==status
 
 
 def test_inputs_and_duplicate_start(tmp_path,monkeypatch):

@@ -511,6 +511,11 @@ def export(category_path, kind):
     binary = binary_mode(cat)
     from selection_automation.commercial import current_report
     report = None if cat.get('execution_mode')=='collection' else current_report(ROOT, cat)
+    if kind in ('layer12','layer123'):
+        from export_selection_result import export as export_selection
+        if report is None:
+            raise ValueError('当前任务尚未接入同款分析')
+        return export_selection(ROOT,cat,report)
     if kind=='layer123' and cat.get('stage3',{}).get('scoring_policy')=='shower_curtain_v3_1':
         from export_shower_layer123_excel import export as export_shower_layer123
         return export_shower_layer123(category_path)
