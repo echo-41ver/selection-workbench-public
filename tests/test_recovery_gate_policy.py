@@ -28,23 +28,24 @@ def test_login_requests_session_replacement_even_with_legacy_manual_flags():
 def test_site_refusal_does_not_reset_no_progress_on_failure_type_change():
     previous = {'kind': 'TRANSPORT', 'attempts_without_progress': 3, 'unique_goods_before': 0}
     allowed, record = recovery_budget(previous, 0, 'profile-1', 'LOGIN')
-    assert not allowed and record['attempts_without_progress'] == 4
+    assert allowed and record['attempts_without_progress'] == 4
     allowed, record = recovery_budget(record, 0, 'profile-2', 'RATE_LIMIT')
-    assert not allowed and record['attempts_without_progress'] == 5
+    assert allowed and record['attempts_without_progress'] == 5
     assert site_access_wait('ACCESS',record,2)==7211
     assert recovery_budget(record, 1, 'profile-3', 'LOGIN')[1]['attempts_without_progress']==1
     allowed, transport = recovery_budget(record, 0, 'profile-3', 'TRANSPORT')
-    assert not allowed
+    assert allowed
 
 
-def test_repeated_failures_have_hard_limit_and_captcha_is_preserved():
+def test_session_replacements_have_no_cumulative_limit_and_captcha_is_preserved():
     previous = {'kind':'ACCESS','attempts_without_progress':50,'unique_goods_before':10}
     for kind in ('LOGIN','ACCESS','RATE_LIMIT','CAPTCHA','TRANSPORT','INITIAL_PRODUCTS','SORT','CONTROL'):
         allowed, record = recovery_budget(previous,10,'new-profile',kind)
-        assert not allowed
+        assert allowed and record['limit'] is None
         allowed, progressed = recovery_budget(record,11,'newer-profile',kind)
         assert allowed and progressed['attempts_without_progress'] == 1
     assert recovery_kind('WAITING_CAPTCHA',{'scroll_collection_started':True},True) == 'CAPTCHA'
+    assert recovery_kind('WAITING_CAPTCHA',{},True) is None
 
 
 def test_site_access_backoff_staggers_workers_and_does_not_block_captcha():

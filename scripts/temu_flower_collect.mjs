@@ -526,7 +526,7 @@ for(const a of anchors){
  // Hidden/lazy or truncated cards cannot certify a negative observation.
  const rect=card.getBoundingClientRect(),style=getComputedStyle(card);
  const cardObserved=rect.width>0&&rect.height>0&&rect.top>=0&&rect.left>=0&&rect.bottom<=innerHeight&&rect.right<=innerWidth&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0'&&fullCardText.length>0&&fullCardText.length<=10000;
- const adLabel=/^(?:AD|Sponsored|Advertisement|广告|赞助|贊助)$/i;
+ const adLabel=/^(?:AD|Sponsored|Advertisement|广告|廣告|赞助|贊助)$/i;
  const labels=[fullCardText,...[card,...card.querySelectorAll('*')].flatMap(n=>['aria-label','title'].map(k=>n.getAttribute(k)||''))];
  const hasAdLabel=labels.some(value=>String(value).split(/\\n+/).some(line=>adLabel.test(line.trim())));
  const stamp=Date.parse(ctx.observedAt),signature=location.href+'|'+JSON.stringify(labels);
@@ -555,7 +555,7 @@ for(const a of anchors){
   for(const m of bg.matchAll(/url\\(["']?(https?:\\/\\/[^)"']+)["']?\\)/ig))raw.push(m[1]);
  }
  const images=[...new Set(raw.map(cleanUrl).filter(x=>x&&/^https?:/i.test(x)))];
- const lines=(a.innerText||text).split(/\\n+/).map(x=>x.trim()).filter(x=>x.length>8&&!/^(Top pick|Quick look|Local Warehouse|Open in new tab\\.?|Free shipping)$/i.test(x));
+ const lines=(a.innerText||text).split(/\\n+/).map(x=>x.trim()).filter(x=>x.length>8&&!/^(Top pick|精选推荐|精選推薦|Quick look|快速查看|Local Warehouse|本地仓库|本地倉庫|Open in new tab\\.?|在新标签页中打开|在新標籤頁中開啟|Free shipping|免费配送|免費配送|平台包邮|平台包郵)$/i.test(x));
  const title=(a.getAttribute('title')||imgs.find(i=>i.alt&&i.alt.length>8)?.alt||lines.sort((x,y)=>y.length-x.length)[0]||null);
  const price=(text.match(/\\$\\s*([0-9]+(?:\\.[0-9]{1,2})?)/)||[])[1]||null;
  const metricLabels=[card,...card.querySelectorAll('*')].filter(n=>{
@@ -618,7 +618,7 @@ return {active:!!window.__temuResponseCaptureInstalled,version:window.__temuResp
 const neutralizeImagesScript = `
 if(!document.documentElement)return {active:false,reason:'DOCUMENT_NOT_READY',images:0,neutralized:0};
 if(/(?:bgn_verification|verification|captcha|verifyCode)/i.test(location.pathname)
- || /security verification|complete the verification|slide to complete the puzzle|安全验证|验证码/i.test(document.body?.innerText||'')){
+ || /security verification|complete the verification|slide to complete the puzzle|安全验证|安全驗證|验证码|驗證碼|人机验证|人機驗證|滑块验证|滑塊驗證/i.test(document.body?.innerText||'')){
  if(window.__temuImageNeutralizer?.observer)window.__temuImageNeutralizer.observer.disconnect();
  delete window.__temuImageNeutralizer;
  for(const img of document.images){
@@ -931,7 +931,7 @@ async function revealSeeMoreAboveFooter() {
 async function findSeeMore() {
   return execute(`
    const vis=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>2&&r.height>2&&r.bottom>0&&r.top<innerHeight};
-   const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(See more|查看更多|Try again|重试)\\s*$/i.test(e.textContent||''));
+   const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多|Try again|重试|重試|再试一次|再試一次|重新加载|重新載入)\\s*$/i.test(e.textContent||''));
    for(const n of nodes.sort((a,b)=>a.children.length-b.children.length)){
     let candidate=null;
     for(let e=n,i=0;i<5&&e;i++,e=e.parentElement){const s=getComputedStyle(e);if(e.matches('button,a,[role=button]')||e.tabIndex>=0||s.cursor==='pointer'){candidate=e;break}}
@@ -944,13 +944,13 @@ async function findSeeMore() {
 
 async function controlKind(element) {
   if (!element?.[EKEY]) return null;
-  return execute(`const t=(arguments[0].textContent||'').trim();return /^\\s*(Try again|重试)\\s*$/i.test(t)?'TRY_AGAIN':'SEE_MORE';`, [element]);
+  return execute(`const t=(arguments[0].textContent||'').trim();return /^\\s*(Try again|重试|重試|再试一次|再試一次|重新加载|重新載入)\\s*$/i.test(t)?'TRY_AGAIN':'SEE_MORE';`, [element]);
 }
 
 async function findVisibleTryAgain() {
   return execute(`
     const vis=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>2&&r.height>2&&r.bottom>0&&r.top<innerHeight};
-    const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(Try again|重试)\\s*$/i.test(e.textContent||'')&&vis(e));
+    const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(Try again|重试|重試|再试一次|再試一次|重新加载|重新載入)\\s*$/i.test(e.textContent||'')&&vis(e));
     for(const n of nodes.sort((a,b)=>a.children.length-b.children.length)){
       let candidate=null;
       for(let e=n,i=0;i<5&&e;i++,e=e.parentElement){const s=getComputedStyle(e);if(e.matches('button,a,[role=button]')||e.tabIndex>=0||s.cursor==='pointer'){candidate=e;break}}
@@ -988,7 +988,7 @@ async function clickTryAgain(element = null) {
     // Last-resort DOM click uses the topmost node at the same screen position.
     const fallback = await execute(`
       const source=arguments[0];
-      const isRetry=e=>/^\\s*(Try again|重试)\\s*$/i.test(e?.textContent||'');
+      const isRetry=e=>/^\\s*(Try again|重试|重試|再试一次|再試一次|重新加载|重新載入)\\s*$/i.test(e?.textContent||'');
       if(!source||!isRetry(source))return {clicked:false,reason:'stale'};
       source.scrollIntoView({block:'center',behavior:'auto'});
       const r=source.getBoundingClientRect();
@@ -1100,7 +1100,7 @@ async function findVisibleSeeMore() {
   // duplicate cannot jump the browser to the footer.
   return execute(`
    const vis=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>2&&r.height>2&&r.bottom>0&&r.top<innerHeight};
-   const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(See more|查看更多|Try again|重试)\\s*$/i.test(e.textContent||''));
+   const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多|Try again|重试|重試|再试一次|再試一次|重新加载|重新載入)\\s*$/i.test(e.textContent||''));
    for(const n of nodes.sort((a,b)=>a.children.length-b.children.length)){
     let candidate=null;
     for(let e=n,i=0;i<5&&e;i++,e=e.parentElement){const s=getComputedStyle(e);if(e.matches('button,a,[role=button]')||e.tabIndex>=0||s.cursor==='pointer'){candidate=e;break}}
@@ -1115,7 +1115,7 @@ async function findSeeMoreFromCurrentDom() {
   // The page height changes after an expansion. A previously learned offset
   // can point above a real, off-screen control; use its current DOM position.
   const control = await execute(`
-    const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(See more|查看更多)\\s*$/i.test(e.textContent||''));
+    const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多)\\s*$/i.test(e.textContent||''));
     for(const n of nodes.sort((a,b)=>a.children.length-b.children.length)){
       for(let e=n,i=0;i<5&&e;i++,e=e.parentElement){
         const s=getComputedStyle(e),r=e.getBoundingClientRect();
@@ -1337,7 +1337,7 @@ async function submitHomeSearch() {
     const form=input.closest('form[role="search"],form');
     const button=[...(form||input.parentElement||document).querySelectorAll('button,[role="button"],input[type="submit"]')]
       .find(e=>visible(e)&&!e.closest('[aria-hidden="true"]')&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'
-        &&(e.getAttribute('type')==='submit'||/^(?:submit search|search|提交搜索请求|搜索)$/i.test((e.getAttribute('aria-label')||e.getAttribute('title')||'').trim())))||null;
+        &&(e.getAttribute('type')==='submit'||/^(?:submit search|search|提交搜索请求|提交搜尋請求|提交搜索|提交搜尋|搜索|搜尋)$/i.test((e.getAttribute('aria-label')||e.getAttribute('title')||'').trim())))||null;
     return {value:input.value,focused:document.activeElement===input,button,
       button_info:button?{tag:button.tagName,role:button.getAttribute('role'),label:button.getAttribute('aria-label')}:null};
   `, [state.element]);

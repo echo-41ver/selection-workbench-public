@@ -14,8 +14,8 @@ export function parseProductCardMetrics(text, labels = []) {
     return {value,precision:match[3] ? 'displayed_lower_bound' : match[2] ? 'displayed_approximate' : 'displayed'};
   }
   const salesPatterns = [
-    new RegExp('(?:已售|售出|销量|銷量)\\s*[:：]?\\s*'+quantity+'\\s*(?:件|个|個|单|單)?','gi'),
-    new RegExp(quantity+'\\s*(?:件|个|個|单|單)?\\s*(?:已售|售出)','gi'),
+    new RegExp('(?:已售|已售出|已销售|已銷售|售出|销量|銷量)\\s*[:：]?\\s*'+quantity+'\\s*(?:件|个|個|单|單)?','gi'),
+    new RegExp(quantity+'\\s*(?:件|个|個|单|單)?\\s*(?:已售|已售出|售出)','gi'),
     new RegExp(quantity+'\\s*(?:sold|sales?)(?![a-z])','gi'),
     new RegExp('\\b(?:sold|sales)\\s*[:：]?\\s*'+quantity,'gi'),
     new RegExp(quantity+'\\s*bought\\s+in\\s+(?:the\\s+)?past\\s+month','gi'),

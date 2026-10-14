@@ -9,13 +9,12 @@ CAPTCHA_STATUSES = {'WAITING_CAPTCHA', 'CAPTCHA_REQUIRED', 'WAITING_SEARCH_VERIF
 def captcha_needs_manual_verification(status, progress):
     return status in CAPTCHA_STATUSES and progress.get('scroll_collection_started') is not True
 
-def recovery_budget(previous, goods, profile_id, kind, limit=3):
+def recovery_budget(previous, goods, profile_id, kind, limit=None):
     before = previous.get('unique_goods_before')
     progressed = isinstance(before, (int, float)) and goods > before
     used = 0 if progressed else int(previous.get('attempts_without_progress', 0))
-    # Recovery is bounded; lack of progress must never grant unlimited rotation. Switching
-    # from 429 to login must not reset a no-progress streak.
-    return kind is not None and used < limit, {
+    # Keep history for cooldown and diagnostics; no lifetime session ceiling.
+    return kind is not None and (limit is None or used < limit), {
         'attempts_without_progress': used + 1, 'unique_goods_before': goods,
         'profile_id': profile_id, 'kind': kind, 'started_at': time.time(),
         'progress_since_previous_recovery': progressed, 'limit': limit,

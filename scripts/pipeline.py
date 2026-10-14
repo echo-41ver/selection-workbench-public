@@ -182,17 +182,17 @@ def keyword_coverage(rows,plan,category=None):
 
 
 def login_recovery_budget(previous: dict, goods: int, profile_id: str) -> tuple[bool, dict, bool]:
-    """Bound consecutive no-progress replacements, not the lifetime of a keyword."""
+    """Track no-progress replacements without a cumulative session ceiling."""
     prior_count=previous.get('unique_goods_before')
     progressed=isinstance(prior_count,(int,float)) and goods>prior_count
     used=0 if progressed else int(previous.get('attempts_without_progress',1 if previous.get('automatic_rotation_attempted') else 0))
     record={'automatic_rotation_attempted':True,'attempts_without_progress':used+1,
             'unique_goods_before':goods,'profile_id':profile_id,'started_at':time.time()}
-    return used<3,record,progressed
+    return True,record,progressed
 
 
 def rate_recovery_budget(previous: dict, goods: int, profile_id: str) -> tuple[bool, dict, bool]:
-    """Allow one rate-limit rotation per profile, capped at three without progress."""
+    """One rotation per failed profile; no cumulative ceiling across sessions."""
     before = previous.get('unique_goods_before')
     after = previous.get('unique_goods_after')
     progressed = previous.get('status') == 'RECOVERED_WITH_NEW_PRODUCTS'
@@ -203,7 +203,7 @@ def rate_recovery_budget(previous: dict, goods: int, profile_id: str) -> tuple[b
                            and profile_id and profile_id != previous_profile)
     used = 0 if progressed else int(previous.get('attempts_without_progress',
                                                    1 if previous.get('automatic_rotation_attempted') else 0))
-    allowed = used < 3 and (not previous.get('automatic_rotation_attempted') or progressed or profile_changed)
+    allowed = not previous.get('automatic_rotation_attempted') or progressed or profile_changed
     record = {'automatic_rotation_attempted': True, 'attempts_without_progress': used + 1,
               'unique_goods_before': goods, 'profile_id': profile_id,
               'previous_profile_id': previous_profile or None, 'started_at': time.time()}

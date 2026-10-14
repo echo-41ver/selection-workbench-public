@@ -39,9 +39,9 @@ export async function prepareSalesCheckpoint(directory, query, sort='sales') {
 }
 
 export function inspectSalesSort(sort='sales') {
-  const sales = sort==='recent' ? /^(?:most recent|newest|new arrivals|新品上架|最近上架|最新上架|上新时间)$/i : /^(?:top sales|sales(?::|\s*-)?\s*high to low|销量(?:优先|从高到低|降序)?)$/i;
-  const trigger = /^(?:sort by\s*[:：]?\s*(?:default|relevance|recommended|top sales|most recent)?|排序(?:方式)?\s*[:：]?\s*(?:默认|综合|推荐|销量(?:优先|从高到低|降序)?|新品上架|最近上架|最新上架|上新时间)?)$/i;
-  const selectedTrigger = sort==='recent' ? /^(?:sort by\s*[:：]?\s*most recent|排序(?:方式)?\s*[:：]?\s*(?:新品上架|最近上架|最新上架|上新时间))$/i : /^(?:sort by\s*[:：]?\s*top sales|排序(?:方式)?\s*[:：]?\s*销量(?:优先|从高到低|降序)?)$/i;
+  const sales = sort==='recent' ? /^(?:most recent|newest|new arrivals|新品上架|最近上架|最新上架|最新到货|最新到貨|最新商品|上新时间|上新時間)$/i : /^(?:top sales|sales(?::|\s*-)?\s*high to low|(?:销量|銷量)(?:优先|優先|最高|从高到低|從高到低|由高到低|降序)?)$/i;
+  const trigger = /^(?:sort by\s*[:：]?\s*(?:default|relevance|recommended|top sales|most recent)?|排序(?:方式)?\s*[:：]?\s*(?:默认|默認|综合|綜合|推荐|推薦|(?:销量|銷量)(?:优先|優先|最高|从高到低|從高到低|由高到低|降序)?|新品上架|最近上架|最新上架|最新到货|最新到貨|最新商品|上新时间|上新時間)?)$/i;
+  const selectedTrigger = sort==='recent' ? /^(?:sort by\s*[:：]?\s*most recent|排序(?:方式)?\s*[:：]?\s*(?:新品上架|最近上架|最新上架|最新到货|最新到貨|最新商品|上新时间|上新時間))$/i : /^(?:sort by\s*[:：]?\s*top sales|排序(?:方式)?\s*[:：]?\s*(?:销量|銷量)(?:优先|優先|最高|从高到低|從高到低|由高到低|降序)?)$/i;
   const text = e => {
     const raw=String(e.getAttribute('aria-label') || e.innerText || e.textContent || '').trim();
     // TEMU repeats the trigger in an aria-hidden sizing span and its label.
@@ -58,7 +58,7 @@ export function inspectSalesSort(sort='sales') {
   const nodes = [...document.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup],select,[role="option"],[role="menuitemradio"],[role="radio"],label')]
     .filter(e => visible(e) && !product(e));
   const triggers = nodes.filter(e => trigger.test(text(e)) ||
-    ((e.getAttribute('role')==='combobox' || e.hasAttribute('aria-haspopup')) && /^(default|relevance|recommended|默认|综合|推荐)$/i.test(text(e))));
+    ((e.getAttribute('role')==='combobox' || e.hasAttribute('aria-haspopup')) && /^(default|relevance|recommended|默认|默認|综合|綜合|推荐|推薦)$/i.test(text(e))));
   const options = nodes.filter(e => sales.test(text(e)));
   for (const e of nodes.filter(e=>e.tagName==='SELECT')) {
     for (const option of e.options || []) if (!option.disabled && sales.test(text(option))) options.push(option);

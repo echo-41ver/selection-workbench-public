@@ -126,6 +126,16 @@ function inspect(nodes,sort='sales'){
   return inspectSalesSort(sort);
 }
 
+test('localized sort controls include Simplified and Traditional Chinese',()=>{
+ for(const label of ['排序：销量最高','排序：銷量最高','排序：销量从高到低'])
+  assert.equal(inspect([node(label)]).selected_label,label);
+ for(const label of ['排序：最近上架','排序：最新到貨','排序：上新時間'])
+  assert.equal(inspect([node(label)],'recent').selected_label,label);
+ for(const label of ['排序：默认','排序：默認','排序：綜合']){
+  const value=inspect([node(label)]);assert.ok(value.menu);assert.equal(value.selected_label,null);
+ }
+});
+
 test('recent pass switches from Top sales using the real Most recent label',async()=>{
   let page=0;const clicks=[];
   const salesTrigger=node('Sort by: Top sales');

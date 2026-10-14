@@ -107,10 +107,10 @@ try{
   if(sorting.state!=='UI_CONFIRMED')throw Error('SORT_UNCONFIRMED');
   sortConfirmed=true;await emit('SORT_CONFIRMED');await scan(await guard());
   while(completedRounds<rounds&&Date.now()-started-manualMs<minutes*60000){
-    const button=page.getByText(/^See more$/i).first();
+    const button=page.getByText(/^(?:See more|查看更多|顯示更多|显示更多|加载更多|載入更多)$/i).first();
     for(let i=0;i<50&&!(await button.isVisible());i++){
       const value=await guard();await scan(value);
-      const end=page.getByText(/^No more results[.!]?$/i).first();
+      const end=page.getByText(/^(?:No more results|没有更多结果|沒有更多結果)[.!。！]?$/i).first();
       if(await end.isVisible()){
         await sleep(2000);await guard();
         if(await end.isVisible()){await emit('NO_MORE_RESULTS');await save('KEYWORD_COMPLETE');console.log(JSON.stringify({out,status:'KEYWORD_COMPLETE',goods:goods.size}));await context.close();process.exit(0);}

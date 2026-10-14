@@ -146,7 +146,7 @@ def test_all_queries_require_sales_sort_and_unconfirmed_does_not_advance(pipelin
     assert state['verify_to_resume'] is True
 
 
-def test_rate_recovery_budget_is_profile_scoped_bounded_and_reopens_on_progress(pipeline_fixture):
+def test_rate_recovery_history_has_no_cumulative_limit_and_reopens_on_progress(pipeline_fixture):
     module,_,_=pipeline_fixture
     previous={'automatic_rotation_attempted':True,'status':'RECOVERY_NOT_CONFIRMED',
         'unique_goods_before':0,'unique_goods_after':0,'profile_id':'old-profile'}
@@ -155,7 +155,7 @@ def test_rate_recovery_budget_is_profile_scoped_bounded_and_reopens_on_progress(
     assert next_record['attempts_without_progress']==2
     assert module.rate_recovery_budget(previous,0,'old-profile')[0] is False
     capped={**previous,'attempts_without_progress':3}
-    assert module.rate_recovery_budget(capped,0,'third-profile')[0] is False
+    assert module.rate_recovery_budget(capped,0,'third-profile')[0] is True
     recovered={**previous,'status':'RECOVERED_WITH_NEW_PRODUCTS','unique_goods_after':360}
     allowed,next_record,progressed=module.rate_recovery_budget(recovered,360,'new-profile')
     assert allowed is True and progressed is True
@@ -254,10 +254,10 @@ def test_missing_see_more_preserves_current_keyword_for_recovery(pipeline_fixtur
     monkeypatch.setattr(module.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
     with pytest.raises(RuntimeError, match="incomplete"):
         module.collect_temu(Path("category.json"), category, sessions)
-    assert calls == ["first"]
+    assert calls == ["first"]*6
     state = json.loads((module.run_root(category) / "temu/supervisors/worker-01-new.json").read_text("utf-8"))
     assert state["status"] == "HUMAN_ACTION_REQUIRED"
-    assert state["current_query"] == "first" and state["query_status"] == "STOPPED_SEE_MORE_UNAVAILABLE"
+    assert state["current_query"] == "first" and state["query_status"] == "WAITING_CAPTCHA"
     assert state["completed_queries"] == []
 
 
@@ -514,14 +514,14 @@ def test_login_recovery_budget_resets_only_on_real_progress(pipeline_fixture):
     assert allowed and not progressed and record['attempts_without_progress'] == 2
     allowed, record, _ = module.login_recovery_budget(record, 99, 'new')
     assert allowed and record['attempts_without_progress'] == 3
-    assert not module.login_recovery_budget(record, 99, 'next')[0]
+    assert module.login_recovery_budget(record, 99, 'next')[0]
     allowed, record, progressed = module.login_recovery_budget(record, 100, 'next')
     assert allowed and progressed and record['attempts_without_progress'] == 1
 
 
 @pytest.mark.parametrize('progresses, expected_rotations', [(True, 5), (False, 5)])
 @pytest.mark.parametrize('failure', ['STOPPED_HTTP_403','STOPPED_HTTP_429','STOPPED_SALES_SORT_UNCONFIRMED'])
-def test_nonhuman_recovery_is_bounded_without_progress_and_resets_on_new_goods(pipeline_fixture, monkeypatch, progresses, expected_rotations, failure):
+def test_nonhuman_session_recovery_continues_past_three_and_retains_same_output(pipeline_fixture, monkeypatch, progresses, expected_rotations, failure):
     module, category, sessions = pipeline_fixture
     calls=[]; rotations=[]
     def collect(command, **kwargs):
@@ -538,16 +538,10 @@ def test_nonhuman_recovery_is_bounded_without_progress_and_resets_on_new_goods(p
         return 2 if blocked else 0
     monkeypatch.setattr(module,'run_collector',collect)
     monkeypatch.setattr(module.subprocess,'run',lambda command,**kwargs: rotations.append(command) or SimpleNamespace(returncode=0))
-    if progresses:
-        module.collect_temu(Path('category.json'),category,sessions)
-        assert len(rotations)==expected_rotations
-    else:
-        with pytest.raises(RuntimeError,match='incomplete'):
-            module.collect_temu(Path('category.json'),category,sessions)
-        assert len(rotations)==3
-        state=json.loads((module.run_root(category)/'temu/supervisors/worker-01-new.json').read_text('utf-8'))
-        assert state['recovery_budget_exhausted'] is True
-        assert state['completed_queries']==[]
+    module.collect_temu(Path('category.json'),category,sessions)
+    assert len(rotations)==expected_rotations
+    state=json.loads((module.run_root(category)/'temu/supervisors/worker-01-new.json').read_text('utf-8'))
+    assert state['status']=='WORKER_COMPLETE'
     assert len({o for q,o in calls[:len(rotations)+1]})==1
 
 

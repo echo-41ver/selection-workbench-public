@@ -65,8 +65,8 @@ export function inspectSearchEnd() {
     .filter(visible).map(element => (element.textContent || '').trim());
   return {
     noMoreResultsVisible: labels.some(text => /^[\s—–·-]*(?:No more results?|没有更多结果|沒有更多結果|无更多结果|無更多結果)[.!。！]?[\s—–·-]*$/i.test(text)),
-    seeMorePresent: labels.some(text => /^(?:See more|查看更多|顯示更多|显示更多)$/i.test(text)),
-    tryAgainVisible: labels.some(text => /^(?:Try again|重试|重試)$/i.test(text)),
+    seeMorePresent: labels.some(text => /^(?:See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多|顯示更多|显示更多)$/i.test(text)),
+    tryAgainVisible: labels.some(text => /^(?:Try again|重试|重試|再试一次|再試一次|重新加载|重新載入|重試)$/i.test(text)),
     pageFaultVisible: /^(?:about:neterror|chrome-error:)/i.test(document.documentURI || ''),
   };
 }

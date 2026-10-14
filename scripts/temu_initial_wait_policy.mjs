@@ -2,6 +2,16 @@ import { classifyPageState } from './temu_flower_recovery_policy.mjs';
 
 export const DEFAULT_INITIAL_PRODUCTS_TIMEOUT_SECONDS = 180;
 
+export function emptyQueryLabel(text='',query='') {
+  const normalize=value=>String(value||'').normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g,'').trim().replace(/\s+/g,' ').toLowerCase();
+  const chinese=String(text).match(/(?:没有找到|沒有找到|没找到|沒找到|未找到|未能找到|没有|沒有|找不到)\s*[“"「『](.+?)[”"」』]\s*的(?:搜索)?结果|(?:没有找到|沒有找到|没找到|沒找到|未找到|未能找到|没有|沒有|找不到)\s*[“"「『](.+?)[”"」』]\s*的(?:搜尋)?結果/);
+  if(chinese)return normalize(chinese[1]||chinese[2])===normalize(query)?normalize(chinese[0]):null;
+  const english=String(text).match(/no results for\s*[“"]?([^\n]+?)[”"]?(?:\n|$)/i);
+  if(english)return normalize(english[1])===normalize(query)?normalize(english[0]):null;
+  const generic=String(text).match(/没有搜索结果|沒有搜尋結果|未找到任何(?:相关)?结果|未找到任何(?:相關)?結果|no (?:search )?results found|no results matching|we couldn['’]t find any results/i);
+  return generic?normalize(generic[0]):null;
+}
+
 export function confirmedEmptyQueryResults(state={},query='') {
   if(state.loading!==false || Number(state.loadingPlaceholderCount)>0 || state.transientStateUnavailable)return false;
   if(classifyPageState(state) || state.loginFormVisible || Number(state.visibleGoodsCount)>0 || state.rows?.length) return false;
@@ -10,12 +20,7 @@ export function confirmedEmptyQueryResults(state={},query='') {
   if(!/^(?:www\.)?temu\.com$/i.test(url.hostname) || url.pathname!='/search_result.html'
     || !normalize(query) || normalize(url.searchParams.get('search_key'))!==normalize(query))return false;
   if(state.readyState && !['interactive','complete'].includes(state.readyState))return false;
-  const text=String(state.text||'');
-  const chinese=text.match(/没有\s*[“"「『](.+?)[”"」』]\s*的结果/);
-  if(chinese)return normalize(chinese[1])===normalize(query);
-  const english=text.match(/no results for\s*[“"]?([^\n]+?)[”"]?(?:\n|$)/i);
-  if(english)return normalize(english[1])===normalize(query);
-  return /没有搜索结果|未找到任何(?:相关)?结果|no (?:search )?results found|no results matching|we couldn['’]t find any results/i.test(text);
+  return emptyQueryLabel(state.text,query)!==null;
 }
 
 export function decideEmptyQueryResults({state={},query='',previous=null,nowMs}={}) {
@@ -24,11 +29,12 @@ export function decideEmptyQueryResults({state={},query='',previous=null,nowMs}=
   const targetAt=previous?.targetAt??nowMs;
   const candidate=confirmedEmptyQueryResults(state,query)
     && String(state.searchInputValue||'').trim().toLowerCase()===query.trim().toLowerCase();
-  const same=candidate&&previous?.candidate&&previous.text===state.text;
+  const label=emptyQueryLabel(state.text,query);
+  const same=candidate&&previous?.candidate&&previous.label===label;
   const firstAt=same?previous.firstAt:nowMs;
   const samples=candidate?(same?previous.samples+1:1):0;
   const stableMs=candidate?Math.max(0,nowMs-firstAt):0;
-  return {clock:{targetAt,firstAt,samples,candidate,text:state.text},
+  return {clock:{targetAt,firstAt,samples,candidate,label},
     confirmed:candidate&&samples>=3&&stableMs>=15000&&nowMs-targetAt>=30000,
     stableMs,samples};
 }

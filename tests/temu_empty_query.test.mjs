@@ -8,6 +8,18 @@ test('explicit localized empty results match the exact keyword',()=>{
   assert.equal(confirmedEmptyQueryResults(page,query),true);
   assert.equal(confirmedEmptyQueryResults({...page,text:`No results for "${query}"`},query),true);
 });
+
+test('Chinese no-match message and rotating header still confirm only the current keyword',()=>{
+ let previous=null;
+ for(const nowMs of [0,10000,20000,30000]){
+  const state={...page,text:`物流保障 ${nowMs}\n没有找到“${query}”的结果，请尝试搜索：\n女士凉鞋`};
+  const decision=decideEmptyQueryResults({state,query,previous,nowMs});previous=decision.clock;
+  assert.equal(decision.confirmed,nowMs===30000);
+ }
+ for(const text of [`没找到“${query}”的结果`,`未找到“${query}”的结果`,`沒有找到「${query}」的結果`])
+  assert.equal(confirmedEmptyQueryResults({...page,text},query),true);
+ assert.equal(confirmedEmptyQueryResults({...page,text:'没有找到“different query”的结果，请尝试搜索：'},query),false);
+});
 test('loading, another keyword, real products and human gates are never skipped',()=>{
   for(const patch of [{text:'Loading...'},{loading:true},{loadingPlaceholderCount:4},{text:'没有“different keyword”的结果'},
     {visibleGoodsCount:1},{url:'https://www.temu.com/search_result.html'},

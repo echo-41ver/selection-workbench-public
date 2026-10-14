@@ -1,6 +1,6 @@
 // Only dispatch a normal pointer click after viewport hit-testing the control.
 export function controlClickPoint(element) {
-  const label=e=>/^\s*(See more|查看更多)\s*$/i.test(e?.textContent||'');
+  const label=e=>/^\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多)\s*$/i.test(e?.textContent||'');
   if(!element?.isConnected||!label(element))return {ready:false,reason:'STALE_CONTROL'};
   let target=element;
   for(let e=element,i=0;e&&i<5;e=e.parentElement,i++){
