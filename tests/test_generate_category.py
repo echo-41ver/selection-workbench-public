@@ -206,7 +206,7 @@ def test_cli_failure_status_without_partial_config(monkeypatch,tmp_path):
     assert not output.exists()
 
 
-def test_truncated_output_retries_once_with_larger_budget(monkeypatch):
+def test_truncated_output_never_silently_repeats_paid_request(monkeypatch):
     import json
     monkeypatch.setenv('DEEPSEEK_API_KEY','test-secret')
     budgets=[]
@@ -221,7 +221,7 @@ def test_truncated_output_retries_once_with_larger_budget(monkeypatch):
     with pytest.raises(generator.CategoryGenerationError) as error:
         generator.model_json('test')
     assert error.value.code=='MODEL_OUTPUT_TRUNCATED'
-    assert budgets==[16000,32000]
+    assert budgets==[16000]
 
 
 @pytest.mark.parametrize('url', [

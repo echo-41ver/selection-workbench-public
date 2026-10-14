@@ -97,7 +97,7 @@ def compile_generated_policy(config, *, model=None):
 
 
 def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = True) -> dict:
-    from selection_automation.rule_provider import settings
+    from selection_automation.rule_provider import settings,request_protocol
     from selection_automation.model_stream import read_chat_completion,ModelStreamError
     try:
         provider = settings(os.getenv('SELECTION_RULES_BASE_URL', ''), os.getenv('SELECTION_RULES_MODEL', ''))
@@ -112,7 +112,12 @@ def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = 
         'max_tokens': max_tokens,'stream':True}
     if provider == settings():
         payload.update(thinking={'type': 'enabled'}, reasoning_effort='low')
-    request = urllib.request.Request(provider['base_url']+'/chat/completions',
+    protocol,endpoint=request_protocol(provider)
+    if protocol=='responses':
+        payload={'model':provider['model'],'input':payload['messages'],'stream':True,'store':False,
+            'max_output_tokens':max_tokens,'text':{'format':{'type':'json_object'}}}
+        if provider['model'].lower().startswith(('gpt-','o1','o3','o4')):payload['reasoning']={'effort':'low'}
+    request = urllib.request.Request(endpoint,
         data=json.dumps(payload).encode(), headers={'Authorization': 'Bearer '+key,
         'Content-Type':'application/json','User-Agent':'selection-workbench/1.0','Accept':'text/event-stream, application/json'})
     started=time.monotonic();started_at=time.time()
@@ -120,17 +125,20 @@ def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = 
         if MODEL_PROGRESS_REPORTER:
             try:MODEL_PROGRESS_REPORTER(model_started_at=started_at,model_waiting=True,**fields)
             except OSError:pass
-    notify(events=0,characters=0)
+    notify(events=0,characters=0,model_protocol=protocol)
     try:
         with urllib.request.urlopen(request, timeout=600) as response:
-            result = read_chat_completion(response,notify,started=started)
+            request_id=(getattr(response,'headers',{}) or {}).get('x-request-id','')
+            if request_id and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}',request_id):notify(model_request_id=request_id)
+            if protocol=='responses':
+                from selection_automation.responses_stream import read_responses
+                result=read_responses(response,notify,started=started)
+            else:result = read_chat_completion(response,notify,started=started)
         if MODEL_PROGRESS_REPORTER:
             try:MODEL_PROGRESS_REPORTER(model_waiting=False,message='模型回答已接收，正在检查完整规则')
             except OSError:pass
         if result.get('choices', [{}])[0].get('finish_reason') == 'length':
-            if retry_truncated:
-                return model_json(prompt, max_tokens=min(max_tokens * 2, 32000), retry_truncated=False)
-            raise CategoryGenerationError('品类模型输出达到长度上限，规则未完整生成', 'MODEL_OUTPUT_TRUNCATED')
+            raise CategoryGenerationError('品类模型输出达到长度上限，规则未完整生成；不会自动重发计费请求', 'MODEL_OUTPUT_TRUNCATED')
         value = json.loads(result['choices'][0]['message']['content'])
         if not isinstance(value, dict):
             raise ValueError()
@@ -448,6 +456,9 @@ def main():
     last = {}
     def report(**fields):
         route = fields.get('route', last.get('route'))
+        if fields.get('stage')=='error':
+            for field in ('model_request_id','response_id','model_usage','model_protocol','events','characters','model_event'):
+                if field in last:fields[field]=last[field]
         last.clear()
         last.update(fields)
         if route:

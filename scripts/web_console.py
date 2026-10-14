@@ -1379,6 +1379,9 @@ class Console:
         raw=selection.read(self.progress_file,{}) if self.progress_file else {}
         if raw.get('stage') not in {'dependencies','discovering','validating','generating','complete','error'}: return {}
         result={key:raw[key] for key in ('stage','message','error_code','failed_stage') if isinstance(raw.get(key),str)}
+        identifier=raw.get('model_request_id') or raw.get('response_id')
+        if isinstance(identifier,str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}',identifier):
+            result['request_id']=identifier;result['message']=result.get('message','')+' · 请求编号 '+identifier
         if type(raw.get('depth')) is int: result['depth']=raw['depth']
         started=raw.get('model_started_at')
         if raw.get('model_waiting') and type(started) in (int,float):

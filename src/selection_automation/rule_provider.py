@@ -37,3 +37,13 @@ def settings(base_url='', model=''):
 def environment(provider):
     return {'SELECTION_RULES_BASE_URL': provider['base_url'],
             'SELECTION_RULES_MODEL': provider['model']}
+
+
+def request_protocol(provider):
+    """Honor explicit Responses endpoints; DaiTu GPT uses its native protocol."""
+    address=provider['base_url'];parsed=urlsplit(address)
+    if parsed.path.endswith('/responses'):return 'responses',address
+    if parsed.hostname=='api.daitu.cc' and provider['model'].lower().startswith('gpt-'):
+        path=parsed.path.rstrip('/') or '/v1'
+        return 'responses',urlunsplit((parsed.scheme,parsed.netloc,path+'/responses','',''))
+    return 'chat_completions',address+'/chat/completions'

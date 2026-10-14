@@ -49,6 +49,7 @@ def read_chat_completion(response,notify=lambda **fields:None,*,started=None,max
             if events==1 or now-last_update>=3:
                 notify(events=events,characters=characters);last_update=now
     if not (done or finish):
-        raise ModelStreamError('模型回答中途断开，规则尚未完成，请手动重试','MODEL_STREAM_INTERRUPTED')
+        notify(events=events,characters=characters)
+        raise ModelStreamError('模型回答中途断开，规则尚未完成；服务可能已计费，请先核对调用记录，不会自动重发','MODEL_STREAM_INTERRUPTED')
     notify(events=events,characters=characters)
     return {'choices':[{'finish_reason':finish,'message':{'content':''.join(parts)}}]}
