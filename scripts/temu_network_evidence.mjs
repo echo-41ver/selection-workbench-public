@@ -14,7 +14,7 @@ export function collectionRequest(evidence = {}) {
   try { url = new URL(String(evidence.endpoint || '')); } catch { return false; }
   if (url.protocol !== 'https:' || !/(?:^|\.)temu\.com$/i.test(url.hostname)) return false;
   if (evidence.navigation && evidence.resource_type === 'document') return true;
-  return /^\/api\/(?:poppy\/v\d+\/search(?:_activation)?|search)\/?$/i.test(url.pathname);
+  return /^\/api\/(?:poppy\/v\d+\/search|search)\/?$/i.test(url.pathname);
 }
 
 export function retryAfterSeconds(headers = [], at = Date.now()) {

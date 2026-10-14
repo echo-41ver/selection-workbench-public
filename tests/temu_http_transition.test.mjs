@@ -6,7 +6,7 @@ import {observeHttpPageTransition} from '../scripts/temu_http_transition.mjs';
 import {classifyPageState} from '../scripts/temu_flower_recovery_policy.mjs';
 import {supersededByVerification} from '../scripts/temu_network_evidence.mjs';
 import {terminalCollectionStop} from '../scripts/collection_checkpoint.mjs';
-import {decideInitialProductsWait} from '../scripts/temu_initial_wait_policy.mjs';
+import {decideInitialProductsWait,decideEmptyQueryResults} from '../scripts/temu_initial_wait_policy.mjs';
 
 const blank={url:'https://www.temu.com/search_result.html',visibleGoodsCount:0,text:'',readyState:'complete'};
 const block={status:429};
@@ -49,7 +49,7 @@ test('actual bootstrap guard clears preceding 429 and returns manual verificatio
   const events=[];const snapshots=[];
   const context=vm.createContext({httpBlock:{status:429,document_endpoint:blank.url},
     classify:classifyPageState,observeHttpPageTransition,supersededByVerification,terminalCollectionStop,
-    decideInitialProductsWait,humanVerificationActive:false,initialProductsWait:null,finalStatus:null,
+    decideInitialProductsWait,decideEmptyQueryResults,emptyResultsWait:null,lastInitialWaitingSnapshot:0,products:new Map(),humanVerificationActive:false,initialProductsWait:null,finalStatus:null,
     QUERY:'remote control',INITIAL_PRODUCTS_TIMEOUT_SECONDS:180,Date,URL,now:()=>new Date().toISOString(),
     sleep:async()=>{},bootstrapPageState:async()=>({...blank,url:'https://www.temu.com/bgn_verification.html',readyState:'loading'}),
     appendEvent:async(type,data)=>events.push({type,...data}),writeSnapshot:async(status,data)=>snapshots.push({status,...data}),
@@ -90,7 +90,7 @@ for(const challenge of [true,false])test(`text-only HTTP guard rechecks once; ch
   const current=challenge?{...blank,url:'https://www.temu.com/bgn_verification.html',text:'',title:'Temu'}:initial;
   const context=vm.createContext({httpBlock:null,classify:classifyPageState,
     observeHttpPageTransition,supersededByVerification,terminalCollectionStop,
-    decideInitialProductsWait,humanVerificationActive:false,initialProductsWait:null,finalStatus:null,
+    decideInitialProductsWait,decideEmptyQueryResults,emptyResultsWait:null,lastInitialWaitingSnapshot:0,products:new Map(),humanVerificationActive:false,initialProductsWait:null,finalStatus:null,
     QUERY:'mouse',INITIAL_PRODUCTS_TIMEOUT_SECONDS:180,Date,URL,now:()=>new Date().toISOString(),
     sleep:async()=>{},bootstrapPageState:async()=>{reads++;return current;},
     appendEvent:async(type,data)=>events.push({type,...data}),writeSnapshot:async(status,data)=>snapshots.push({status,...data}),

@@ -4,7 +4,7 @@ import {endpoint, networkEvidence, diagnosticLimiter, supersededByVerification, 
 
 test('only selected document and goods-search requests block collection', () => {
   const sample = {selected_context:true, resource_type:'other', navigation:false};
-  for (const pathname of ['/api/poppy/v1/search','/api/poppy/v2/search_activation','/api/search']) {
+  for (const pathname of ['/api/poppy/v1/search','/api/poppy/v2/search','/api/search']) {
     assert.equal(collectionRequest({...sample,endpoint:'https://www.temu.com'+pathname}),true);
   }
   for (const pathname of ['/api/seo/get_common_biz_data','/api/cusco/platform/chat/showQuickEntry',
@@ -37,6 +37,13 @@ test('diagnostics bound duplicate and total log volume', () => {
   assert.equal(allow({endpoint:'b'},1),true);
   assert.equal(allow({endpoint:'a'},100),true);
   assert.equal(allow({endpoint:'c'},200),false);
+});
+
+test('activation 429 is diagnostic and cannot stop the goods collection',()=>{
+ const sample={selected_context:true,resource_type:'other',navigation:false,status:429,
+  endpoint:'https://www.temu.com/api/poppy/v2/search_activation'};
+ assert.equal(collectionRequest(sample),false);
+ assert.equal(collectionRequest({...sample,endpoint:'https://www.temu.com/api/poppy/v2/search'}),true);
 });
 
 test('a displayed verification step supersedes only the preceding search-document error', () => {
