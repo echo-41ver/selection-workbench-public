@@ -135,7 +135,7 @@ def test_every_initial_wait_path_stops_and_preserves_browser(entry, failure, exp
     assert result["status"] == expected
     terminal = result["snapshots"][-1]
     assert terminal["status"] == expected
-    assert terminal["manual_action_required"] is True
+    assert terminal["manual_action_required"] is (failure != "timeout")
     assert terminal["browser_preserved"] is True
     assert terminal["reason"] == expected.removeprefix("STOPPED_")
     assert terminal["stop_reason"] == terminal["reason"]

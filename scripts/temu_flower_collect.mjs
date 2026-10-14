@@ -571,7 +571,7 @@ for(const a of anchors){
 function safeNum(v){const n=Number(v);return Number.isFinite(n)?n:null}
 const captured=window.__temuCapturedProducts?[...window.__temuCapturedProducts.values()].filter(x=>!knownIds.has(String(x.goods_id))||repairIds.has(String(x.goods_id))):[];
 const loginFormVisible=[...document.querySelectorAll('input[type="password"], [role="dialog"] input[type="email"], [role="dialog"] input[autocomplete="username"]')].some(e=>{if(typeof e.getBoundingClientRect!=='function')return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'});
-return {loginFormVisible,rows:out,captured,visibleGoodsCount:seen.size,url:location.href,documentURI:document.documentURI,title:document.title,text:(document.body?.innerText||'').slice(0,5000),scrollY,innerHeight,scrollHeight:document.documentElement?.scrollHeight ?? 0};`;
+return {...(${inspectSearchReadiness.toString()})(),readyState:document.readyState,loginFormVisible,rows:out,captured,visibleGoodsCount:seen.size,url:location.href,documentURI:document.documentURI,title:document.title,text:(document.body?.innerText||'').slice(0,5000),scrollY,innerHeight,scrollHeight:document.documentElement?.scrollHeight ?? 0};`;
 
 const installResponseCaptureScript = `
 if(window.__temuResponseCaptureVersion!==2){

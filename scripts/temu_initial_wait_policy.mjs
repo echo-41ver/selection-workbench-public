@@ -6,8 +6,8 @@ export function emptyQueryLabel(text='',query='') {
   const normalize=value=>String(value||'').normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g,'').trim().replace(/\s+/g,' ').toLowerCase();
   const chinese=String(text).match(/(?:没有找到|沒有找到|没找到|沒找到|未找到|未能找到|没有|沒有|找不到)\s*[“"「『](.+?)[”"」』]\s*的(?:搜索)?结果|(?:没有找到|沒有找到|没找到|沒找到|未找到|未能找到|没有|沒有|找不到)\s*[“"「『](.+?)[”"」』]\s*的(?:搜尋)?結果/);
   if(chinese)return normalize(chinese[1]||chinese[2])===normalize(query)?normalize(chinese[0]):null;
-  const english=String(text).match(/no results for\s*[“"]?([^\n]+?)[”"]?(?:\n|$)/i);
-  if(english)return normalize(english[1])===normalize(query)?normalize(english[0]):null;
+  const english=String(text).match(/no results for\s*(?:["“]([^"”\r\n]*)["”]|['‘]([^'’\r\n]*)['’]|([^\r\n]+?)(?=,\s*(?:try|please)\s+search(?:ing)?\b|[\r\n]|$))/i);
+  if(english)return normalize(english[1]??english[2]??english[3])===normalize(query)?normalize(english[0]):null;
   const generic=String(text).match(/没有搜索结果|沒有搜尋結果|未找到任何(?:相关)?结果|未找到任何(?:相關)?結果|no (?:search )?results found|no results matching|we couldn['’]t find any results/i);
   return generic?normalize(generic[0]):null;
 }

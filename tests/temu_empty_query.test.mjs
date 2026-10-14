@@ -45,3 +45,20 @@ test('only sustained explicit empty results complete after the observation windo
  const d=decideEmptyQueryResults({state:{...page,loading:true},query,previous,nowMs:32000});
  assert.equal(d.clock.samples,0);assert.equal(d.confirmed,false);
 });
+
+
+test('English suggestion suffix is excluded from the exact keyword and stable label',()=>{
+ const query='magic keyboard touch id numeric';
+ const target={...page,url:'https://www.temu.com/search_result.html?search_key='+encodeURIComponent(query),searchInputValue:query};
+ for(const text of [`No results for "${query}", try searching:`,`No results for “${query}”, try searching:`,`No results for '${query}', try searching:`,`No results for ${query}, try searching:`]){
+  assert.equal(confirmedEmptyQueryResults({...target,text},query),true);
+  let previous=null;
+  for(const nowMs of [0,15000,31000]){
+   const d=decideEmptyQueryResults({state:{...target,text:'Free shipping '+nowMs+'\n'+text+'\narea rug'},query,previous,nowMs});previous=d.clock;
+   assert.equal(d.confirmed,nowMs===31000);
+  }
+ }
+ for(const text of ['No results for "different query", try searching:','No results for "", try searching:'])
+  assert.equal(confirmedEmptyQueryResults({...target,text},query),false);
+ assert.equal(confirmedEmptyQueryResults({...target,text:`No results for "${query}", try searching:`,loading:true},query),false);
+});
