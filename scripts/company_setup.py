@@ -191,6 +191,23 @@ def reject_retired_task_profiles(root, task_key):
             raise RuntimeError(f"任务 {task_key} 的采集环境已退役，不能再次启动或绑定已删除环境：{path.stem}")
 
 
+def restore_closed_task_workers(task_key, workers):
+    from selection import read,save
+    from selection_automation.profile_single_use import closed_used_profile
+    names={worker['name'] for worker in workers}
+    for worker in workers:
+        if closed_used_profile(ROOT,worker.get('profile_id')):
+            number=int(worker['name'].split('-')[1])
+            subprocess.run([sys.executable,str(ROOT/'scripts/replace_proxyshare_worker_environment.py'),
+                '--worker',str(number),'--task-key',task_key],cwd=ROOT,check=True)
+            state_path=ROOT/'runs'/task_key/'temu/supervisors'/f"{worker['name']}.json"
+            state=read(state_path,{})
+            if state:save(state_path,{**state,'status':'RESUMING','query_status':'RESUMING',
+                'manual_action_required':False,'automatic_resume_pending':True,'recovery_budget_exhausted':False})
+    manifest=read(ROOT/'config/sessions.json',{})
+    return [worker for worker in manifest.get('workers',[]) if worker['name'] in names]
+
+
 def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,preserve_task=None):
     worker_count=validate_worker_count(worker_count)
     from selection import identity,read,save
@@ -253,6 +270,9 @@ def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,pre
         clear_stale_stop_requests(ROOT/'runtime'/'worker-leases',
                                   [f'worker-{number:02d}-new' for number in range(1,worker_count+1)])
     manifest=read(ROOT/'config'/'sessions.json',{})
+    if preserve_task:
+        resumed_workers=restore_closed_task_workers(preserve_task,resumed_workers)
+        manifest=read(ROOT/'config/sessions.json',{})
     if resume_task:
         from selection_automation.profile_capacity import list_profiles
         known={str(row.get('user_id') or row.get('profile_id') or '') for row in list_profiles(api_call,base)}

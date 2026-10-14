@@ -20,7 +20,8 @@ def resume(worker, allow_rebind=False):
         raise RuntimeError('Browser manifest belongs to another computer')
     row=next(x for x in manifest['workers'] if x['name']==name)
     path=r.ROOT/'runtime'/'proxyshare-chains'/f'replacement-worker-{worker}.json'
-    journal=json.loads(path.read_text('utf-8'))
+    journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
+    if allow_rebind and not journal:journal={'phase':'REPLACED','new_profile_id':row['profile_id']}
     phases={'PROFILE_CREATED','BIND_FAILED'} | ({'REPLACED'} if allow_rebind else set())
     if journal.get('phase') not in phases or journal.get('new_profile_id')!=row['profile_id']:
         raise RuntimeError('No matching unfinished binding; refusing to change profiles')
@@ -39,10 +40,31 @@ def resume(worker, allow_rebind=False):
                     error=(result.stderr or result.stdout or 'Driver binding failed')[-1000:]
                     raise RuntimeError(error)
                 r.atomic_json(path,{**journal,'phase':'REPLACED','local_binding_recovered':True})
+                mark_rebound_worker(row)
                 print(json.dumps({'worker':name,'status':'BOUND_EXISTING_PROFILE'}))
             except Exception as error:
                 r.atomic_json(path,{**journal,'phase':'BIND_FAILED','bind_error':str(error)[-1000:]})
                 raise
+
+def mark_rebound_worker(row):
+    manifest=json.loads(r.SESSIONS.read_text(encoding='utf-8'))
+    key=manifest.get('task_key')
+    if not key:return
+    path=r.ROOT/'runs'/key/'temu/supervisors'/f"{row['name']}.json"
+    if not path.exists():return
+    state=json.loads(path.read_text(encoding='utf-8'))
+    r.atomic_json(path,{**state,'status':'RESUMING','query_status':'RESUMING',
+        'manual_action_required':False,'automatic_resume_pending':True,'recovery_budget_exhausted':False})
+
+
+def driver_connected(row):
+    try:
+        sid=(r.ROOT/row['session_id_file']).read_text(encoding='utf-8').strip()
+        request=urllib.request.Request(row['webdriver_url']+'/session/'+sid+'/url')
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:
+            return isinstance(json.load(response).get('value'),str)
+    except (OSError,ValueError,KeyError):return False
+
 
 def invalid_session(row):
     """A real verification page is never evidence of a broken driver session."""
@@ -53,12 +75,17 @@ def invalid_session(row):
     except urllib.error.HTTPError as error:
         try:return error.code==404 and json.load(error).get('value',{}).get('error')=='invalid session id'
         except (ValueError,OSError):return False
+    except urllib.error.URLError as error:
+        return isinstance(error.reason,ConnectionRefusedError) or getattr(error.reason,'winerror',None)==10061
+    except ConnectionRefusedError:return True
     except (OSError,KeyError,ValueError):return False
 
 
 def profile_closed(row):
     import psutil
     import urllib.parse
+    from selection_automation.profile_single_use import closed_used_profile
+    if closed_used_profile(r.ROOT,row.get('profile_id')):return True
     data=r.api_call(r.api_base(),'/api/v1/browser/active?'+urllib.parse.urlencode({'user_id':row['profile_id']}),timeout=5).get('data') or {}
     if str(data.get('status','')).lower()!='inactive':return False
     for process in psutil.process_iter(['name','cmdline']):
@@ -74,7 +101,10 @@ def repair_waiting(base, row, last_attempt, now=None):
     now=time.monotonic() if now is None else now
     name=row['name']
     state=json.loads((base/'temu/supervisors'/f'{name}.json').read_text(encoding='utf-8'))
-    if state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED'}:return False
+    if state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED','RUNNING','RESUMING','STARTING'}:return False
+    if state.get('status')=='BINDING_FAILED' and driver_connected(row):
+        mark_rebound_worker(row)
+        return 'BOUND_EXISTING_PROFILE'
     if now-last_attempt.get(name,-60)<60 or not invalid_session(row):return False
     last_attempt[name]=now
     number=int(name.split('-')[1])

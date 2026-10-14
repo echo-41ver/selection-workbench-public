@@ -48,12 +48,36 @@ def prepare(root,company,read,save,*,observation=discover,business_active=collec
         return transport,status
 
 
+def refresh_saved_owner(root, saved, *, evidence=None, protocol_probe=None, check_owner=owned):
+    from .local_proxy import snapshot,probe
+    from .merge_temu_snapshots import atomic_write
+    if not saved.get('preproxy_port'):return saved
+    evidence=snapshot() if evidence is None else evidence
+    protocol_probe=probe if protocol_probe is None else protocol_probe
+    expected=(str(saved.get('preproxy_host')),int(saved['preproxy_port']))
+    candidates=[]
+    for process in evidence.get('processes',[]):
+        if process.get('name')!=(saved.get('local_proxy_owner') or {}).get('name'):continue
+        for listener in process.get('listeners',[]):
+            if (listener.get('host'),listener.get('port'))==expected:
+                candidates.append({**listener,**{k:process[k] for k in ('pid','created','name')}})
+    if len(candidates)!=1 or not check_owner(candidates[0]):return saved
+    candidate=candidates[0]
+    observed=protocol_probe(candidate).get('protocol')
+    if observed not in {saved.get('preproxy_protocol'),'MIXED'} or not check_owner(candidate):return saved
+    updated={**saved,'local_proxy_owner':{k:candidate[k] for k in ('pid','created','name')}}
+    atomic_write(Path(root)/'runtime/secrets/proxyshare.settings.json',json.dumps(updated,ensure_ascii=False))
+    return updated
+
+
 def reuse_prepared(root,company,read,*,check_owner=owned):
     """Validate an unchanged saved route under the same lock; never discover/adopt."""
     from .network_readiness import validate_saved_route
     root=Path(root)
     with RouteLock(root/'runtime'):
         saved=read(root/'runtime/secrets/proxyshare.settings.json',{})
+        if not verify_saved(saved,check_owner) and check_owner is owned:
+            saved=refresh_saved_owner(root,saved)
         if not verify_saved(saved,check_owner):
             raise NetworkNotReady('已保存出口的进程或端口归属变化；未复用或切换。',company.get('preproxy_mode','AUTO'))
         proxy=company.get('proxy',{})

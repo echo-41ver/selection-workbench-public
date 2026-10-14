@@ -108,7 +108,7 @@ def live_owner():
     return None
 
 
-def request_start(frozen, cat, base, paid, *, background=True):
+def request_start(frozen, cat, base, paid, *, background=True, preserve_prepared=False):
     """Serialize starts and clear only the previous run's STOP before spawning."""
     import psutil
     from selection_automation.process_lock import ProcessLock
@@ -129,8 +129,20 @@ def request_start(frozen, cat, base, paid, *, background=True):
                 pending_path.unlink(missing_ok=True)
             return failure
         child=None
+        if background and os.name=='nt':
+            from persistent_web_service import start as persistent_start
+            launch=persistent_start(8765,root=ROOT,resume_category=frozen,paid=paid,preserve_prepared=preserve_prepared)
+            save(ROOT/'runtime/supervisor-launch.json',{**launch,'category_key':cat['category_key'],'started_at':time.time()})
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                owner=live_owner()
+                if owner and owner.get('category_key')==cat['category_key']:
+                    save(ROOT/'runtime/starting.json',owner)
+                    return {'状态':'启动中','PID':owner['pid'],'状态文件':str(base/'status.json'),**launch}
+                time.sleep(.1)
+            return {'状态':'启动中','状态文件':str(base/'status.json'),**launch}
         if background:
-            cmd=[sys.executable,str(Path(__file__).resolve()),'run','--prepared-start','--category',str(frozen)]+(['--paid'] if paid else [])
+            cmd=[sys.executable,str(Path(__file__).resolve()),'run','--prepared-start','--category',str(frozen)]+(['--paid'] if paid else [])+(['--preserve-prepared'] if preserve_prepared else [])
             try:
                 child=spawn(cmd,base/'logs'/'supervisor.log')
                 if child.poll() is not None:
@@ -985,7 +997,7 @@ def main():
             if '后台' in result: print(json.dumps(result,ensure_ascii=False)); return
         supervise(frozen,a.paid,preserve_prepared=a.preserve_prepared)
     elif a.action=='start':
-        print(json.dumps(request_start(frozen,cat,base,a.paid),ensure_ascii=False))
+        print(json.dumps(request_start(frozen,cat,base,a.paid,preserve_prepared=a.preserve_prepared),ensure_ascii=False))
     elif a.action=='status': print(json.dumps({'后台':live_owner(),'状态':read(base/'status.json',{'状态':'尚未启动'})},ensure_ascii=False))
     elif a.action=='stop':
         base.mkdir(parents=True,exist_ok=True)

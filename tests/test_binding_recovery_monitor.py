@@ -36,7 +36,7 @@ def test_only_stopped_invalid_session_is_repaired_and_rate_limited(tmp_path,monk
     assert calls==[(2,{'allow_rebind':True})]
     assert not binding.repair_waiting(tmp_path,row,attempts,110)
     path.write_text(json.dumps({'status':'RUNNING'}))
-    assert not binding.repair_waiting(tmp_path,row,attempts,200)
+    assert binding.repair_waiting(tmp_path,row,attempts,200) == 'BOUND_EXISTING_PROFILE'
 
 
 def test_closed_profile_queues_only_its_lane_instead_of_reopening(tmp_path,monkeypatch):

@@ -1325,7 +1325,7 @@ class Console:
             if not key:
                 raise ConsoleError('NO_TASK','没有可继续的任务，请先新建任务',409)
             base,category = self.history_base(key)
-            result = self.invoke([str(self.root/'scripts/selection.py'),'start','--category',str(base/'category.json')])
+            result = self.invoke([str(self.root/'scripts/selection.py'),'start','--preserve-prepared','--category',str(base/'category.json')])
             if result.returncode or selection.read(base/'status.json',{}).get('状态')=='启动失败':
                 raise ConsoleError('RESUME_FAILED','继续启动失败，已保留数据和断点，请查看准备环境状态',409)
             self.key=key; self.draft_used=True; self.phase='正在继续原任务，保留已采集数据'

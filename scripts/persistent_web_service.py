@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 
-def start(port, root=ROOT, amazon_category=None,resume_category=None):
+def start(port, root=ROOT, amazon_category=None,resume_category=None, *, paid=False, preserve_prepared=True):
     root = Path(root).resolve()
     environment_path = root / f'runtime/web-console/service-path-{port}.json'
     environment_path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +31,9 @@ def start(port, root=ROOT, amazon_category=None,resume_category=None):
     if amazon_category:
         configuration['arguments']='"'+str(root/'scripts/collect_amazon_until_complete.py')+'" --category "'+str(category)+'"'
     elif resume_category:
-        configuration['arguments']='"'+str(root/'scripts/selection.py')+'" run --prepared-start --preserve-prepared --category "'+str(category)+'"'
+        configuration['arguments']='"'+configuration['script']+'" --collection-host --port '+str(port)+' --resume-category "'+str(category)+'"'
+        if paid: configuration['arguments']+=' --paid'
+        if not preserve_prepared: configuration['arguments']+=' --new-preparation'
     script = r'''
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -46,7 +48,7 @@ $definition.Principal.UserId = $user
 $definition.Principal.LogonType = 3
 $definition.Principal.RunLevel = 0
 $definition.Settings.Enabled = $true
-if ($configuration.resume) { $definition.Settings.MultipleInstances = 0 } else { $definition.Settings.MultipleInstances = 2 }
+$definition.Settings.MultipleInstances = 2
 $definition.Settings.ExecutionTimeLimit = 'PT0S'
 $definition.Settings.DisallowStartIfOnBatteries = $false
 $definition.Settings.StopIfGoingOnBatteries = $false
@@ -69,10 +71,7 @@ $null = $registered.Run($null)
     return json.loads(result.stdout.strip())
 
 
-def host(port):
-    from selection_automation.process_lock import ProcessLock
-    from restart_web import listener, validate_console
-    import psutil
+def configure_environment(port):
     os.environ.update(PYTHONUTF8='1', PYTHONIOENCODING='utf-8')
     environment_path = ROOT / f'runtime/web-console/service-path-{port}.json'
     if environment_path.is_file():
@@ -87,6 +86,41 @@ def host(port):
                 os.environ['PATH'] += ';' + os.path.expandvars(value)
         except OSError:
             pass
+
+
+def collection_host(port, category, *, paid=False, preserve_prepared=True):
+    configure_environment(port)
+    category=Path(category).resolve()
+    if category.name!='category.json' or not category.is_relative_to((ROOT/'runs').resolve()):
+        raise ValueError('Expected frozen category in this installation')
+    command=[sys.executable,str(ROOT/'scripts/selection.py'),'run','--prepared-start','--category',str(category)]
+    if preserve_prepared: command.append('--preserve-prepared')
+    if paid: command.append('--paid')
+    failures=0
+    while True:
+        with (category.parent/'logs/supervisor.log').open('ab') as stream:
+            result=subprocess.run(command,cwd=ROOT,stdin=subprocess.DEVNULL,stdout=stream,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
+        if result.returncode==0 or (category.parent/'STOP').exists():return result.returncode
+        try:state=json.loads((category.parent/'status.json').read_text(encoding='utf-8'))
+        except (OSError,ValueError):state={}
+        if str(state.get('状态','')).startswith('完成'):return result.returncode
+        if '--preserve-prepared' not in command:
+            try:manifest=json.loads((ROOT/'config/sessions.json').read_text(encoding='utf-8'))
+            except (OSError,ValueError):manifest={}
+            if manifest.get('task_key')==category.parent.name:command.append('--preserve-prepared')
+        failures+=1
+        delay=min(60,5*(2**min(failures-1,4)))
+        (category.parent/'supervisor_recovery.json').write_text(json.dumps({
+            'launch_mode':'WINDOWS_TASK_SCHEDULER','attempts':failures,'retry_seconds':delay,
+            'last_exit_code':result.returncode,'updated_at':time.time(),'checkpoints_preserved':True}),encoding='utf-8')
+        time.sleep(delay)
+
+
+def host(port):
+    from selection_automation.process_lock import ProcessLock
+    from restart_web import listener, validate_console
+    import psutil
+    configure_environment(port)
     directory = ROOT / 'runtime/web-console'
     directory.mkdir(parents=True, exist_ok=True)
     with ProcessLock(directory / f'persistent-service-{port}.lock'):
@@ -115,12 +149,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--host', action='store_true')
+    parser.add_argument('--collection-host',action='store_true')
+    parser.add_argument('--paid',action='store_true')
+    parser.add_argument('--new-preparation',action='store_true')
     parser.add_argument('--amazon-category',type=Path)
     parser.add_argument('--resume-category',type=Path)
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error('port must be 1–65535')
-    if args.host:
+    if args.collection_host:
+        if not args.resume_category: parser.error('--collection-host requires --resume-category')
+        raise SystemExit(collection_host(args.port,args.resume_category,paid=args.paid,preserve_prepared=not args.new_preparation))
+    elif args.host:
         host(args.port)
     else:
-        print(json.dumps(start(args.port,amazon_category=args.amazon_category,resume_category=args.resume_category), ensure_ascii=False))
+        print(json.dumps(start(args.port,amazon_category=args.amazon_category,resume_category=args.resume_category,paid=args.paid,preserve_prepared=not args.new_preparation), ensure_ascii=False))

@@ -159,6 +159,14 @@ try {
         $port = [int]$settings.chain_base_port + $number - 1
         $existingListener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
         $routeStamp = '{0}|{1}|{2}|{3}|{4}' -f $settings.preproxy_host,$settings.preproxy_port,($settings.preproxy_protocol ?? 'SOCKS5'),$settings.local_proxy_owner.pid,$settings.local_proxy_owner.created
+        $sameEndpoint = $entry.route_stamp -and ((($entry.route_stamp -split '\|')[0..2] -join '|') -eq (($routeStamp -split '\|')[0..2] -join '|'))
+        if ($sameEndpoint -and $entry.route_stamp -ne $routeStamp) {
+            & $python (Join-Path $root 'scripts\local_proxy_preflight.py') --validate-saved | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw '同一代理端口的新进程尚未核实；保留原链路。' }
+            $entry.route_stamp = $routeStamp
+            Save-WorkerState $number $entry
+            $state.workers[$key] = $entry
+        }
         if ($Action -eq 'start' -and $entry.route_stamp -eq $routeStamp -and $entry.traffic_policy -eq 'temu-activity-lease-v1' -and $entry.pid -and $existingListener -and $existingListener.OwningProcess -contains [int]$entry.pid) {
             $owned = Get-CimInstance Win32_Process -Filter "ProcessId=$($entry.pid)" -ErrorAction SilentlyContinue
             if ($owned -and $owned.CommandLine -and $owned.CommandLine.Contains($chainScript)) { continue }
