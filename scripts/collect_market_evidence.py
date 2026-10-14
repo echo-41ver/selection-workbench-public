@@ -49,7 +49,16 @@ def run(category_path, force=False):
             # authorization; forcing direct HTTPS can use a different exit.
             # TEMU's residential browser route is configured independently.
             from geekbi_temu_mcp.auth import ActionRequired, GeekBIError
-            result=collect(category,Provider(),lambda state:save(state_path,state),
+            provider=Provider(auth_state_path=ROOT/'runtime/market-auth/agent-auth.json')
+            import sys, time
+            from urllib.request import getproxies
+            from urllib.parse import urlsplit
+            auth=provider.client.auth;cached_auth=read(auth.state_path,{}).get('servers',{}).get(auth.server_key,{})
+            save(base/'auth_context.json',{'python':sys.executable,'auth_state_path':str(auth.state_path),
+                'auth_server':auth.server_key,'cached_token_valid':bool(cached_auth.get('accessToken')) and cached_auth.get('accessTokenExpiresAt',0)>time.time(),
+                'pending_authorization':bool(cached_auth.get('pending')),
+                'network_routes':{k:{'host':urlsplit(v).hostname,'port':urlsplit(v).port} for k,v in getproxies().items() if k in ('http','https')}})
+            result=collect(category,provider,lambda state:save(state_path,state),
                            choose_categories=choose_categories if os.environ.get('DEEPSEEK_API_KEY') else None)
             save(snapshot_path,result)
             save(state_path,{k:v for k,v in result.items() if k not in ('records','pages')})

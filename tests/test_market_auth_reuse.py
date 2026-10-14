@@ -85,3 +85,21 @@ def test_standalone_market_collection_keeps_shared_authorization_network_route(t
     result=market.run(category, force=True)
     assert result['status']=='COMPLETE'
     assert len(calls)==2
+
+
+def test_workbench_authorization_survives_another_client_pending_login(tmp_path, monkeypatch):
+    import geekbi_temu_mcp.auth as auth
+    from selection_automation.market_auth import use_installation_auth
+    shared=tmp_path/'shared.json';local=tmp_path/'install-private.json'
+    monkeypatch.setattr(auth,'default_auth_path',lambda:shared)
+    base='https://openapi.geekbi.com';monkeypatch.setenv('GEEKBI_BASE_URL',base)
+    expiry=int(time.time())+3600
+    shared.write_text(json.dumps({'version':1,'servers':{base:{'accessToken':'fixture-token','accessTokenExpiresAt':expiry}}}),encoding='utf8')
+    first=Provider(auth_state_path=local)
+    assert first.client.auth.state_path==local
+    shared.write_text(json.dumps({'version':1,'servers':{base:{'pending':{'deviceCode':'other-client','expiresAt':expiry}}}}),encoding='utf8')
+    second=Provider(auth_state_path=local)
+    assert second.client.auth._authorization_header()=='Bearer fixture-token'
+    saved=json.loads(local.read_text('utf8'))['servers'][base]
+    assert saved['accessTokenExpiresAt']==expiry
+    assert 'pending' not in saved

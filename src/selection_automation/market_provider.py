@@ -7,9 +7,12 @@ from .commercial import instant, metric, settings
 
 
 class Provider:
-    def __init__(self):
+    def __init__(self, *, auth_state_path=None):
         from geekbi_temu_mcp.client import GeekBIClient
         self.client=GeekBIClient(timeout=30)
+        if auth_state_path is not None:
+            from .market_auth import use_installation_auth
+            use_installation_auth(self.client, auth_state_path)
 
     def categories(self, query):
         from geekbi_temu_mcp.models import CategorySearchInput
