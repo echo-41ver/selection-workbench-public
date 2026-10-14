@@ -5,6 +5,7 @@ import json
 import math
 import re
 import time
+from empty_results_checkpoint import confirmed_empty_checkpoint
 
 _HISTORY = {}
 DONE = {'KEYWORD_COMPLETE', 'KEYWORD_LIMIT_REACHED'}
@@ -108,6 +109,9 @@ def collection_total(base, category, *, rate_snapshot=None):
     if not planned:
         return None
     observed = snapshots(base)
+    # The collector skips both sorts only after an evidence-backed empty query.
+    empty_queries = {query for (query, _), row in observed.items()
+                     if confirmed_empty_checkpoint(row, query)}
     completed_passes = set()
     states = [read(p) for p in (base / 'temu/supervisors').glob('worker-*.json')
               if re.fullmatch(r'worker-\d+(?:-new)?',p.stem)]
@@ -119,9 +123,10 @@ def collection_total(base, category, *, rate_snapshot=None):
         row = observed.get(key, {})
         goods = row.get('unique_goods', 0)
         actual += goods
+        empty_done = key[0] in empty_queries and goods == 0 and not blocked_observation(row)
         done = row.get('status') in DONE or key in completed_passes
         # A completed pass without its count is not evidence of zero goods.
-        done = done and bool(row)
+        done = (done and bool(row)) or empty_done
         if done:
             finished += 1
             shortage += max(0, target - goods)
@@ -153,6 +158,6 @@ def collection_total(base, category, *, rate_snapshot=None):
     return {'completed': completed, 'total': total, 'planned_total': original, 'actual_count': actual,
             'remaining': remaining, 'percent': round(100 * completed / total, 1) if total else 100,
             'keyword_count': len({q for q, _ in planned}), 'finished_passes': finished, 'total_passes': len(planned),
-            'shortfall': shortage, 'blocked_lanes': blocked, 'lane_count': lanes,
+            'shortfall': shortage, 'empty_keyword_count': len(empty_queries), 'blocked_lanes': blocked, 'lane_count': lanes,
             'eta_seconds': math.ceil(remaining / speed) if remaining and speed else (0 if not remaining else None),
             'rate_per_hour': round(speed * 3600) if speed else None, **rate}

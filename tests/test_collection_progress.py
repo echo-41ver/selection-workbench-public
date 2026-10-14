@@ -89,3 +89,53 @@ def test_last_pass_live_verification_overrides_running_supervisor(tmp_path):
         'current_query': 'pump', 'current_sort': 'recent'})
     row = collection_total(base, {}, rate_snapshot=rate)
     assert row['blocked_lanes'] == 0 and row['eta_seconds'] == 655
+
+
+def empty_snapshot(base, query='empty', **changes):
+    from urllib.parse import quote
+    row = {'search_query': query, 'unique_goods': 0, 'status': 'KEYWORD_NO_RESULTS',
+           'sales_sort': {'requested': 'sales'}, 'completion_basis': 'EXPLICIT_EMPTY_QUERY_RESULTS',
+           'no_results_evidence': {'confirmed': True, 'protocol': 'VISIBLE_EMPTY_RESULTS_STABLE_V2',
+               'query': query, 'loading': False, 'stable_ms': 31000, 'samples': 3,
+               'url': 'https://www.temu.com/search_result.html?search_key=' + quote(query)}}
+    row.update(changes)
+    put(base / 'temu/workers/w1/empty/progress.json', row)
+    return row
+
+
+def test_confirmed_empty_query_completes_both_sorts_without_inventing_goods(tmp_path):
+    base = tmp_path / 'runs/current'
+    put(base / 'temu/supervisors/assignments.json', {
+        'lanes': ['w1'], 'jobs': [{'query': 'empty', 'max_products': 200}, {'query': 'full', 'max_products': 200}]})
+    empty_snapshot(base)
+    for order in ('sales', 'recent'):
+        snapshot(base, 'full-' + order, 'full', 200, 'KEYWORD_LIMIT_REACHED', order)
+    row = collection_total(base, {})
+    assert row['finished_passes'] == row['total_passes'] == 4
+    assert row['percent'] == 100 and row['remaining'] == row['eta_seconds'] == 0
+    assert row['actual_count'] == row['completed'] == row['total'] == 400
+    assert row['planned_total'] == 800 and row['shortfall'] == 400
+    assert row['empty_keyword_count'] == 1
+
+
+def test_missing_counts_are_not_completed_by_worker_complete_alone(tmp_path):
+    base = tmp_path / 'runs/current'
+    put(base / 'temu/supervisors/assignments.json', {'lanes': ['w1'], 'jobs': [{'query': 'empty', 'max_products': 200}]})
+    put(base / 'temu/supervisors/worker-01-new.json', {'status': 'WORKER_COMPLETE',
+        'completed_passes': [{'query': 'empty', 'sort': order} for order in ('sales', 'recent')]})
+    row = collection_total(base, {})
+    assert row['finished_passes'] == 0 and row['remaining'] == 400
+    empty_snapshot(base, no_results_evidence={'confirmed': True})
+    assert collection_total(base, {})['finished_passes'] == 1
+
+
+def test_loading_unrelated_or_manual_empty_evidence_cannot_complete_skipped_sort(tmp_path):
+    base = tmp_path / 'runs/current'
+    put(base / 'temu/supervisors/assignments.json', {'lanes': ['w1'], 'jobs': [{'query': 'empty', 'max_products': 200}]})
+    for change in ({'loading': True}, {'query': 'other'}, {'samples': 1}, {'stable_ms': 1000}):
+        row = empty_snapshot(base)
+        row['no_results_evidence'].update(change)
+        put(base / 'temu/workers/w1/empty/progress.json', row)
+        assert collection_total(base, {})['finished_passes'] == 0
+    empty_snapshot(base, manual_action_required=True)
+    assert collection_total(base, {})['finished_passes'] == 0

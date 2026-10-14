@@ -25,6 +25,7 @@ from selection_automation.proxy_activity import ProxyActivityLease
 from selection_automation.background_launch import run_background_launcher
 from selection_automation.product_keywords import candidates as product_candidates, contains as title_contains
 from cleanup_completed_worker import cleanup_completed_worker
+from empty_results_checkpoint import confirmed_empty_checkpoint
 from selection_automation import work_dispatch
 from selection_automation.runtime_audit import process_version, record_start, recovery_event
 LOADED_VERSION=process_version(str(ROOT))
@@ -268,22 +269,6 @@ def confirmed_checkpoint_meets_budget(output: Path, progress: dict, query: str, 
         return False
     # A genuine NoMoreResults checkpoint remains complete at any larger target.
     return status!='KEYWORD_LIMIT_REACHED' or int(progress.get('unique_goods') or 0)>=int(target)
-
-
-def confirmed_empty_checkpoint(progress,query):
-    evidence=progress.get('no_results_evidence') or {}
-    try:
-        from urllib.parse import urlsplit,parse_qs
-        url=urlsplit(evidence.get('url',''));url_query=parse_qs(url.query).get('search_key',[''])[0]
-        return (progress.get('status')=='KEYWORD_NO_RESULTS' and progress.get('unique_goods')==0
-            and progress.get('manual_action_required') is not True
-            and progress.get('completion_basis')=='EXPLICIT_EMPTY_QUERY_RESULTS' and evidence.get('confirmed') is True
-            and evidence.get('protocol')=='VISIBLE_EMPTY_RESULTS_STABLE_V2' and evidence.get('loading') is False
-            and type(evidence.get('stable_ms')) in (int,float) and evidence['stable_ms']>=15000
-            and type(evidence.get('samples')) is int and evidence['samples']>=3
-            and evidence.get('query')==query and url.scheme=='https' and url.hostname in ('temu.com','www.temu.com')
-            and url.path=='/search_result.html' and url_query.lower().strip()==query.lower().strip())
-    except (TypeError,ValueError):return False
 
 
 def limit_upgrade_resume_queries(run: Path, keywords: list[dict]) -> set[str]:

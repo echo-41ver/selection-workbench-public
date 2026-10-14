@@ -320,7 +320,7 @@ function renderCollectionTotal(data){
  const count=n=>Number(n||0).toLocaleString('zh-CN');
  $('collection-total-count').textContent='已采 '+count(row.completed)+' / '+count(row.total)+' 条 · '+row.keyword_count+' 个关键词 · 已完成 '+row.finished_passes+' / '+row.total_passes+' 轮'+(row.shortfall?' · 原计划 '+count(row.planned_total)+' 条，已结束轮次少于目标 '+count(row.shortfall)+' 条':'')+'。按各关键词及排序累计，同一商品在不同轮次分别计数。';
  let eta;
- if(row.remaining===0)eta='采集计划已完成。';
+ if(row.remaining===0)eta='采集计划已完成。'+(row.empty_keyword_count?'其中 '+row.empty_keyword_count+' 个关键词已确认无结果，相关排序轮次计入完成。':'');
  else if(row.eta_seconds==null&&row.blocked_lanes)eta='采集等待恢复，恢复后重新估算剩余时间。';
  else if(row.eta_seconds==null)eta='预计剩余时间：暂无足够的采集速度记录。';
  else{const minutes=Math.max(1,Math.ceil(row.eta_seconds/60));eta='预计还需约 '+Math.floor(minutes/60)+' 小时 '+minutes%60+' 分钟（按'+(row.source==='history'?'历史 '+row.history_tasks+' 个任务':'本任务已完成轮次')+'速度，约 '+count(row.rate_per_hour)+' 条/小时估算）。';}
