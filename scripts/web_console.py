@@ -176,6 +176,7 @@ class Console:
         self.root=root; self.lock=threading.Lock(); self.busy=False
         self.phase='尚未启动'; self.key=selection.read(root/'runtime/web-console/state.json',{}).get('category_key'); self.cancel=threading.Event(); self.progress_file=None; self.draft=None; self.draft_path=None; self.draft_key=None; self.draft_used=False; self.draft_amazon_path=None; self.draft_plan_path=None
         self.pending_scope=None; self.generation_error=None
+        self.pending_key=None
         from selection_automation.rule_provider import settings
         self.draft_provider=settings()
         self.plain_application={}
@@ -218,6 +219,8 @@ class Console:
                 self.phase='上次任务在旧版自动安装阶段失败；新版已移除该步骤，请重新填写 API Key 后重试生成'
             elif self.phase=='品类模型请求返回 HTTP 403；密钥权限不足或服务拒绝访问':
                 self.phase='上次模型请求返回 HTTP 403；已更新 API 客户端标识，请重新填写 Key 后重试；如仍失败将显示接口具体原因'
+            elif self.phase=='连接品类模型超时或网络失败；未创建任务':
+                self.phase='上次完整规则请求中断；已改为流式接收，请重新填写 Key 后沿用已定位榜单重试'
             self.generation_error={'code':pending.get('code') or 'GENERATION_INTERRUPTED','message':self.phase}
 
 
@@ -345,11 +348,17 @@ class Console:
         name=body['category_name']; key=body['api_key']
         if not isinstance(name,str) or not name.strip() or len(name)>120 or any(ord(c)<32 for c in name):
             raise ConsoleError('INVALID_INPUT','品类名称无效')
+        same_pending=(self.pending_scope and self.pending_scope.get('category')==name.strip() and
+            self.pending_scope.get('api_base_url')==provider['base_url'] and self.pending_scope.get('api_model')==provider['model'])
+        if same_pending and not body['bestsellers_url']:
+            body['bestsellers_url']=self.pending_scope.get('bestsellers_url','')
         cached=approved_category(name,body['bestsellers_url']) is not None
         if isinstance(key,str) and not key.strip():
-            if provider['base_url']!=DEFAULT_URL:
+            if same_pending and self.pending_key:
+                key=self.pending_key
+            elif provider['base_url']!=DEFAULT_URL:
                 raise ConsoleError('MISSING_CREDENTIAL','使用其他 API 服务时，请输入该服务的 Key；不会转发本机保存的 DeepSeek 密钥')
-            key=self.saved_credential() or ''
+            else:key=self.saved_credential() or ''
             if not key and not cached: raise ConsoleError('MISSING_CREDENTIAL','本机没有同品类已运行规则及可用 API key，请在网页输入后重试')
             body['api_key']=key
         try: count=worker_count(body.get('worker_count',4))
@@ -364,6 +373,7 @@ class Console:
         with self.lock:
             if self.busy or self.stage3_busy or self.owner(): raise ConsoleError('ALREADY_RUNNING','已有任务运行，请先停止',409)
             self.busy=True; self.phase='生成品类配置并核实榜单中'; self.key=None; self.cancel.clear()
+            self.pending_key=None
             self.plain_application={}
             self.progress_file=None; self.generation_error=None
             self.pending_scope={'category':name.strip(),'amazon_count':body['amazon_count'],
@@ -381,7 +391,8 @@ class Console:
     def _start(self, body, previous_draft=None):
         from selection_automation.rule_provider import settings, environment
         provider=settings(body.pop('api_base_url',''),body.pop('api_model',''))
-        env={**os.environ,**environment(provider),'DEEPSEEK_API_KEY':body.pop('api_key').strip(),'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
+        supplied_key=body.pop('api_key').strip()
+        env={**os.environ,**environment(provider),'DEEPSEEK_API_KEY':supplied_key,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
         try:
             folder=self.root/'runtime'/'web-console'; folder.mkdir(parents=True,exist_ok=True)
             output=folder/f'category-{uuid.uuid4().hex}.json'
@@ -432,6 +443,13 @@ class Console:
                     # Preserve reviewed content, never inherit the prior draft key.
                     self.draft_key=None;self.persist_draft()
                 if self.generation_error:
+                    progress=selection.read(self.progress_file,{}) if self.progress_file else {}
+                    if self.pending_scope and progress.get('failed_stage')=='generating':
+                        from generate_category import valid_url
+                        route=progress.get('route',[])
+                        resolved=route[-1].get('url') if route and isinstance(route[-1],dict) else None
+                        if valid_url(resolved):self.pending_scope['bestsellers_url']=resolved
+                    if not self.cancel.is_set():self.pending_key=supplied_key
                     selection.save(self.root/'runtime/web-console/pending-generation.json',{'scope':self.pending_scope,**self.generation_error})
                 else:
                     (self.root/'runtime/web-console/pending-generation.json').unlink(missing_ok=True)
@@ -474,7 +492,7 @@ class Console:
         instruction_file=folder/f'plain-{token}.txt'; output=folder/f'plain-{token}.json'; error_file=folder/f'plain-{token}.error.json'
         instruction_file.write_text(instruction,encoding='utf-8')
         result=self.invoke([str(self.root/'scripts/plain_rules.py'),'--input',str(source),'--instruction-file',str(instruction_file),'--scope',scope,
-                           '--output',str(output),'--error-file',str(error_file)],env=env,timeout=150)
+                           '--output',str(output),'--error-file',str(error_file)],env=env,timeout=900)
         if result.returncode:
             error=selection.read(error_file,{})
             raise ConsoleError(error.get('code','PLAIN_RULES_FAILED'),error.get('message','规则说明处理失败'))
@@ -594,7 +612,7 @@ class Console:
                 category['execution_mode']='collection'
             else:
                 selection.save(edit_path,edits)
-                compiled=self.invoke([str(self.root/'scripts/rule_editor.py'),'--input',str(self.draft_path),'--edits',str(edit_path),'--output',str(output)],env=env,timeout=150)
+                compiled=self.invoke([str(self.root/'scripts/rule_editor.py'),'--input',str(self.draft_path),'--edits',str(edit_path),'--output',str(output)],env=env,timeout=900)
                 if compiled.returncode: raise ConsoleError('RULES_INVALID','规则编译或校验失败，请检查编辑内容及API授权后重试')
                 category=json.loads(output.read_text('utf-8'))
                 category['execution_mode']='full'
@@ -1362,6 +1380,9 @@ class Console:
         if raw.get('stage') not in {'dependencies','discovering','validating','generating','complete','error'}: return {}
         result={key:raw[key] for key in ('stage','message','error_code','failed_stage') if isinstance(raw.get(key),str)}
         if type(raw.get('depth')) is int: result['depth']=raw['depth']
+        started=raw.get('model_started_at')
+        if raw.get('model_waiting') and type(started) in (int,float):
+            result['message']=result.get('message','模型生成中')+f' · 已等待 {max(0,int(time.time()-started))} 秒'
         return result
 
     def select_local_proxy(self,body):

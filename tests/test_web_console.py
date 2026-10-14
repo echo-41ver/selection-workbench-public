@@ -286,6 +286,51 @@ def test_retry_preparation_reuses_frozen_task_without_paid_flag(tmp_path,monkeyp
     with pytest.raises(web.ConsoleError):console.retry_preparation({'category_key':'other'})
 
 
+def test_failed_preparation_preserves_resolved_listing_and_key_only_in_memory(tmp_path,monkeypatch):
+    console=web.Console(tmp_path)
+    console.pending_scope={'category':'键盘','amazon_count':20,'per_keyword':200,'worker_count':4,
+        'api_base_url':'https://provider.example','api_model':'test-model','bestsellers_url':''}
+    target='https://www.amazon.com/zgbs/pc/12879431'
+    def fail(args,**kwargs):
+        path=Path(args[args.index('--progress-file')+1])
+        path.write_text(json.dumps({'stage':'error','failed_stage':'generating','message':'model timeout',
+            'route':[{'url':target,'heading':'Best Sellers in Computer Keyboards'}]}))
+        return SimpleNamespace(returncode=1)
+    monkeypatch.setattr(console,'invoke',fail)
+    console._start({'category_name':'键盘','amazon_count':20,'per_keyword':200,
+        'api_base_url':'https://provider.example','api_model':'test-model','api_key':'TEST_ONLY_PENDING_KEY'})
+    assert console.pending_scope['bestsellers_url']==target
+    assert console.pending_key=='TEST_ONLY_PENDING_KEY'
+    for path in tmp_path.rglob('*'):
+        if path.is_file():assert 'TEST_ONLY_PENDING_KEY' not in path.read_text('utf-8')
+    assert web.Console(tmp_path).pending_key is None
+    console.progress_file=tmp_path/'waiting.json'
+    console.progress_file.write_text(json.dumps({'stage':'generating','message':'model working',
+        'model_waiting':True,'model_started_at':time.time()-10}))
+    assert '已等待 10 秒' in console.generation_progress()['message']
+
+
+@pytest.mark.parametrize('other_category',[False,True])
+def test_preparation_retry_key_is_bound_to_same_category_and_provider(tmp_path,monkeypatch,other_category):
+    console=web.Console(tmp_path);console.pending_key='TEST_ONLY_PENDING_KEY'
+    console.pending_scope={'category':'键盘','api_base_url':'https://provider.example','api_model':'test-model',
+        'bestsellers_url':'https://www.amazon.com/zgbs/pc/12879431'}
+    monkeypatch.setattr(console,'owner',lambda:None);started=[]
+    class Thread:
+        def __init__(self,target,args,daemon):started.append(args[0])
+        def start(self):pass
+    monkeypatch.setattr(web.threading,'Thread',Thread)
+    body={'category_name':'电钻' if other_category else '键盘','amazon_count':20,'per_keyword':200,
+        'api_key':'','api_base_url':'https://provider.example','api_model':'test-model'}
+    if other_category:
+        with pytest.raises(web.ConsoleError):console.start(body)
+        assert not started
+    else:
+        console.start(body)
+        assert started[0]['api_key']=='TEST_ONLY_PENDING_KEY'
+        assert started[0]['bestsellers_url']==console.pending_scope['bestsellers_url']
+
+
 def test_start_can_use_server_credential_without_returning_it(tmp_path, monkeypatch):
     console=web.Console(tmp_path)
     monkeypatch.setenv('DEEPSEEK_API_KEY','server-only-fixture')
@@ -653,7 +698,8 @@ def test_amazon_invocation_uses_node_not_python(tmp_path,monkeypatch):
 
 @pytest.mark.parametrize('message,expected',[
     ('安装网页采集浏览器未完成；请检查网络后重试，或运行 deploy.cmd。','新版已移除该步骤'),
-    ('品类模型请求返回 HTTP 403；密钥权限不足或服务拒绝访问','已更新 API 客户端标识')])
+    ('品类模型请求返回 HTTP 403；密钥权限不足或服务拒绝访问','已更新 API 客户端标识'),
+    ('连接品类模型超时或网络失败；未创建任务','已改为流式接收')])
 def test_legacy_failure_is_labelled_previous_attempt_and_retains_scope(tmp_path,message,expected):
     scope={'category':'键盘','amazon_count':20,'per_keyword':200,'worker_count':4,
         'api_base_url':'https://provider.example/v1','api_model':'test-model'}
