@@ -40,6 +40,23 @@ def test_fuzzy_category_is_not_silently_used():
     assert not source.calls
 
 
+def test_verified_keyboard_path_uses_live_id_without_login_or_model_mapping():
+    class Keyboards:
+        def categories(self, query):
+            return {'list': [{'catId': 3894, 'catName': '普通键盘',
+                'parentCatItems': [{'catName': n} for n in ['电子','电脑及配件','外设产品','电脑鼠标、键盘、输入设备','普通键盘']]},
+                {'catId': 18165, 'catName': '键盘、钢琴', 'parentCatItems': [{'catName': '乐器'}]}]}
+        def goods(self, query):
+            assert query['catIds'] == [3894]
+            return {'list': [], 'total': 0}
+    def forbidden(*args):
+        raise AssertionError('verified taxonomy must not request a category model')
+    cat={**category(), 'category_name_zh':'键盘', 'amazon':{'verification':{'heading':'Best Sellers in Computer Keyboards'}}}
+    result=collect(cat,Keyboards(),choose_categories=forbidden,now=NOW)
+    assert result['status']=='COMPLETE'
+    assert result['categories'][0]['catId']==3894
+
+
 @pytest.mark.parametrize('correct_path', [True, False])
 def test_verified_fuel_transfer_taxonomy_never_selects_engine_parts(correct_path):
     class FuelSource:

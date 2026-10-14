@@ -93,3 +93,25 @@ def test_truncated_paid_response_pauses_without_sending_next_pair(tmp_path,monke
     assert len(results)==1 and results[0]['response_id']=='truncated_fixture'
     ledger=list(runner.rows(tmp_path/'requests.jsonl'))
     assert ledger[0]['usage']['total_tokens']==8
+
+
+def test_local_service_failure_does_not_create_paid_billing_hold(tmp_path,monkeypatch):
+    from selection_automation.stage3_provider import settings,apply
+    from selection_automation.stage3_billing import billing_hold
+    calls=[]
+    class Transport:
+        def __init__(self,**kwargs):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def post(self,*args,**kwargs):calls.append(True);raise OSError('fixture local service down')
+    monkeypatch.setattr(openai,'DefaultHttpxClient',Transport)
+    monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'protocol',lambda cat,n:('fixture',{}))
+    cat={'stage3':{'modules':{'one':100}}};apply(cat,settings({'mode':'local_model'}))
+    rows=[{'asin':'A','goods_id':str(i),'amazon_image_path':'a','temu_image_path':str(i),
+           'pair_revision':str(i),'vision_revision_key':str(i),'attempt':1} for i in range(2)]
+    args=SimpleNamespace(results=tmp_path/'results.jsonl',validate_only=False,max_requests=0)
+    with pytest.raises(SystemExit,match='没有远程费用'):
+        runner.consume(args,cat,tmp_path/'blocked.json','fixture',iter(rows))
+    assert len(calls)==1
+    assert not billing_hold(tmp_path/'request_intents.jsonl',args.results)['pairs']

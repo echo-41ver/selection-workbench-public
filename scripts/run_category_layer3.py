@@ -244,6 +244,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
     stop = threading.Event()
     fatal_stop = threading.Event()
     incomplete_stop = threading.Event()
+    local_service_stop = threading.Event()
     requests = 0
     sent_requests = 0
     ledger = args.results.with_name('requests.jsonl')
@@ -357,7 +358,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     return
             if isinstance(exc, IncompleteVisualResponse):
                 reason = 'VISUAL_RESPONSE_INCOMPLETE: ' + exc.reason
-            billing_uncertain = sent and not received
+            billing_uncertain = sent and not received and provider['mode']!='local_model'
+            if provider['mode']=='local_model' and not received:
+                local_service_stop.set();stop.set()
             billing_state = 'UNKNOWN' if billing_uncertain else 'KNOWN' if received else 'NO_CHARGE'
             if billing_uncertain:
                 reason += ('；请求被拒绝，但费用待核对，已阻止自动重发' if status in (401, 402, 403, 429)
@@ -420,6 +423,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
         raise SystemExit('未结算视觉请求：请求被拒绝或传输结果不明，费用待核对，已阻止付费重发；请按交付说明核对供应商用量，部分结果仍可导出')
     if incomplete_stop.is_set():
         raise SystemExit('模型输出被截断，已保存请求编号与用量并暂停；可能已计费，不自动重复请求。请调整输出预算后手动继续')
+    if local_service_stop.is_set():
+        raise SystemExit('本地模型服务未返回有效响应，已暂停；没有远程费用，请启动或修复本地服务后手动继续')
     print(json.dumps({'API请求数': sent_requests, '暂停': stop.is_set(), '费用待核对商品对':len(after['pairs'])}, ensure_ascii=False))
 
 

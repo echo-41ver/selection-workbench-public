@@ -30,6 +30,11 @@ def collect(category, provider, progress=lambda value:None, *, now=None, max_pag
     selection_method='同名类目'
     # Match the reviewed taxonomy path, taking IDs from this live response.
     heading=str(category.get('amazon',{}).get('verification',{}).get('heading') or '').casefold()
+    if not selected and heading=='best sellers in computer keyboards':
+        selected=[r for r in queried['list'] if r.get('catName')=='普通键盘'
+                  and [p.get('catName') for p in r.get('parentCatItems',[])][:4]
+                  == ['电子','电脑及配件','外设产品','电脑鼠标、键盘、输入设备']]
+        selection_method='已核验 Amazon 电脑键盘榜单对应极鲸云普通键盘类目路径'
     if not selected and heading=='best sellers in barrel & hand fuel pumps':
         queried=provider.categories({'keyword':'抽油泵','siteId':48,'page':1,'size':200})
         selected=[r for r in queried['list'] if r.get('catName')=='桶形和手摇燃油泵'
