@@ -195,7 +195,7 @@ def test_new_collector_does_not_inherit_previous_run_terminal(tmp_path):
 
 
 @pytest.mark.parametrize('terminal', ['STOPPED_INITIAL_PRODUCTS_TIMEOUT'])
-def test_pipeline_exhausted_initial_timeout_preserves_recent_checkpoint_without_rotation(tmp_path, monkeypatch, terminal):
+def test_pipeline_initial_timeout_retries_same_profile_and_preserves_recent_checkpoint(tmp_path, monkeypatch, terminal):
     monkeypatch.setattr(pipeline, 'ROOT', tmp_path)
     category = {'category_key':'fixture'}
     category_path = tmp_path/'category.json'
@@ -239,16 +239,17 @@ def test_pipeline_exhausted_initial_timeout_preserves_recent_checkpoint_without_
     monkeypatch.setattr(pipeline.subprocess, 'run', lambda command,**kw:rotations.append(command) or SimpleNamespace(returncode=0))
     with pytest.raises(RuntimeError, match='incomplete'):
         pipeline.collect_temu(category_path, category, sessions_path, 'worker1')
-    assert len(calls) == 1 and rotations==[]
+    assert len(calls) == 6 and rotations==[]
     worker = selection.read(pipeline.run_root(category)/'temu'/'supervisors'/'worker1.json')
     assert worker['status'] == 'HUMAN_ACTION_REQUIRED'
-    assert worker['query_status'] == terminal
-    assert worker['recovery_budget_exhausted'] is True
+    assert worker['query_status'] == 'WAITING_CAPTCHA'
+    assert not worker.get('recovery_budget_exhausted', False)
     assert worker['current_query'] == 'corded drill'
     assert worker['current_sort'] == 'recent'
     assert worker['completed_queries'] == []
     assert worker['completed_passes'] == [{'query':'corded drill','sort':'sales'}]
-    assert worker['attempt'] == 1 and worker['unique_goods'] == 17
+    assert worker['unique_goods'] == 17
+    assert len({tuple(command) for command in calls}) == 1
     assert Path(worker['output']).name == 'corded-drill--recent'
     assert worker['browser_preserved'] and worker['manual_action_required']
 

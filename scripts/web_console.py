@@ -1454,7 +1454,7 @@ class Console:
         def tone(value):
             if not isinstance(value,dict): return 'neutral'
             state=' '.join(str(value.get(field) or '') for field in ('状态','status','采集状态','query_status')).upper()
-            if re.search(r'REPLACING_.*_ENVIRONMENT|正在自动更换环境|WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY',state): return 'green'
+            if re.search(r'REPLACING_.*_ENVIRONMENT|正在自动更换环境|WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY|WAITING_INITIAL_PRODUCTS_RETRY',state): return 'green'
             if re.search(r'FAILED|ERROR|失败|错误',state): return 'red'
             if any(value.get(flag) is True for flag in ('需人工介入','manual_action_required','human_action_required')) or re.search(
                     r'CAPTCHA|VERIFICATION|HUMAN_ACTION|STOPPED_LOGIN_REQUIRED|ACTION_REQUIRED|验证码|等待人工|待人工|需要人工',state): return 'yellow'

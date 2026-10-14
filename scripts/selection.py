@@ -370,7 +370,7 @@ def worker_snapshot(base, name):
     progress={}; query=worker.get('current_query')
     output=worker.get('output')
     if not output and query: output=str(base/'temu'/'workers'/name/slug(query))
-    if output and not replacing and worker.get('status') not in {'SESSION_REPLACED','RESUMING','STARTING','WORKER_COMPLETE','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY'}:
+    if output and not replacing and worker.get('status') not in {'SESSION_REPLACED','RESUMING','STARTING','WORKER_COMPLETE','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY','WAITING_INITIAL_PRODUCTS_RETRY'}:
         progress_path=Path(output)/'progress.json'
         # A restarted collector initially shares the old progress file. Do not
         # mistake that previous run's terminal status for its current result.
@@ -380,12 +380,13 @@ def worker_snapshot(base, name):
         except OSError: pass
     code=progress.get('status') or worker.get('query_status') or worker.get('status','STARTING')
     if worker.get('status')=='WAITING_BROWSER_CONTROL_RECOVERY': code=worker['status']
-    if replacing or worker.get('status') in {'SESSION_REPLACED','RESUMING','STARTING','WORKER_COMPLETE','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY'}: code=worker['status']
+    if replacing or worker.get('status') in {'SESSION_REPLACED','RESUMING','STARTING','WORKER_COMPLETE','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY','WAITING_INITIAL_PRODUCTS_RETRY'}: code=worker['status']
     recovery=collector_block(code)
     if not recovery and worker.get('status')=='HUMAN_ACTION_REQUIRED':
         recovery={'reason':'采集阻断，等待人工处理','action':worker.get('recovery_action','请检查当前浏览器；确认当前关键词商品页正常后继续'),'verify_to_resume':worker.get('verify_to_resume',True)}
     waiting={
         'WAITING_FLEET_SLOT':'并发调度排队，自动继续',
+        'WAITING_INITIAL_PRODUCTS_RETRY':'加载超时，等待后在原环境重新搜索',
         'WAITING_INITIAL_PRODUCTS':'等待首屏商品，尚未确认有效结果',
         'WAITING_TARGET_SEARCH_RESULTS':'等待当前关键词商品页就绪',
         'WAITING_EMPTY_SEARCH_STABLE':'等待搜索页稳定，尚未确认有效结果',
@@ -467,6 +468,11 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
     # Relaunch their owning pipeline without requiring CAPTCHA completion.
     from selection_automation.recovery_policy import session_recovery_kind
     progress=read(Path(worker['output'])/'progress.json',{}) if worker.get('output') else {}
+    if view['采集状态']=='STOPPED_INITIAL_PRODUCTS_TIMEOUT' and not running and not progress.get('http_block') and not progress.get('confirmed_login_redirect'):
+        children.pop(name,None); finished.discard(name); attempts[name]=0; next_at[name]=0
+        save(worker_path,{**worker,'status':'RESUMING','manual_action_required':False,'automatic_resume_pending':True})
+        state[name]={**view,'状态':'首屏等待超时，原环境重新搜索','需人工介入':False}
+        return False
     site_kind=session_recovery_kind(view['采集状态'],progress)
     if site_kind and view['采集状态'] not in {'STARTING','RESUMING','RUNNING'} and not running and not worker.get('recovery_budget_exhausted'):
         children.pop(name,None)

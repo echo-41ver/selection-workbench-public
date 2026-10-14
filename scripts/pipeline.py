@@ -677,6 +677,20 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                         "completed_queries": completed_queries,
                     })
                     break
+                if status == 'STOPPED_INITIAL_PRODUCTS_TIMEOUT' and not progress.get('http_block') and not progress.get('confirmed_login_redirect'):
+                    retry_path = output / 'initial_products_retry.json'
+                    prior_retry = json.loads(retry_path.read_text('utf-8')) if retry_path.exists() else {}
+                    retry_count = int(prior_retry.get('attempts', 0)) + 1
+                    delay = min(60, 10 * retry_count)
+                    atomic_write(retry_path, json.dumps({'attempts':retry_count,'query':query,'sort':sort,'same_profile':True}))
+                    write_worker_state(session['name'], {'status':'WAITING_INITIAL_PRODUCTS_RETRY',
+                        'current_query':query,'query_status':status,'output':str(output),
+                        'unique_goods':progress.get('unique_goods'),'manual_action_required':False,
+                        'automatic_resume_pending':True,'same_profile':True,'retry_seconds':delay})
+                    recovery_event(run_root(category),session['name'],'INITIAL_PRODUCTS_SAME_PROFILE_RETRY',query=query,sort=sort,attempt=retry_count)
+                    interruptible_wait(delay,lease)
+                    attempt=0
+                    continue
                 recovery_kind = classify_recovery_kind(status, progress, transport_recovery_allowed(progress))
                 recovery_allowed, next_record = recovery_budget(recovery_record,
                     int(progress.get('unique_goods') or 0), str(session.get('profile_id') or ''), recovery_kind)

@@ -1229,7 +1229,8 @@ async function guardInitialProducts(state, phase) {
   if (decision.stop) {
     finalStatus = decision.status;
     const details = { phase, reason: decision.reason, stop_reason: decision.reason,
-      manual_action_required: true, browser_preserved: true, automatic_retry: false,
+      manual_action_required: decision.reason !== 'INITIAL_PRODUCTS_TIMEOUT', browser_preserved: true,
+      automatic_retry: decision.reason === 'INITIAL_PRODUCTS_TIMEOUT',
       confirmed_login_redirect: confirmedLoginRedirect(state),
       initial_products_wait_ms: decision.clock.activeWaitMs,
       initial_products_timeout_seconds: INITIAL_PRODUCTS_TIMEOUT_SECONDS, finished_at: now() };
@@ -1627,6 +1628,11 @@ async function waitForInitialProducts() {
     resumePage = await bootstrapPageState();
   }
   await guardInitialProducts(resumePage, 'resume_current_page');
+  if (!bootstrapFromSafeTab && isPostVerificationEmptySearchSample(resumePage) && !classify(resumePage)) {
+    await execute(`window.scrollTo({top:0,left:0,behavior:'instant'});return true;`);
+    await appendEvent('RESTORED_EMPTY_SEARCH_RESUBMIT', {query:QUERY,same_profile:true});
+    await bootstrapThroughEmptySearch({navigate:false,reason:'POST_VERIFICATION_EMPTY_SEARCH'});
+  }
   if (bootstrapFromSafeTab) {
     const entryPlan=bootstrapEntryPlan(ENTRY_MODE,resumePage.url,QUERY);
     await appendEvent('BOOTSTRAP_ENTRY_SELECTED',{requested:ENTRY_MODE,plan:entryPlan});
