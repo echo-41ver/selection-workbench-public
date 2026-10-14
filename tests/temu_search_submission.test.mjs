@@ -15,7 +15,7 @@ const end=source.indexOf('\nasync function waitForStableEmptySearch',start);
 const functionSource=source.slice(start,end);
 const EKEY='element-6066-11e4-a52e-4f735466cecf';
 
-test('native submission clicks submit rather than clear; Enter and missing-icon fallback remain usable',
+test('native submission clicks localized submit rather than clear; missing icon never silently uses Enter',
   {skip:!executablePath}, async()=>{
     const browser=await chromium.launch({executablePath,headless:true});
     try {
@@ -23,7 +23,8 @@ test('native submission clicks submit rather than clear; Enter and missing-icon 
         {mode:'icon',query:'qm7 tv remote',initial:'other query',icon:true,expected:'icon'},
         {mode:'icon',query:'qm7 tv remote',initial:'qm7 tv remote',icon:true,expected:'icon'},
         {mode:'enter',query:'qm7 tv remote',initial:'',icon:true,expected:'enter'},
-        {mode:'icon',query:'qm7 tv remote',initial:'',icon:false,expected:'enter'},
+        {mode:'icon',query:'qm7 tv remote',initial:'',icon:false,missing:true},
+        {mode:'icon',query:'qm7 tv remote',initial:'',icon:true,label:'提交搜索请求',expected:'icon'},
         {mode:'icon',query:'QM7 TV Remote',initial:'',icon:true,expected:'icon'},
         {mode:'icon',query:'qm7 tv remote',initial:'',icon:true,race:'verification',deferred:'VERIFICATION_PENDING'},
         {mode:'icon',query:'qm7 tv remote',initial:'',icon:true,race:'target',deferred:'SKIP_ALREADY_TARGET_URL'},
@@ -31,11 +32,11 @@ test('native submission clicks submit rather than clear; Enter and missing-icon 
       ];
       for(const c of cases){
         const page=await browser.newPage();
-        await page.route('http://fixture.test/**',route=>route.fulfill({contentType:'text/html',body:`
+        await page.route('http://fixture.test/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`
           <form role="search" onsubmit="event.preventDefault();window.submissions++;history.replaceState({},'', '/search_result.html?search_key='+encodeURIComponent(document.querySelector('input').value))">
           <input id="searchInput" type="search" aria-label="Search field" style="width:300px;height:40px">
           <button id="clear" type="button" aria-label="delete" onclick="window.clears++;document.querySelector('input').value=''">×</button>
-          ${c.icon?'<div id="submit" role="button" aria-label="Submit search" tabindex="0" onclick="this.closest(\'form\').requestSubmit()">🔍</div>':''}
+          ${c.icon?'<div id="submit" role="button" aria-label="'+(c.label||'Submit search')+'" tabindex="0" onclick="this.closest(\'form\').requestSubmit()">🔍</div>':''}
           </form><script>window.submissions=0;window.clears=0</script>`}));
         await page.goto('http://fixture.test/search_result.html');
         await page.locator('input').fill(c.initial);
@@ -75,6 +76,10 @@ test('native submission clicks submit rather than clear; Enter and missing-icon 
             readyState:window.pendingNavigation?'loading':document.readyState,visibleGoodsCount:0})),
           guardInitialProducts:async state=>({manual:classifyPageState(state)==='HUMAN_VERIFICATION'})});
         const result=await vm.runInContext(functionSource+'\nsubmitHomeSearch()',context);
+        if(c.missing){
+          assert.equal(result.submitted,false);assert.equal(result.reason,'SEARCH_ICON_UNAVAILABLE');
+          assert.equal(await page.evaluate(()=>window.submissions),0);await page.close();continue;
+        }
         if(c.race){
           assert.equal(result.submitted,false,JSON.stringify(c));
           assert.equal(result.reason,c.deferred,JSON.stringify(c));

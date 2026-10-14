@@ -177,6 +177,8 @@ class Console:
         self.phase='尚未启动'; self.key=selection.read(root/'runtime/web-console/state.json',{}).get('category_key'); self.cancel=threading.Event(); self.progress_file=None; self.draft=None; self.draft_path=None; self.draft_key=None; self.draft_used=False; self.draft_amazon_path=None; self.draft_plan_path=None
         self.pending_scope=None; self.generation_error=None
         self.pending_key=None
+        from selection_automation.monitor_status import MonitorStatus
+        self.monitor=MonitorStatus(self.status,lambda:(self.key,self.busy,self.phase,self.draft_used,self.stage3_busy,id(self.draft),id(self.pending_scope)))
         from selection_automation.rule_provider import settings
         self.draft_provider=settings()
         self.plain_application={}
@@ -1574,6 +1576,10 @@ class Handler(BaseHTTPRequestHandler):
                     with self.server.release_lock:state['release_update']=self.server.release.check()
                 return self.send_json(state)
             if self.path=='/api/status-profile': return self.send_json(self.server.console.profile_status_once())
+            if self.path=='/api/monitor-status':
+                state=self.server.console.monitor.get()
+                if getattr(self.server,'release',None):state['release_update']=self.server.release.snapshot()
+                return self.send_json(state)
             if self.path=='/api/visual-review': return self.send_json(self.server.console.visual_review())
             if self.path=='/api/operator': return self.send_json(self.server.console.operator_view())
             if self.path=='/api/history': return self.send_json(self.server.console.history())

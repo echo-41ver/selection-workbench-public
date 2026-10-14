@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { inspectSearchEnd } from '../scripts/collection_checkpoint.mjs';
+import { inspectSearchReadiness } from '../scripts/temu_search_readiness.mjs';
 import {parseProductCardMetrics} from '../scripts/product_card_metrics.mjs';
 
 const source = fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs', import.meta.url), 'utf8');
@@ -29,10 +30,10 @@ test('full product scan accepts a temporarily absent navigation root', () => {
 test('light page reads preserve normal height and tolerate the navigation gap', async () => {
   const start = source.indexOf('async function lightPageState()');
   const end = source.indexOf('\nasync function visibleScrollToBottom', start);
-  const make = new Function('execute', 'inspectSearchEnd', source.slice(start, end) + ';return lightPageState;');
+  const make = new Function('execute', 'inspectSearchEnd','inspectSearchReadiness', source.slice(start, end) + ';return lightPageState;');
   for (const root of [null, { scrollHeight: 1234 }]) {
     const ctx = context(root);
-    const result = await make(script => vm.runInContext(`(function(){${script}})()`, ctx), inspectSearchEnd)();
+    const result = await make(script => vm.runInContext(`(function(){${script}})()`, ctx), inspectSearchEnd,inspectSearchReadiness)();
     assert.equal(result.scrollHeight, root ? 1234 : 0);
     assert.equal(result.visibleGoodsCount, 0);
   }

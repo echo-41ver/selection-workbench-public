@@ -93,3 +93,12 @@ test('a hung status connection times out and the next poll can recover',async()=
  await vm.runInContext('poll()',context);
  assert.equal(calls,2);assert.deepEqual({...rendered},{ok:true});assert.equal(context.statusFresh,true);assert.equal(cleared,2);
 });
+
+test('background status loading and stale samples never enable task actions',async()=>{
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);};
+ let rendered=0;const context=vm.createContext({$:get,statusFresh:true,AbortController,Error,Date,Math,console:{error(){}},updateControls(){},render(){rendered++;},setTimeout(){return 1;},clearTimeout(){},fetch:async()=>({ok:true,json:async()=>({ok:true,status_loading:true,status_sample:{refreshing:true}})})});
+ const code=html.slice(html.indexOf('let polling=false;'),html.indexOf('function showPage(page)'));vm.runInContext(code,context);
+ await vm.runInContext('poll()',context);assert.equal(rendered,0);assert.equal(context.statusFresh,false);assert.match(get('connection').textContent,/正在汇总/);
+ context.fetch=async()=>({ok:true,json:async()=>({ok:true,status_sample:{age_seconds:31}})});
+ await vm.runInContext('poll()',context);assert.equal(context.statusFresh,false);assert.match(get('overview').textContent,/31 秒前/);
+});

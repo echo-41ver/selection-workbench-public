@@ -401,6 +401,10 @@ def worker_snapshot(base, name):
         'RETRYING_NETWORK':'连接异常，正在自动重试',
     }
     label=recovery['reason'] if recovery else waiting.get(code)
+    if code=='WAITING_INITIAL_PRODUCTS':
+        seconds=max(0,int((progress.get('initial_products_wait_ms') or 0)/1000))
+        label=('正在确认空结果，保留当前关键词' if progress.get('loading_reason')=='CONFIRMING_EMPTY_RESULTS'
+            else '等待首屏商品加载，保留当前关键词')+f' · 已等待 {seconds} 秒'
     if code=='WAITING_FLEET_SLOT':
         info=progress.get('fleet_wait') or {}
         if info.get('reason')=='HTTP_COOLDOWN':

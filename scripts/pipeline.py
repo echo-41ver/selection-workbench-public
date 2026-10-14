@@ -278,6 +278,9 @@ def confirmed_empty_checkpoint(progress,query):
         return (progress.get('status')=='KEYWORD_NO_RESULTS' and progress.get('unique_goods')==0
             and progress.get('manual_action_required') is not True
             and progress.get('completion_basis')=='EXPLICIT_EMPTY_QUERY_RESULTS' and evidence.get('confirmed') is True
+            and evidence.get('protocol')=='VISIBLE_EMPTY_RESULTS_STABLE_V2' and evidence.get('loading') is False
+            and type(evidence.get('stable_ms')) in (int,float) and evidence['stable_ms']>=15000
+            and type(evidence.get('samples')) is int and evidence['samples']>=3
             and evidence.get('query')==query and url.scheme=='https' and url.hostname in ('temu.com','www.temu.com')
             and url.path=='/search_result.html' and url_query.lower().strip()==query.lower().strip())
     except (TypeError,ValueError):return False
@@ -424,6 +427,7 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
     plan_document = json.loads(keyword_plan_path(category).read_text(encoding="utf-8"))
     plan = plan_document['keywords']
     resume_queries=limit_upgrade_resume_queries(run_root(category),plan)
+    work_dispatch.requeue_unsettled_empty_queries(run_root(category))
     assignment=work_dispatch.sync(run_root(category),plan,[s['name'] for s in sessions],resume_queries=resume_queries)
     queues=[[r for r in assignment['jobs'] if r['owner']==session['name'] or any(
         state.get('owner')==session['name'] and not state.get('complete')

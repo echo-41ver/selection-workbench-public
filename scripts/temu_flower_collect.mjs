@@ -14,7 +14,8 @@ import {observeHttpPageTransition} from './temu_http_transition.mjs';
 import path from 'node:path';
 import { classifyPageState as classify, didTryAgainProgress } from './temu_flower_recovery_policy.mjs';
 import { bootstrapEntryPlan, isStableHomeSearchSample, decideSearchSubmission, isPostVerificationEmptySearchSample, isStableEmptySearchSample, isStableExistingSearchSample, sameSearchInputGeometry } from './temu_search_bootstrap_policy.mjs';
-import { decideInitialProductsWait, DEFAULT_INITIAL_PRODUCTS_TIMEOUT_SECONDS, confirmedEmptyQueryResults } from './temu_initial_wait_policy.mjs';
+import { decideInitialProductsWait, DEFAULT_INITIAL_PRODUCTS_TIMEOUT_SECONDS, decideEmptyQueryResults } from './temu_initial_wait_policy.mjs';
+import { inspectSearchReadiness } from './temu_search_readiness.mjs';
 import { missingControlState, terminalCollectionStop, confirmedNoMoreResults, inspectSearchEnd } from './collection_checkpoint.mjs';
 import { inspectSalesSort, confirmsSalesSort, selectSalesSort, prepareSalesCheckpoint, clickSalesSortControl } from './temu_sales_sort.mjs';
 
@@ -786,7 +787,7 @@ async function lightPageState() {
     const visibleGoodsCount=document.querySelectorAll('a[href*="goods_id="],a[href*="goodsId="],a[href*="-g-"]').length;
     const visibleGoodsIds=[...new Set([...document.querySelectorAll('a[href]')].map(a=>(a.href.match(/[?&](?:goods_id|goodsId)=(\\d+)(?:[&#]|$)/i)||a.href.match(/-g-(\\d+)\\.html/i)||[])[1]).filter(Boolean))];
     const loginFormVisible=[...document.querySelectorAll('input[type="password"], [role="dialog"] input[type="email"], [role="dialog"] input[autocomplete="username"]')].some(e=>{if(typeof e.getBoundingClientRect!=='function')return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'});
-    return {...(${inspectSearchEnd.toString()})(),loginFormVisible,url:location.href,documentURI:document.documentURI,title:document.title,text,rows:visibleGoodsCount?[{}]:[],visibleGoodsCount,visibleGoodsIds,scrollY,innerHeight,scrollHeight:document.documentElement?.scrollHeight ?? 0};
+    return {...(${inspectSearchEnd.toString()})(),...(${inspectSearchReadiness.toString()})(),readyState:document.readyState,loginFormVisible,url:location.href,documentURI:document.documentURI,title:document.title,text,rows:visibleGoodsCount?[{}]:[],visibleGoodsCount,visibleGoodsIds,scrollY,innerHeight,scrollHeight:document.documentElement?.scrollHeight ?? 0};
   `);
 }
 
@@ -1078,6 +1079,7 @@ async function bootstrapPageState() {
     const rect=input?.getBoundingClientRect();
     const loginFormVisible=[...document.querySelectorAll('input[type="password"], [role="dialog"] input[type="email"], [role="dialog"] input[autocomplete="username"]')].some(e=>{if(typeof e.getBoundingClientRect!=='function')return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'});
     return {
+      ...(${inspectSearchReadiness.toString()})(),
       loginFormVisible,
       url:location.href,documentURI:document.documentURI,title:document.title,readyState:document.readyState,
       text:(document.body?.innerText||'').slice(0,2000),searchReady:Boolean(input),
@@ -1148,6 +1150,8 @@ async function findSeeMoreFromCurrentDom() {
 
 class InitialProductsStopped extends Error {}
 let initialProductsWait = null;
+let emptyResultsWait = null;
+let lastInitialWaitingSnapshot=0;
 
 function confirmedLoginRedirect(state) {
   if (classify(state) === 'HUMAN_VERIFICATION') return false;
@@ -1198,12 +1202,15 @@ async function guardInitialProducts(state, phase) {
     throw new InitialProductsStopped(finalStatus);
   }
   let targetSearch = false;
-  if(products.size===0 && confirmedEmptyQueryResults(state,QUERY)) {
+  const emptyDecision=decideEmptyQueryResults({state,query:QUERY,previous:emptyResultsWait,nowMs:Date.now()});
+  emptyResultsWait=emptyDecision.clock;
+  if(products.size===0 && emptyDecision.confirmed) {
     finalStatus='KEYWORD_NO_RESULTS';
     const details={phase,manual_action_required:false,browser_preserved:true,
       completion_basis:'EXPLICIT_EMPTY_QUERY_RESULTS',stop_reason:'EXPLICIT_EMPTY_QUERY_RESULTS',
       completion_scope:'TEMU_US_VISIBLE_SEARCH_RESULTS_FOR_SINGLE_QUERY',finished_at:now(),
-      no_results_evidence:{confirmed:true,query:QUERY,url:state.url,text:String(state.text||'').slice(0,2000),observed_at:now()}};
+      no_results_evidence:{confirmed:true,protocol:'VISIBLE_EMPTY_RESULTS_STABLE_V2',loading:false,
+        stable_ms:emptyDecision.stableMs,samples:emptyDecision.samples,query:QUERY,url:state.url,text:String(state.text||'').slice(0,2000),observed_at:now()}};
     await appendEvent(finalStatus,details);await writeSnapshot(finalStatus,details);
     throw new InitialProductsStopped(finalStatus);
   }
@@ -1212,6 +1219,13 @@ async function guardInitialProducts(state, phase) {
     nowMs: Date.now(), timeoutMs: INITIAL_PRODUCTS_TIMEOUT_SECONDS * 1000,
     productsReady: targetSearch && (Number(state.visibleGoodsCount) > 0 || state.rows?.length > 0) });
   initialProductsWait = decision.clock;
+  if(decision.status==='WAITING_INITIAL_PRODUCTS'&&Date.now()-lastInitialWaitingSnapshot>=2000){
+    lastInitialWaitingSnapshot=Date.now();
+    await writeSnapshot('WAITING_INITIAL_PRODUCTS',{phase,browser_preserved:true,manual_action_required:false,
+      initial_products_wait_ms:decision.clock.activeWaitMs,initial_products_timeout_seconds:INITIAL_PRODUCTS_TIMEOUT_SECONDS,
+      loading_placeholders:state.loadingPlaceholderCount||0,
+      loading_reason:state.loading?'PAGE_LOADING':emptyDecision.clock?.candidate?'CONFIRMING_EMPTY_RESULTS':'WAITING_PRODUCT_CARDS'});
+  }
   if (decision.stop) {
     finalStatus = decision.status;
     const details = { phase, reason: decision.reason, stop_reason: decision.reason,
@@ -1321,8 +1335,9 @@ async function submitHomeSearch() {
     const input=arguments[0];
     const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>3&&r.height>3&&s.visibility!=='hidden'&&s.display!=='none';};
     const form=input.closest('form[role="search"],form');
-    const button=[...(form||document).querySelectorAll('[aria-label="Submit search"],button[type="submit"],input[type="submit"]')]
-      .find(e=>visible(e)&&!e.disabled&&e.getAttribute('aria-disabled')!=='true')||null;
+    const button=[...(form||input.parentElement||document).querySelectorAll('button,[role="button"],input[type="submit"]')]
+      .find(e=>visible(e)&&!e.closest('[aria-hidden="true"]')&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'
+        &&(e.getAttribute('type')==='submit'||/^(?:submit search|search|提交搜索请求|搜索)$/i.test((e.getAttribute('aria-label')||e.getAttribute('title')||'').trim())))||null;
     return {value:input.value,focused:document.activeElement===input,button,
       button_info:button?{tag:button.tagName,role:button.getAttribute('role'),label:button.getAttribute('aria-label')}:null};
   `, [state.element]);
@@ -1338,8 +1353,8 @@ async function submitHomeSearch() {
   if (finalCheckpoint) return finalCheckpoint;
   let submissionMode = SEARCH_SUBMISSION;
   if (submissionMode === 'icon' && !typed.button?.[EKEY]) {
-    submissionMode = 'enter';
-    await appendEvent('SEARCH_ICON_UNAVAILABLE', {fallback:'enter',query:QUERY});
+    await appendEvent('SEARCH_ICON_UNAVAILABLE', {fallback:null,query:QUERY});
+    return {submitted:false,method:'DEFERRED',reason:'SEARCH_ICON_UNAVAILABLE'};
   }
   if (submissionMode === 'icon') {
     await wd('POST', `/element/${typed.button[EKEY]}/click`, {});

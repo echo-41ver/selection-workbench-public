@@ -44,3 +44,17 @@ test('visible footer marker is detected outside the first 5000 body characters',
  try { assert.equal(inspectSearchEnd().noMoreResultsVisible,true); }
  finally { globalThis.document=previousDocument;globalThis.getComputedStyle=previousStyle; }
 });
+
+test('Chinese end marker is recognized without treating it as an empty query',()=>{
+ const previousDocument=globalThis.document,previousStyle=globalThis.getComputedStyle;
+ const row=text=>({textContent:text,getBoundingClientRect:()=>({width:100,height:20})});
+ globalThis.getComputedStyle=()=>({display:'block',visibility:'visible'});
+ try {
+  for(const text of ['没有更多结果','沒有更多結果','— 没有更多结果 —']){
+   globalThis.document={documentURI:healthy.documentURI,querySelectorAll:()=>[row(text)]};
+   assert.equal(inspectSearchEnd().noMoreResultsVisible,true);
+  }
+  globalThis.document={documentURI:healthy.documentURI,querySelectorAll:()=>[row('没有搜索结果')]};
+  assert.equal(inspectSearchEnd().noMoreResultsVisible,false);
+ }finally{globalThis.document=previousDocument;globalThis.getComputedStyle=previousStyle;}
+});

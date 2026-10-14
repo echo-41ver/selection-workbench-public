@@ -184,6 +184,31 @@ def complete_empty_query(run,worker,query,evidence):
         save(run,data)
 
 
+def requeue_unsettled_empty_queries(run):
+    """Revisit old single-sample emptiness without touching collected passes."""
+    changed=[]
+    with locked(run):
+        data=read(run)
+        for job in data.get('jobs',[]):
+            evidence=job.get('no_results_evidence') or {}
+            if not job.get('complete') or not evidence:continue
+            if (evidence.get('protocol')=='VISIBLE_EMPTY_RESULTS_STABLE_V2'
+                    and evidence.get('loading') is False and (evidence.get('stable_ms') or 0)>=15000
+                    and (evidence.get('samples') or 0)>=3):continue
+            _ensure_pass_states(job);reset=False
+            for state in job['sort_passes'].values():
+                if state.get('skipped') and state.get('completion_reason')=='EXPLICIT_EMPTY_QUERY_RESULTS':
+                    state.update(started=False,complete=False);state.pop('completed_at',None)
+                    state.pop('skipped',None);state.pop('completion_reason',None);reset=True
+            if reset:
+                job['complete']=False;job['started']=any(s.get('started') for s in job['sort_passes'].values())
+                job.pop('completed_at',None)
+                job.pop('no_results_evidence',None);job['empty_requeued_at']=time.time()
+                changed.append(job['query'])
+        if changed:save(run,data)
+    return changed
+
+
 def complete_pass(run, worker, query, sort):
     if sort not in _SORTS: raise ValueError(f'Unknown TEMU sort pass: {sort}')
     with locked(run):

@@ -3,6 +3,7 @@ import { classifyPageState } from './temu_flower_recovery_policy.mjs';
 export const DEFAULT_INITIAL_PRODUCTS_TIMEOUT_SECONDS = 180;
 
 export function confirmedEmptyQueryResults(state={},query='') {
+  if(state.loading!==false || Number(state.loadingPlaceholderCount)>0 || state.transientStateUnavailable)return false;
   if(classifyPageState(state) || state.loginFormVisible || Number(state.visibleGoodsCount)>0 || state.rows?.length) return false;
   let url;try{url=new URL(String(state.url||''));}catch{return false;}
   const normalize=value=>String(value||'').trim().replace(/\s+/g,' ').toLowerCase();
@@ -15,6 +16,21 @@ export function confirmedEmptyQueryResults(state={},query='') {
   const english=text.match(/no results for\s*[“"]?([^\n]+?)[”"]?(?:\n|$)/i);
   if(english)return normalize(english[1])===normalize(query);
   return /没有搜索结果|未找到任何(?:相关)?结果|no (?:search )?results found|no results matching|we couldn['’]t find any results/i.test(text);
+}
+
+export function decideEmptyQueryResults({state={},query='',previous=null,nowMs}={}) {
+  let target=false;try{target=new URL(state.url).searchParams.get('search_key')?.trim().toLowerCase()===query.trim().toLowerCase();}catch{}
+  if(!target)return {clock:null,confirmed:false};
+  const targetAt=previous?.targetAt??nowMs;
+  const candidate=confirmedEmptyQueryResults(state,query)
+    && String(state.searchInputValue||'').trim().toLowerCase()===query.trim().toLowerCase();
+  const same=candidate&&previous?.candidate&&previous.text===state.text;
+  const firstAt=same?previous.firstAt:nowMs;
+  const samples=candidate?(same?previous.samples+1:1):0;
+  const stableMs=candidate?Math.max(0,nowMs-firstAt):0;
+  return {clock:{targetAt,firstAt,samples,candidate,text:state.text},
+    confirmed:candidate&&samples>=3&&stableMs>=15000&&nowMs-targetAt>=30000,
+    stableMs,samples};
 }
 
 // One clock covers every initial-search/bootstrap loop. Human intervention

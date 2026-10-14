@@ -64,9 +64,9 @@ export function inspectSearchEnd() {
   const labels = [...document.querySelectorAll('button,a,div,span,p')]
     .filter(visible).map(element => (element.textContent || '').trim());
   return {
-    noMoreResultsVisible: labels.some(text => /^[\s—–·-]*No more results[.!]?[\s—–·-]*$/i.test(text)),
-    seeMorePresent: labels.some(text => /^See more$/i.test(text)),
-    tryAgainVisible: labels.some(text => /^Try again$/i.test(text)),
+    noMoreResultsVisible: labels.some(text => /^[\s—–·-]*(?:No more results?|没有更多结果|沒有更多結果|无更多结果|無更多結果)[.!。！]?[\s—–·-]*$/i.test(text)),
+    seeMorePresent: labels.some(text => /^(?:See more|查看更多|顯示更多|显示更多)$/i.test(text)),
+    tryAgainVisible: labels.some(text => /^(?:Try again|重试|重試)$/i.test(text)),
     pageFaultVisible: /^(?:about:neterror|chrome-error:)/i.test(document.documentURI || ''),
   };
 }

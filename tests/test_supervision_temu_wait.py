@@ -66,7 +66,7 @@ def test_initial_wait_policy_ready_and_explicit_failures():
 HARNESS = r"""
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {decideInitialProductsWait} from './scripts/temu_initial_wait_policy.mjs';
+import {decideInitialProductsWait,decideEmptyQueryResults} from './scripts/temu_initial_wait_policy.mjs';
 import * as bootstrapPolicy from './scripts/temu_search_bootstrap_policy.mjs';
 import {terminalCollectionStop} from './scripts/collection_checkpoint.mjs';
 import {classifyPageState as classify} from './scripts/temu_flower_recovery_policy.mjs';
@@ -93,7 +93,7 @@ const page = async () => {
   return failure;
 };
 const context = vm.createContext({
-  ...bootstrapPolicy, decideInitialProductsWait, classify, terminalCollectionStop,
+  ...bootstrapPolicy, decideInitialProductsWait,decideEmptyQueryResults, classify, terminalCollectionStop,
   supersededByVerification, observeHttpPageTransition, URL, humanVerificationActive:false,
   httpBlock:null, process:{exitCode:0},
   Date:{now:()=>tick}, now:()=>new Date(tick).toISOString(),

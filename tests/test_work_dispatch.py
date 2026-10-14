@@ -1,6 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from selection_automation import work_dispatch as dispatch
 import json
+import sys
+from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 
 
 def test_recent_follows_same_keyword_sales_before_next_keyword(tmp_path):
@@ -27,12 +30,28 @@ def test_confirmed_empty_query_skips_both_sorts_and_preserves_next_job(tmp_path)
 def test_empty_checkpoint_requires_matching_query_and_explicit_source_evidence(tmp_path):
     from pipeline import confirmed_empty_checkpoint
     progress={'status':'KEYWORD_NO_RESULTS','unique_goods':0,'completion_basis':'EXPLICIT_EMPTY_QUERY_RESULTS',
-              'no_results_evidence':{'confirmed':True,'query':'empty spatula',
+              'no_results_evidence':{'confirmed':True,'protocol':'VISIBLE_EMPTY_RESULTS_STABLE_V2',
+                'loading':False,'stable_ms':15000,'samples':3,'query':'empty spatula',
                 'url':'https://www.temu.com/search_result.html?search_key=empty%20spatula'}}
     assert confirmed_empty_checkpoint(progress,'empty spatula')
     assert not confirmed_empty_checkpoint(progress,'another spatula')
     assert not confirmed_empty_checkpoint({**progress,'unique_goods':1},'empty spatula')
     assert not confirmed_empty_checkpoint({**progress,'manual_action_required':True},'empty spatula')
+    old={**progress,'no_results_evidence':{**progress['no_results_evidence'],'protocol':'OLD'}}
+    assert not confirmed_empty_checkpoint(old,'empty spatula')
+
+
+def test_requeue_old_empty_skips_preserves_real_completed_passes(tmp_path):
+    dispatch.sync(tmp_path,[{'query':'old empty','max_products':10},{'query':'collected','max_products':10}],['w1'])
+    job=dispatch.claim_pass(tmp_path,'w1')
+    dispatch.complete_empty_query(tmp_path,'w1',job['query'],{'confirmed':True})
+    data=dispatch.read(tmp_path);other=next(row for row in data['jobs'] if row['query']!=job['query'])
+    other['sort_passes']['sales'].update(started=True,complete=True);dispatch.save(tmp_path,data)
+    assert dispatch.requeue_unsettled_empty_queries(tmp_path)==[job['query']]
+    data=dispatch.read(tmp_path);old=next(row for row in data['jobs'] if row['query']==job['query'])
+    assert not old['complete'] and all(not p['complete'] and not p['started'] for p in old['sort_passes'].values())
+    assert next(row for row in data['jobs'] if row['query']!=job['query'])['sort_passes']['sales']['complete']
+    assert dispatch.requeue_unsettled_empty_queries(tmp_path)==[]
 
 
 def test_weighted_assignment_and_idle_stealing_keeps_started_owner(tmp_path):
