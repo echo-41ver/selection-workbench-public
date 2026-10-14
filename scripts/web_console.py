@@ -307,8 +307,10 @@ class Console:
             if any(Path(arg).name=='collect_amazon_search_frontend.mjs' for arg in argv):
                 from selection_automation.browser_transport import amazon_environment
                 env={**(env if env is not None else os.environ),**amazon_environment(self.root)}
+        python=self.root/'.venv/Scripts/python.exe'
+        provider_runtime=str(python) if argv and Path(argv[0]).name=='collect_market_evidence.py' and python.is_file() else sys.executable
         command=([shutil.which('node') or 'node',*argv[1:]] if argv and argv[0]=='node'
-                 else [sys.executable,*argv])
+                 else [provider_runtime,*argv])
         child=subprocess.Popen(command,cwd=self.root,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         deadline=time.monotonic()+timeout
         while child.poll() is None:

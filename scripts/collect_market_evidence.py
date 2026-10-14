@@ -45,11 +45,9 @@ def run(category_path, force=False):
         if not force and cached.get('status')=='COMPLETE': return cached
         save(state_path,{'status':'RUNNING','message':'正在读取极鲸云上架与销量数据'})
         try:
-            # This standalone provider process uses direct HTTPS; TEMU's browser
-            # proxy and the system proxy settings are unaffected.
-            from urllib.request import build_opener, ProxyHandler
-            import geekbi_temu_mcp.auth as provider_auth
-            provider_auth.urlopen=build_opener(ProxyHandler({})).open
+            # Keep the provider's normal Windows/proxy route for saved account
+            # authorization; forcing direct HTTPS can use a different exit.
+            # TEMU's residential browser route is configured independently.
             from geekbi_temu_mcp.auth import ActionRequired, GeekBIError
             result=collect(category,Provider(),lambda state:save(state_path,state),
                            choose_categories=choose_categories if os.environ.get('DEEPSEEK_API_KEY') else None)
