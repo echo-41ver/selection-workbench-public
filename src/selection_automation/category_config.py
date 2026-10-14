@@ -41,4 +41,7 @@ def load_category(path: Path, *, compile_authored_policy: bool = False) -> dict[
     validate(value)
     from .commercial import settings
     settings(value.get('commercial'))
+    if isinstance(value['stage3'].get('provider'),dict):
+        from .stage3_provider import settings as provider_settings
+        provider_settings(value['stage3']['provider'])
     return value

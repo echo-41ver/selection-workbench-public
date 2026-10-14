@@ -1,6 +1,6 @@
 ---
 name: amazon-temu-automation
-description: 输入品类、Amazon前X名、TEMU每关键词数量和DeepSeek Key，启动真实前端采集、三层严格同款分析和持续Excel；支持状态、验证码恢复、换session和停止。
+description: 输入品类、Amazon前X名、TEMU每关键词数量与同款数门槛，执行真实前端采集、可配置第三层同款分析与精简选品Excel；支持状态、验证码恢复、换session和停止。
 ---
 
 # 本地自动选品
@@ -44,3 +44,6 @@ description: 输入品类、Amazon前X名、TEMU每关键词数量和DeepSeek Ke
 住宅代理只在该 worker 采集或等待人工验证码/登录时允许TEMU及其必要资源；停止后撤销连接。图片下载不走住宅代理。查看 runs/<key>/excel 的固定文件，若被锁则打开最新“查看快照”，不打开_data.xlsx；程序等待解锁后自动覆盖固定文件。完成范围是榜单前X名×本次关键词并集，不是平台全量。不要修改同事Agent模型或权限设置。
 
 维护运营候选、本地每日推荐、价格区间和已有品类规则复用时，读取 [运营候选与每日推荐证据](references/operator_daily_evidence.md)。
+
+
+同事版默认交付精简选品结果，第三层支持四种方案，详见[选品结果与第三层配置](references/selection_result_delivery.md)。

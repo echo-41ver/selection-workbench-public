@@ -36,9 +36,11 @@ def price_range(row):
     skus=row.get('skus') or row.get('variants') or []
     if isinstance(skus,list):
         prices=[number(s.get('price_usd')) for s in skus if isinstance(s,dict) and s.get('available',True) is not False]
-        if prices and all(p is not None and p>0 for p in prices):
-            return {'min':min(prices),'max':max(prices),'currency':'USD',
-                    'basis':'已采集可售规格子集' if row.get('all_variants_priced') is not True else '全部已核验可售规格',
+        valid=[p for p in prices if p is not None and p>0]
+        if valid:
+            complete=row.get('all_variants_priced') is True and len(valid)==len(prices)
+            return {'min':min(valid),'max':max(valid),'currency':'USD',
+                    'basis':'全部已核验可售规格' if complete else '已采集有价格的可售规格子集；其余规格价格未取得',
                     'observed_price':observed}
     return {'min':None,'max':None,'currency':'USD','basis':'未取得规格价格区间','observed_price':observed}
 

@@ -259,7 +259,7 @@ def test_resume_uses_current_saved_task_and_never_regenerates_or_enables_paid_an
     calls=[]
     monkeypatch.setattr(console,'invoke',lambda argv:(calls.append(argv) or SimpleNamespace(returncode=0)))
     assert console.resume_current({})['category_key']=='current'
-    assert calls[0][1:]==['start','--category',str(base/'category.json')]
+    assert calls[0][1:]==['start','--preserve-prepared','--category',str(base/'category.json')]
     assert '--paid' not in calls[0]
     assert data.read_text()=='existing-data'
     monkeypatch.setattr(console,'owner',lambda:{'category_key':'current'})

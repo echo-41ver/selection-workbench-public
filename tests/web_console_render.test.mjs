@@ -174,7 +174,7 @@ test('third layer starts during collection and displays live queue and stop cont
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const a=html.indexOf('function stage3Button(data)'),b=html.indexOf('\n}',a)+2;
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,Math,Number,codexReviewPanel:()=>{}});
+ const context=vm.createContext({$:get,statusFresh:true,busy:false,Math,Number,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
  vm.runInContext(html.slice(a,b),context);
  context.data={active:true,category_key:'task',scope:{execution_mode:'full'},stage3_control:{can_start:true,running:false,progress:{total:100,completed:40,pending:60,percent:40,rate_per_hour:60,eta_seconds:3600,rate_source:'history'}}};
  vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,false);assert.match(get('stage3-count').textContent,/100/);assert.equal(get('stage3-progress-fill').style.width,'40%');assert.match(get('stage3-speed').textContent,/1 小时 0 分钟/);
@@ -187,13 +187,13 @@ test('combined paid and Codex completion shows full progress without stale ETA',
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{}});
+ const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);
  context.data={category_key:'fixture',stage3_control:{can_start:false,progress:{total:10855,completed:10855,api_completed:5976,codex_completed:4879,pending:0,pending_after_codex:0,eta_seconds:1616}}};
  vm.runInContext('stage3Button(data)',context);
  assert.equal(get('stage3-progress-fill').style.width,'100%');
  assert.match(get('stage3-count').textContent,/已处理 10,855/);
- assert.match(get('stage3-count').textContent,/API 5,976 \/ Codex 4,879/);
+ assert.match(get('stage3-count').textContent,/已处理 10,855 对/);
  assert.match(get('stage3-speed').textContent,/剩余 0 分钟/);
  assert.equal(get('start-stage3').disabled,true);
 });
@@ -203,7 +203,7 @@ test('cold candidate progress never unlocks paid action while collection is acti
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(){}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{}});
+ const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);context.data={active:true,category_key:'fixture',stage3_control:{can_start:true,progress:{counting:true}}};
  vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,true);
  assert.match(get('stage3-phase').textContent,/正在核对/);
@@ -214,10 +214,10 @@ test('old authorized retry success is pending free review instead of current API
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(){}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{}});vm.runInContext(code,context);
+ const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});vm.runInContext(code,context);
  context.data={category_key:'fixture',stage3_control:{can_start:false,progress:{total:1,completed:0,api_completed:0,pending:1,pending_after_codex:1,runnable_pending:0,billing_retry_consumed_pairs:1}}};
  vm.runInContext('stage3Button(data)',context);
- assert.match(get('stage3-count').textContent,/已处理 0 对.*API 0.*待处理 1 对/);
+ assert.match(get('stage3-count').textContent,/已处理 0 对.*待处理 1 对/);
  assert.match(get('stage3-count').textContent,/旧版本已补试，当前需免费看图复核，不自动付费/);
  assert.equal(get('start-stage3').disabled,true);
 });
@@ -227,13 +227,13 @@ test('changed candidate input retains dated completion snapshot without claiming
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(){}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{}});vm.runInContext(code,context);
+ const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});vm.runInContext(code,context);
  for(const flag of ['refreshing','current_inputs_pending']){
   context.data={category_key:'fixture',stage3_control:{can_start:true,progress:{total:10855,completed:10855,api_completed:5976,codex_completed:4879,pending_after_codex:0,eta_seconds:0,updated_at:1791566063,[flag]:true}}};
   vm.runInContext('stage3Button(data)',context);
   assert.equal(get('start-stage3').disabled,true);
   assert.match(get('stage3-phase').textContent,/最近核验快照.*当前待处理尚未确认/);
-  assert.match(get('stage3-count').textContent,/API 5,976 \/ Codex 4,879/);
+  assert.match(get('stage3-count').textContent,/已处理 10,855 对/);
   assert.match(get('stage3-count').textContent,/快照待处理 0.*最近核验时间.*当前输入待核对/);
   assert.match(get('stage3-speed').textContent,/新增输入核对后显示/);
   assert.doesNotMatch(get('stage3-speed').textContent,/当前候选已全部处理|剩余 0 分钟/);

@@ -31,7 +31,7 @@ def test_codex_results_publish_three_layers_without_paid_authorization(tmp_path,
     monkeypatch.setattr(selection_automation.commercial, 'build_report', lambda *args: {})
     result = publish_all.publish(category)
     assert result['errors'] == {}
-    assert exports == (['layer12', 'layer123'] if has_reviews else ['layer12'])
+    assert exports == ['layer123']
     assert not (base / 'stage123/paid_enabled.json').exists()
     if has_reviews:
         from watch_stage3_excel import source_paths, signature

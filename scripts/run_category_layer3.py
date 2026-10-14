@@ -160,7 +160,8 @@ def run(args, candidate_path):
     held_pairs = set() if args.validate_only else billing_hold(
         args.results.with_name('request_intents.jsonl'), args.results)['pairs']
     fatal_file=args.results.with_name('provider_blocked.json')
-    key_identity=__import__('hashlib').sha256(os.getenv('DEEPSEEK_API_KEY','').encode()).hexdigest()
+    key_identity=__import__('hashlib').sha256((os.getenv('SELECTION_STAGE3_ENDPOINT','')+'\n'+
+        os.getenv('SELECTION_STAGE3_API_KEY',os.getenv('DEEPSEEK_API_KEY',''))).encode()).hexdigest()
     def pending_rows():
         count = 0
         for row in rows(candidate_path):
@@ -232,18 +233,17 @@ def consume(args, cat, fatal_file, key_identity, pending):
             raise SystemExit('API鉴权或余额阻断，等待更新key或清除 provider_blocked.json 后恢复')
         fatal_file.unlink()
     pending = chain([first], pending)
-    key = os.getenv('DEEPSEEK_API_KEY', '').strip()
-    if not key:
-        raise SystemExit('DEEPSEEK_API_KEY is required')
-    endpoint = stage.get('base_url', 'https://api.deepseek.com').rstrip('/')
-    # Never send a company DeepSeek key to an agent-generated arbitrary endpoint.
-    if endpoint != 'https://api.deepseek.com':
-        raise SystemExit('Only the configured official DeepSeek endpoint is supported')
+    from selection_automation.stage3_provider import from_category, request_key, VisualClient
+    provider=from_category(cat)
+    try: key=request_key(provider)
+    except ValueError as exc: raise SystemExit(str(exc)) from None
+    endpoint = provider['base_url']
     from openai import OpenAI, DefaultHttpxClient
     from httpx2 import Timeout, Limits
     lock = threading.Lock()
     stop = threading.Event()
     fatal_stop = threading.Event()
+    incomplete_stop = threading.Event()
     requests = 0
     sent_requests = 0
     ledger = args.results.with_name('requests.jsonl')
@@ -279,8 +279,14 @@ def consume(args, cat, fatal_file, key_identity, pending):
             for identity, row in zip(ids, batch):
                 content += [evidence_block(row,'temu',identity), {'type': 'input_image', 'image_url': _data_url(row['temu_image_path']), 'detail': 'high'}]
             prompt, schema = protocol(cat, len(batch))
+            if provider['protocol']=='decisions':
+                # Native decisions are pairwise; reference examples would change image positions.
+                content=[evidence_block(batch[0],'amazon','Amazon基准'),
+                         {'type':'input_image','image_url':_data_url(batch[0]['amazon_image_path'])},
+                         evidence_block(batch[0],'temu','TEMU候选'),
+                         {'type':'input_image','image_url':_data_url(batch[0]['temu_image_path'])}]
             from selection_automation.vision import GROUP_WIRE_VERSION
-            wire_version = GROUP_WIRE_VERSION if 'amazon' in schema.get('properties', {}) else 'independent-candidates-v1'
+            wire_version = 'product-choice-v1' if provider['protocol']=='decisions' else GROUP_WIRE_VERSION if 'amazon' in schema.get('properties', {}) else 'independent-candidates-v1'
             budget = output_token_budget(stage, len(batch))
             with lock:
                 if stop.is_set() or not authorized() or (args.max_requests and requests >= args.max_requests):
@@ -288,6 +294,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     return
                 requests += 1
             if client_setup_error is not None:raise client_setup_error
+            prepared_data=client.prepare(content,prompt)
             append(intent_log, {'request_id': request_id, 'status': 'started', 'time': time.time(),
                                 'pairs': len(batch), 'vision_revision_keys': [row['vision_revision_key'] for row in batch],
                                 'effort': effort, 'max_output_tokens': budget, 'wire_version': wire_version})
@@ -298,7 +305,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
             response = client.responses.create(model=stage.get('model', 'deepseek-flash'), instructions=prompt,
                 input=[{'role': 'user', 'content': content}], reasoning={'effort': effort},
                 text={'format': {'type': 'json_schema', 'name': 'category_facts', 'strict': True, 'schema': schema}},
-                max_output_tokens=budget)
+                max_output_tokens=budget,_prepared_data=prepared_data)
             usage = response.usage.model_dump() if response.usage else {}
             received = True
             response_id = response.id
@@ -309,10 +316,10 @@ def consume(args, cat, fatal_file, key_identity, pending):
             if response_status == 'incomplete':
                 raise IncompleteVisualResponse(incomplete_reason)
             parsed, format_repairs = parse_visual_response_compatible(response.output_text, allow_preamble=True)
-            facts = decode(cat, parsed, ids)
+            facts = {ids[0]:parsed['decision_facts']} if provider['protocol']=='decisions' else decode(cat, parsed, ids)
             for i, (identity, row) in enumerate(zip(ids, batch)):
                 scored = score(cat, facts[identity])
-                if effort == 'low' and scored['hard_conflicts'] and facts[identity]['overall_confidence'] < .65:
+                if effort == 'low' and scored['hard_conflicts'] and facts[identity].get('overall_confidence',1) < .65:
                     call([row], 'high')
                     continue
                 append(args.results, {**{k: row[k] for k in ('asin','goods_id','pair_revision','vision_revision_key','attempt')},
@@ -322,6 +329,10 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     **({'response_format_compatibility': {'version': 'lossless-envelope-v2-syntax-only', 'repairs': format_repairs}} if format_repairs else {})})
         except Exception as exc:
             from selection_workflow.api_image_input import ImageInputError
+            if isinstance(exc,IncompleteVisualResponse):
+                incomplete_stop.set();stop.set()
+            if getattr(exc,'response_id',None):response_id=exc.response_id
+            if getattr(exc,'model_usage',None):usage=exc.model_usage
             status = getattr(exc, 'status_code', None)
             cause_types = safe_exception_causes(exc)
             append(args.results.with_name('exception_diagnostics.jsonl'),
@@ -372,7 +383,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 fatal_stop.set()
         if not billing_uncertain:
             settle_intent()
-    size = max(1, min(12, stage.get('batch_size', 12)))
+    size = 1 if provider['protocol']=='decisions' else max(1, min(12, stage.get('batch_size', 12)))
     def batches():
         # At most one partial batch per Amazon image, instead of N*M pending rows.
         groups = defaultdict(list)
@@ -393,8 +404,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
             api_timeout=Timeout(timeout_seconds,connect=30,pool=30)
             transport=resources.enter_context(DefaultHttpxClient(trust_env=False,timeout=api_timeout,
                 limits=Limits(max_connections=width,max_keepalive_connections=min(width,256))))
-            client=resources.enter_context(OpenAI(api_key=key,base_url=endpoint,max_retries=0,
-                timeout=api_timeout,http_client=transport))
+            client=resources.enter_context(VisualClient(provider,transport,key,api_timeout))
         except Exception as exc:
             # Preserve local NO_CHARGE bookkeeping, without a sent intent.
             client_setup_error=exc
@@ -408,6 +418,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
     after = billing_hold(intent_log, args.results)
     if after['fail_closed'] or fatal_stop.is_set():
         raise SystemExit('未结算视觉请求：请求被拒绝或传输结果不明，费用待核对，已阻止付费重发；请按交付说明核对供应商用量，部分结果仍可导出')
+    if incomplete_stop.is_set():
+        raise SystemExit('模型输出被截断，已保存请求编号与用量并暂停；可能已计费，不自动重复请求。请调整输出预算后手动继续')
     print(json.dumps({'API请求数': sent_requests, '暂停': stop.is_set(), '费用待核对商品对':len(after['pairs'])}, ensure_ascii=False))
 
 

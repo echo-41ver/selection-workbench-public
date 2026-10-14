@@ -57,7 +57,7 @@ def ensure_publisher(category_path, root=ROOT):
     with (folder / 'excel_publisher.log').open('ab') as log:
         child = subprocess.Popen([sys.executable, str(root / 'scripts/watch_stage3_excel.py'),
                                   '--category', str(category_path)], cwd=root,
-            env={k: v for k, v in os.environ.items() if k != 'DEEPSEEK_API_KEY'},
+            env={k: v for k, v in os.environ.items() if k not in {'DEEPSEEK_API_KEY','SELECTION_STAGE3_API_KEY'}},
             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     return child
@@ -104,7 +104,10 @@ def source_paths(category_path, base):
 
 def export_code_paths():
     return [ROOT / 'scripts' / f'{name}.py' for name in (
-        'export_category_workbooks', 'export_incremental_layer123_excel', 'export_shower_layer123_excel')] + [
+        'export_category_workbooks', 'export_selection_result', 'export_incremental_layer123_excel', 'export_shower_layer123_excel')] + [
+            ROOT/'src/selection_automation/selection_delivery.py',
+            ROOT/'src/selection_automation/operations.py',
+            ROOT/'src/selection_automation/stage3_provider.py',
             ROOT/'src/selection_automation/codex_visual_review.py',
             ROOT/'src/selection_automation/commercial.py',
             ROOT/'src/selection_automation/rules.py',
@@ -123,7 +126,9 @@ def fresh_export():
         for name in ('selection_automation.visual_decision', 'selection_automation.identity',
                      'selection_automation.rules',
                      'export_incremental_layer123_excel', 'export_shower_layer123_excel',
-                     'selection_automation.codex_visual_review', 'selection_automation.commercial'):
+                     'selection_automation.codex_visual_review', 'selection_automation.operations', 'selection_automation.commercial',
+                     'selection_automation.stage3_provider', 'selection_automation.selection_delivery',
+                     'export_selection_result'):
             if name in sys.modules:
                 importlib.reload(sys.modules[name])
         module = importlib.reload(module)
@@ -184,7 +189,7 @@ def publish(category_path):
                 'snapshot', '--config', str(base / 'stage12_config.json'),
                 '--snapshot-dir', str(frozen), '--path-key', key], cwd=ROOT,
                 check=True, stdout=subprocess.DEVNULL,
-                env={k: v for k, v in os.environ.items() if k != 'DEEPSEEK_API_KEY'})
+                env={k: v for k, v in os.environ.items() if k not in {'DEEPSEEK_API_KEY','SELECTION_STAGE3_API_KEY'}})
         if not summary.exists():
             return False
         before = signature(source_paths(category_path, base))

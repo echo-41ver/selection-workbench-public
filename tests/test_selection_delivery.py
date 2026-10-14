@@ -1,0 +1,174 @@
+import json
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+import pytest
+from openpyxl import load_workbook
+
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+from export_selection_result import export
+from selection_automation.selection_delivery import build_delivery
+from selection_automation.stage3_provider import settings, apply, VisualClient, request_key
+from selection_automation.rules import score
+from selection_automation.operations import price_range
+
+
+def setup(root, n=2):
+    base=root/'runs/fixture'
+    (base/'amazon').mkdir(parents=True)
+    (base/'temu/union').mkdir(parents=True)
+    cat={'category_key':'fixture','category_name_zh':'测试商品','commercial':{'same_limit':n},'stage3':{'modules':{'design':100}}}
+    amazon=[{'asin':a,'title':a+' title','price_usd':12,'product_url':'https://www.amazon.com/dp/'+a,
+             'monthly_sales_text':'100+ bought in past month','rating':4.5,'review_count':10,
+             'specifications':[{'label':'材质','value':'棉'}]} for a in ['A1','A2','A3']]
+    (base/'amazon/amazon_frontend_latest.json').write_text(json.dumps({'records':amazon,'observed_at':'2026-10-14T01:00:00Z'}),encoding='utf-8')
+    temu=[{'goods_id':str(g),'title':'same product','price_usd':4,'rating':4.7,'review_count':0,
+           'product_url':'https://www.temu.com/goods.html?goods_id='+str(g),'sales_text':'1K+ sold',
+           'price_range':{'min':3,'max':8,'currency':'USD','basis':'页面明确区间'},
+           'specifications':{'材质':'棉'},'long_detail':'证据'*18000} for g in [1,2]]
+    (base/'temu/union/products.jsonl').write_text('\n'.join(json.dumps(p,ensure_ascii=False) for p in temu),encoding='utf-8')
+    products=[]
+    for a,gids,state,pending in [('A1',['1'],'SAMPLE_PASS',0),('A2',['1','2'],'SAMPLE_PASS',0),('A3',[],'UNKNOWN',2)]:
+        products.append({'asin':a,'confirmed_goods_ids':gids,'match':{'confirmed':len(gids),'state':state,'pending':pending,'possible':0},
+                         'confirmed_pairs':[{'goods_id':g,'state':'确认同款','reason':'fixture visual fact','model':'fixture-model'} for g in gids]})
+    return cat,{'products':products,'market':{},'as_of':'2026-10-14T02:00:00Z'}
+
+
+def test_strict_threshold_and_unfinished_evidence(tmp_path):
+    cat,report=setup(tmp_path)
+    data=build_delivery(tmp_path,cat,report)
+    assert [p['asin'] for p in data['products']]==['A1','A3']
+    assert [(p['asin'],p['goods_id']) for p in data['pairs']]==[('A1','1')]
+    assert data['products'][1]['advice']['conclusion']=='待完成同款核验'
+    assert data['products'][1]['advice']['confidence']=='未知'
+    assert data['products'][0]['amazon']['price']['min'] is None
+
+
+def test_reopen_focused_excel_and_full_fields(tmp_path):
+    cat,report=setup(tmp_path)
+    delivered=export(tmp_path,cat,report)
+    book=load_workbook(delivered['固定查看副本'],read_only=False,data_only=False)
+    assert book.sheetnames==['选品结论','同款商品明细','商品完整字段']
+    assert book['选品结论'].max_row==6 and book['同款商品明细'].max_row==5
+    assert book['选品结论']['A5'].value=='A1' and book['选品结论']['A6'].value=='A3'
+    detail=book['同款商品明细'];headers=[c.value for c in detail[4]]
+    assert detail.cell(5,headers.index('TEMU最低价(USD)')+1).value==3
+    assert detail.cell(5,headers.index('TEMU最高价(USD)')+1).value==8
+    assert detail.cell(5,headers.index('TEMU评论数')+1).value==0
+    link=detail.cell(5,headers.index('TEMU商品链接')+1)
+    assert link.hyperlink and link.hyperlink.target.startswith('https://www.temu.com/') or link.data_type=='f' and 'https://www.temu.com/' in link.value
+    text=''.join(row[3] for row in book['商品完整字段'].iter_rows(min_row=5,values_only=True) if row[0]=='TEMU' and row[2]=='long_detail')
+    assert text=='证据'*18000
+    assert book['选品结论'].freeze_panes=='B5'
+    book.close()
+
+
+def test_empty_selection_has_no_cartesian_detail(tmp_path):
+    cat,report=setup(tmp_path,n=0)
+    delivery=export(tmp_path,cat,report)
+    book=load_workbook(delivery['固定查看副本'],read_only=True)
+    assert book['选品结论'].max_row==4 and book['同款商品明细'].max_row==4
+    book.close()
+
+
+@pytest.mark.parametrize('mode',['liquid_d1','multimodal_api','local_model','local_agent'])
+def test_four_modes_have_no_stored_key(mode):
+    config=settings({'mode':mode})
+    assert config['mode']==mode and 'api_key' not in config
+
+
+def test_key_cannot_follow_another_endpoint(monkeypatch):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_COMPANY_KEY')
+    with pytest.raises(ValueError):request_key(settings({'mode':'liquid_d1'}))
+    monkeypatch.setenv('SELECTION_STAGE3_API_KEY','TEST_ONLY_CUSTOM_KEY')
+    monkeypatch.setenv('SELECTION_STAGE3_ENDPOINT','https://example.invalid/v1')
+    assert request_key(settings({'base_url':'https://example.invalid/v1','model':'vision'}))=='TEST_ONLY_CUSTOM_KEY'
+    with pytest.raises(ValueError):request_key(settings({'base_url':'https://other.invalid/v1','model':'vision'}))
+
+
+def test_native_decision_payload_and_uncertainty():
+    provider=settings({'mode':'liquid_d1'})
+    calls=[]
+    probabilities={'same':.96,'different':.03,'unknown':.01}
+    response=SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'answers':{'same_product':{'choice':'same','probabilities':probabilities}},'usage':{'input_tokens':42,'output_tokens':0}})
+    transport=SimpleNamespace(post=lambda *args,**kwargs:calls.append((args,kwargs)) or response)
+    client=VisualClient(provider,transport,'TEST_ONLY_KEY',30)
+    result=client.create(model='d1',instructions='fixture identity rules',input=[{'content':[
+        {'type':'input_image','image_url':'data:image/png;base64,TEST_ONLY_IMAGE'},
+        {'type':'input_image','image_url':'data:image/png;base64,TEST_ONLY_IMAGE'}]}])
+    payload=json.loads(calls[0][1]['content'])
+    assert len(payload['images'])==2 and set(payload['questions']['same_product']['criteria'])=={'same','different','unknown'}
+    cat={'stage3':{'modules':{'design':100}}};apply(cat,provider)
+    facts=json.loads(result.output_text)['decision_facts']
+    assert score(cat,facts)['state']=='确认同款'
+    assert score(cat,facts)['total_score'] is None
+    facts['decision_api']['probabilities']={'same':.6,'different':.3,'unknown':.1}
+    assert score(cat,facts)['state']=='待补充证据'
+
+
+def test_bad_config_and_partial_variant_band():
+    with pytest.raises(ValueError):settings({'mode':'liquid_d1','model':'d1:free'})
+    with pytest.raises(ValueError):settings({'mode':'local_model','base_url':'https://remote.invalid/v1'})
+    with pytest.raises(ValueError):settings({'base_url':'https://TEST_ONLY_USER:TEST_ONLY_PASSWORD@proxy.example/v1'})
+    band=price_range({'skus':[{'price_usd':3},{'price_usd':7},{'price_usd':None}],'all_variants_priced':True})
+    assert (band['min'],band['max'])==(3,7) and '子集' in band['basis']
+
+
+@pytest.mark.parametrize('mode',['liquid_d1','multimodal_api','local_model','local_agent'])
+def test_console_dispatches_only_selected_provider_and_never_stops_collection(tmp_path,monkeypatch,mode):
+    import web_console as web
+    import run_codex_visual_pool as agent
+    console=web.Console(tmp_path)
+    base=tmp_path/'runs/fixture';base.mkdir(parents=True)
+    category={'category_key':'fixture','execution_mode':'full','stage3':{'modules':{'design':100}}}
+    (base/'category.json').write_text(json.dumps(category),encoding='utf-8')
+    monkeypatch.setattr(console,'current_run_key',lambda:('fixture',False))
+    monkeypatch.setattr(console,'stage3_snapshot',lambda key:{'total':3,'pending':3})
+    monkeypatch.setattr(web,'codex_review_control',lambda base:{'running':False})
+    monkeypatch.setattr(console,'saved_credential',lambda:'TEST_ONLY_COMPANY_KEY')
+    calls=[]
+    monkeypatch.setattr(console,'invoke',lambda *a,**kw:pytest.fail('Collection command invoked'))
+    monkeypatch.setattr(console,'launch_stage3_controller',lambda key,path,token:calls.append(('api',key,token)))
+    monkeypatch.setattr(agent,'codex_executable',lambda config:'fixture-codex.exe')
+    monkeypatch.setattr(agent,'ensure_pool',lambda path,root:calls.append(('agent',root)))
+    provider=settings({'mode':mode})
+    body={'provider':provider}
+    if mode in {'multimodal_api','liquid_d1'}:body['api_key']='TEST_ONLY_SELECTED_KEY'
+    result=console.start_stage3(body)
+    assert result['ok'] and result['provider']['mode']==mode
+    if mode=='local_agent':
+        assert calls==[('agent',tmp_path)]
+        config=json.loads((base/'stage123/codex_pool_config.json').read_text())
+        assert config['enabled'] and config['workers']==4
+    else:
+        assert calls==[('api','fixture','TEST_ONLY_SELECTED_KEY' if 'api_key' in body else '')]
+    assert 'TEST_ONLY_SELECTED_KEY' not in (base/'category.json').read_text()
+    # Manual continuation can reuse only the same run and service's in-memory key.
+    if mode=='liquid_d1':
+        console.stage3_busy=False
+        assert console.start_stage3({'provider':provider})['ok']
+        assert calls[-1]==('api','fixture','TEST_ONLY_SELECTED_KEY')
+
+
+def test_daitu_gpt_uses_task_form_native_stream_and_records_usage(monkeypatch):
+    import openai
+    monkeypatch.setattr(openai,'OpenAI',lambda **kw:SimpleNamespace())
+    provider=settings({'base_url':'https://api.daitu.cc','model':'gpt-6.1-sol','protocol':'chat_completions'})
+    assert provider['base_url']=='https://api.daitu.cc/v1' and provider['protocol']=='responses'
+    complete={'id':'response_fixture','status':'completed','usage':{'input_tokens':2,'output_tokens':1,'total_tokens':3},
+              'output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':'{"candidates":[]}'}]}]}
+    response=SimpleNamespace(headers={'content-type':'text/event-stream'},raise_for_status=lambda:None,
+        iter_lines=lambda:iter(['data: '+json.dumps({'type':'response.created','response':{'id':'response_fixture','status':'in_progress'}}),'',
+                               'data: '+json.dumps({'type':'response.completed','response':complete}),'']))
+    calls=[]
+    class Stream:
+        def __enter__(self):return response
+        def __exit__(self,*args):return False
+    transport=SimpleNamespace(stream=lambda *a,**k:calls.append((a,k)) or Stream())
+    client=VisualClient(provider,transport,'TEST_ONLY_DAITU_KEY',600)
+    result=client.create(model=provider['model'],input=[],instructions='fixture',reasoning={'effort':'low'})
+    assert calls[0][0]==('POST','https://api.daitu.cc/v1/responses')
+    assert calls[0][1]['json']['stream'] is True and calls[0][1]['json']['store'] is False
+    assert result.id=='response_fixture' and result.output_text=='{"candidates":[]}'
+    assert result.usage.model_dump()['total_tokens']==3

@@ -54,26 +54,23 @@ def test_readonly_loop_prepares_once_per_call_and_rereads_actual_image_bytes(tmp
     assert third['completed']==0 and len(contexts)==3
 
 
-def test_each_export_loop_has_one_context_and_preserves_expected_revision_keys(tmp_path,monkeypatch):
+def test_focused_export_reuses_report_without_full_cartesian_export(tmp_path,monkeypatch):
     category,base,pairs,images,rows=fixture(tmp_path)
     # Avoid real workbook, report construction and image/network operations.
     (base/'stage123/results.jsonl').write_text('',encoding='utf-8')
     monkeypatch.setattr(exporter,'ROOT',tmp_path)
     monkeypatch.setattr(exporter,'load_category',lambda _:category)
-    monkeypatch.setattr(commercial,'current_report',lambda *args:None)
-    contexts=count_contexts(monkeypatch,exporter)
-    observed=[];original=vision.compatible_vision_keys
-    def keys(category,pair,*,context=None):
-        value=original(category,pair,context=context)
-        assert value==original(category,pair)
-        observed.append((context,value));return value
-    monkeypatch.setattr(exporter,'compatible_vision_keys',keys)
-    monkeypatch.setattr(exporter,'export_stage_book',lambda destination,headers,records,meta,*args,**kwargs:
-                        {'count':len(list(records)),'meta':meta})
+    report={'products':[],'policy':{'same_limit':5}}
+    monkeypatch.setattr(commercial,'current_report',lambda *args:report)
+    import export_selection_result
+    calls=[]
+    monkeypatch.setattr(export_selection_result,'export',lambda root,cat,value:calls.append((root,cat,value)) or {'count':0})
+    def forbidden(*args,**kwargs):raise AssertionError('Full Cartesian Excel must not be generated')
+    monkeypatch.setattr(exporter,'export_stage_book',forbidden)
+    monkeypatch.setattr(exporter,'compatible_vision_keys',forbidden)
     for kind in ('layer12','layer123'):
-        assert exporter.export(base/'category.json',kind)['count']==2
-    assert len(contexts)==2 and contexts[0] is not contexts[1]
-    assert [context for context,_ in observed]==[contexts[0],contexts[0],contexts[1],contexts[1]]
+        assert exporter.export(base/'category.json',kind)['count']==0
+    assert calls==[(tmp_path,category,report)]*2
 
 
 def test_export_script_changes_do_not_invalidate_commercial_evidence_signature(tmp_path):

@@ -223,6 +223,9 @@ def _confidence(value: dict) -> float:
 
 
 def score(category: dict, value: dict) -> dict:
+    if isinstance(value, dict) and 'decision_api' in value:
+        from .stage3_provider import decision_score
+        return decision_score(category, value)
     from .identity import apply_identity
     from .visual_decision import scoring_category, final_decision
     effective = scoring_category(category)
