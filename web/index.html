@@ -181,7 +181,7 @@ function stage3Button(data){
  else if(p.eta_seconds!=null){const m=Math.ceil(p.eta_seconds/60);eta=`预计剩余 ${Math.floor(m/60)} 小时 ${m%60} 分钟`}
  const source=p.rate_source==='history_group_normalized'?`按历史 ${p.historical_sample_groups||0} 个成功组平均 ${p.historical_group_seconds||'未知'} 秒和当前并发推算，尚非本任务实测`:p.rate_source==='current'?'本任务已完成请求实测':'历史速度（旧口径，尚未归一）';
  const speed=p.rate_per_hour!=null?`约 ${Number(p.rate_per_hour).toLocaleString()} 对 / 小时（${source}）`:'速度统计中';
- $('stage3-speed').textContent=`${speed} · ${eta}`;
+ $('stage3-speed').textContent=`${speed.split('（')[0]}${p.rate_source==='current'?'':'（预估）'} · ${eta}`;
  if(!data?.stage3_control?.running&&data?.stage3_control?.codex_review?.running){$('stage3-speed').textContent='同款分析正在进行；完成部分任务后更新预计剩余时间。';}
  codexReviewPanel(data);
 }
