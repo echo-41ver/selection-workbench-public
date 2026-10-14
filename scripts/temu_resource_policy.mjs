@@ -1,6 +1,6 @@
 // Never reject scripts/styles by CDN hostname: the search UI loads them lazily.
 export function allowPageImages({documentUrl = '', preparing = false, humanVerification = false} = {}) {
-  if (preparing || humanVerification) return true;
+  if (humanVerification) return true;
   try { return /(?:bgn_verification|verification|captcha|verifyCode)/i.test(new URL(documentUrl).pathname); }
   catch { return false; }
 }

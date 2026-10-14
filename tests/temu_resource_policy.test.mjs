@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {nonEssentialRequest, allowPageImages, blockImageRequest} from '../scripts/temu_resource_policy.mjs';
 
-test('bootstrap and inline verification load images; only ordinary collection saves image traffic', () => {
+test('bootstrap blocks images while real verification remains usable', () => {
   const documentUrl = 'https://www.temu.com/search_result.html?search_key=remote';
-  assert.equal(allowPageImages({documentUrl, preparing:true}), true);
+  assert.equal(allowPageImages({documentUrl, preparing:true}), false);
   assert.equal(allowPageImages({documentUrl, humanVerification:true}), true);
   assert.equal(allowPageImages({documentUrl}), false);
   assert.equal(allowPageImages({documentUrl:documentUrl+'&refer_page_name=bgn_verification'}),false);

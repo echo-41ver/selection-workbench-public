@@ -1793,6 +1793,20 @@ async function waitForHttpVerificationRecovery(status) {
         page_state:pageClass,url:state.url || null,collection_requests_disabled:true});
       continue;
     }
+    if (verificationObserved && !pageClass && isPostVerificationEmptySearchSample(state) && !state.loading) {
+      await appendEvent('TERMINAL_HTTP_VERIFICATION_EMPTY_SEARCH_RESTORED',{query:QUERY,same_profile:true});
+      httpBlock=null;
+      initialProductsPreparing=true;
+      initialProductsWait={observedAtMs:Date.now(),activeWaitMs:0,manual:false};
+      await bootstrapThroughEmptySearch({navigate:false,reason:'POST_VERIFICATION_EMPTY_SEARCH'});
+      await prepareSalesSort();
+      const restored=await scan({commit:false});
+      const restoredSort=await readSalesSort();
+      if (confirmsSalesSort(restoredSort,QUERY)) return {state:restored,sort:restoredSort,previous_http_block:originalBlock};
+      verificationObserved=false;
+      stableChecks=0;previousSignature=null;
+      continue;
+    }
     const blockChanged=Boolean(httpBlock && (!originalBlock
       || httpBlock.status!==originalBlock.status || httpBlock.observed_at!==originalBlock.observed_at
       || httpBlock.endpoint!==originalBlock.endpoint));
