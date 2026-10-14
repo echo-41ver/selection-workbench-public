@@ -171,6 +171,23 @@ def test_sort_evidence_is_scoped_to_primary_query_and_not_sales_concentration(tm
     assert build_report(tmp_path,cat,as_of=NOW)['market']['frontend_sort']['state']=='UNKNOWN'
 
 
+def test_selection_report_uses_collected_global_top5_not_category_only_denominator(tmp_path):
+    cat=category();base=tmp_path/'runs/fixture/temu/union'
+    base.mkdir(parents=True)
+    rows=[{'goods_id':str(i),'sales_text':f'{i*10} sold',
+           'source_queries':['drill'] if i<=6 else ['feature']} for i in range(1,11)]
+    (base/'products.jsonl').write_text('\n'.join(json.dumps(row) for row in rows),encoding='utf-8')
+    report=build_report(tmp_path,cat,as_of=NOW)
+    concentration=report['market']['concentration']
+    assert concentration['value_percent']==72.7
+    assert concentration['sample_products']==10
+    assert concentration['denominator_displayed_sales']==550
+    assert concentration['numerator_displayed_sales']==400
+    assert concentration['basis']=='DISPLAYED_SALES_APPROXIMATE'
+    assert report['market']['primary_category_sales']['top5_displayed_share_approx']==36.4
+    assert report['market']['period_concentration']['state']=='UNKNOWN'
+
+
 def test_commercial_threshold_does_not_change_paid_vision_revision():
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
     from rule_editor import draft_view,edit_rules

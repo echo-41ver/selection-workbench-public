@@ -110,6 +110,7 @@ def export_code_paths():
             ROOT/'src/selection_automation/stage3_provider.py',
             ROOT/'src/selection_automation/codex_visual_review.py',
             ROOT/'src/selection_automation/commercial.py',
+            ROOT/'src/selection_automation/frontend_market.py',
             ROOT/'src/selection_automation/rules.py',
             ROOT/'src/selection_automation/identity.py',
             ROOT/'src/selection_automation/visual_decision.py']
@@ -126,7 +127,8 @@ def fresh_export():
         for name in ('selection_automation.visual_decision', 'selection_automation.identity',
                      'selection_automation.rules',
                      'export_incremental_layer123_excel', 'export_shower_layer123_excel',
-                     'selection_automation.codex_visual_review', 'selection_automation.operations', 'selection_automation.commercial',
+                     'selection_automation.codex_visual_review', 'selection_automation.operations',
+                     'selection_automation.frontend_market', 'selection_automation.commercial',
                      'selection_automation.stage3_provider', 'selection_automation.selection_delivery',
                      'export_selection_result'):
             if name in sys.modules:

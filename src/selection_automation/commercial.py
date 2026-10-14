@@ -256,7 +256,7 @@ def report_signature(root, category):
              *sorted((base/'temu/workers').glob('*/*/products.jsonl')),
              *sorted((base/'temu/workers').glob('*/*/progress.json')),
              *(Path(__file__).parent/name for name in ('commercial.py','codex_visual_review.py',
-                 'rules.py','vision.py','market_provider.py','operations.py','selection_delivery.py','stage3_provider.py'))]
+                 'rules.py','vision.py','market_provider.py','frontend_market.py','operations.py','selection_delivery.py','stage3_provider.py'))]
     sources = []
     for path in paths:
         try:
@@ -337,6 +337,27 @@ def build_report(root, category, *, as_of=None):
         market['growth']=provider['growth']
         market['concentration']=provider['concentration']
         market['provider']=provider
+    # Keep separately sourced period metrics, but the selection criterion uses
+    # the user's all-collected denominator and a fixed, globally deduplicated Top 5.
+    from .frontend_market import build_frontend_market
+    frontend=build_frontend_market(base)
+    sales=frontend['all_keywords']['sales']
+    signal=sales['signal']
+    share=sales['top5_displayed_share_approx']
+    enough=(sales['sample_products']>=policy['min_market_products'] and
+            signal['sales_coverage_percent']/100>=policy['min_sales_coverage'] and share is not None)
+    market['period_concentration']=market['concentration']
+    market['concentration']=metric('SAMPLE_PASS' if enough and share<policy['top_share_max_percent'] else 'FAIL' if enough else 'UNKNOWN',
+        signal['reason'], value_percent=share, valid_products=sales['interpretable_sales_products'],
+        sample_products=sales['sample_products'], coverage=signal['sales_coverage_percent']/100,
+        top_n=5, threshold_percent=policy['top_share_max_percent'], scope='全部已采集去重商品',
+        basis='DISPLAYED_SALES_APPROXIMATE', top5=sales['top5_products'],
+        numerator_displayed_sales=sales['top5_displayed_sales_approx'],
+        denominator_displayed_sales=sales['denominator_displayed_sales_total_approx'],
+        missing_sales_products=sales['unknown_sales_products'])
+    market['collected_sales']=sales
+    market['primary_category_sales']=next((row['sales'] for row in frontend['queries']
+        if row['query']==(frontend.get('primary_category_query') or primary_query)),None)
     frozen = base/'stage123/export_frozen'
     candidates = {}
     try: vision_context = VisionRevisionContext(category)

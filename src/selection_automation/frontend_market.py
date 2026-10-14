@@ -1,4 +1,4 @@
-"""Descriptive market hints from the two visible TEMU sorting passes.
+"""Market hints from the collected union and confirmed recent-sort observations.
 
 Displayed sold counts have an unspecified period. Never call these month sales,
 growth rates, or evidence of an exact listing date.
@@ -47,49 +47,62 @@ def sponsored(row):
 def _prefer_observation(current, candidate):
     """Deduplicate a product across keywords without losing known sales."""
     if current is None: return True
-    old_natural=sponsored(current) is False
-    new_natural=sponsored(candidate) is False
-    if new_natural != old_natural: return new_natural
     old_known=displayed_sales(current.get('sales_text')) is not None
     new_known=displayed_sales(candidate.get('sales_text')) is not None
     if new_known != old_known: return new_known
     return str(candidate.get('observed_at') or '') >= str(current.get('observed_at') or '')
 
 
-def _stats(products, mode):
+def _stats(products, mode, denominator=None):
     amounts = [p['displayed_sales_approx'] for p in products if p['displayed_sales_approx'] is not None]
     sold = sum(value > 0 for value in amounts)
     total = sum(amounts)
+    ranked = sorted((p for p in products if p['displayed_sales_approx'] is not None),
+                    key=lambda p: (-p['displayed_sales_approx'], p['goods_id']))
+    top = ranked[:5]
+    top_total = sum(p['displayed_sales_approx'] for p in top)
+    denominator = denominator or {'sample_products':len(products), 'interpretable_sales_products':len(amounts),
+                                  'displayed_sales_total_approx':total}
+    denominator_total = denominator['displayed_sales_total_approx']
     return {'sample_products': len(products), 'sales_display_products': sum(bool(p['sales_text']) for p in products),
             'interpretable_sales_products': len(amounts), 'unknown_sales_products': len(products)-len(amounts),
             'with_sales_products': sold,
             'with_sales_percent': round(100*sold/len(amounts), 1) if amounts else None,
             'displayed_sales_median_approx': median(amounts) if amounts else None,
-            'top5_displayed_share_approx': round(100*sum(sorted(amounts, reverse=True)[:5])/total, 1)
-                if mode == 'sales' and len(amounts) > 5 and total > 0 else None,
-            'examples': sorted(products, key=lambda p: p['displayed_sales_approx'] or 0, reverse=True)[:3]}
+            'displayed_sales_total_approx':total, 'top5_displayed_sales_approx':top_total,
+            'top5_products':top,
+            'denominator_products':denominator['sample_products'],
+            'denominator_known_sales_products':denominator['interpretable_sales_products'],
+            'denominator_unknown_sales_products':denominator['sample_products']-denominator['interpretable_sales_products'],
+            'denominator_displayed_sales_total_approx':denominator_total,
+            'top5_displayed_share_approx': round(100*top_total/denominator_total, 1)
+                if mode == 'sales' and top and denominator_total > 0 else None,
+            'examples': top}
 
 
-def _summary(rows, mode, progress):
+def _summary(rows, mode, progress, denominator=None):
     groups={False:[],True:[],None:[]}
     for row in rows.values(): groups[sponsored(row)].append(_product(row))
     completed=bool(progress) and all(item.get('status') in ('KEYWORD_COMPLETE','KEYWORD_LIMIT_REACHED') for item in progress)
     updated=max((str(item.get('updated_at')) for item in progress if item.get('updated_at')), default=None)
-    return {**_stats(groups[False],mode), 'captured_products':len(rows),
+    return {**_stats([_product(row) for row in rows.values()],mode,denominator), 'captured_products':len(rows),
+            'natural_products':len(groups[False]),
             'sponsored_products':len(groups[True]),'unknown_sponsorship_products':len(groups[None]),
             'sponsored':_stats(groups[True],mode),'unknown_sponsorship':_stats(groups[None],mode),
-            'sample_basis':'OBSERVED_NON_AD_CARDS','progress':progress,
+            'sample_basis':'ALL_COLLECTED_DEDUPLICATED' if mode=='sales' else 'UI_CONFIRMED_RECENT_SORT',
+            'progress':progress,
             'pass_completed':completed,'sample_updated_at':updated}
 
 
 def evidence_signal(sample, mode):
     n=sample.get('sample_products',0); known=sample.get('interpretable_sales_products',0)
     coverage=known/n if n else 0
-    result={'state':'INSUFFICIENT','label':'证据不足','natural_products':n,
+    result={'state':'INSUFFICIENT','label':'证据不足','sample_products':n,
             'sales_coverage_percent':round(coverage*100,1),
             'minimum_products':1 if mode=='recent' else 30,
             'minimum_sales_coverage_percent':0 if mode=='recent' else 80,
-            'scope':'当前关键词的自然商品样本','period':'页面销量累计周期未知'}
+            'scope':'当前关键词全部去重商品' if mode=='sales' else '最近上架排序全部去重商品',
+            'period':'页面销量累计周期未知'}
     if mode=='recent' and n:
         sold=sample.get('with_sales_products',0)
         # Missing sales are unknown, not unsold. Use the worst case on each side.
@@ -98,24 +111,30 @@ def evidence_signal(sample, mode):
         result['confirmed_sold_lower_bound_percent']=round(lower*100,1)
         if lower>=.5:
             result.update(state='FAVORABLE' if n>=30 else 'PRELIMINARY',label='有利信号' if n>=30 else '初步有利',
-                reason=f'最近上架排序的{n}件自然样本中，至少{sold}件显示已售（至少{round(lower*100,1)}%）；另有{n-known}件销量未显示。这不是90天上架确认或周/月环比')
+                reason=f'最近上架排序的{n}件去重商品中，至少{sold}件显示已售（至少{round(lower*100,1)}%）；另有{n-known}件销量未显示。这不是90天上架确认或周/月环比')
         elif upper<=.1:
             result.update(state='ADVERSE' if n>=30 else 'PRELIMINARY',label='不利信号' if n>=30 else '初步不利',
-                reason=f'最近上架排序的{n}件自然样本中，即使把销量未知的{n-known}件都算作已售，已售比例也不超过{round(upper*100,1)}%；不是90天上架确认或周/月环比')
+                reason=f'最近上架排序的{n}件去重商品中，即使把销量未知的{n-known}件都算作已售，已售比例也不超过{round(upper*100,1)}%；不是90天上架确认或周/月环比')
         else:
             result.update(state='MIXED',label='线索尚不明显',
-                reason=f'最近上架排序的{n}件自然样本中，{sold}件显示已售，{n-known}件销量未知；已售比例至少{round(lower*100,1)}%，目前只能作初步参考')
+                reason=f'最近上架排序的{n}件去重商品中，{sold}件显示已售，{n-known}件销量未知；已售比例至少{round(lower*100,1)}%，目前只能作初步参考')
     elif mode=='recent':
-        result['reason']='最近上架轮次尚无自然商品样本。'
-    elif n<30 or coverage<.8:
-        result['reason']=('样本缺少完整广告识别记录，暂不能判断；原始商品仍可在 Excel 查看'
-            if n<30 and sample.get('unknown_sponsorship_products',0)>0 else
-            '非广告商品不足30件或可读销量不足80%，先补足样本')
+        result['reason']='最近上架轮次尚无已确认排序的商品。'
     elif mode=='sales':
+        denominator_n=sample.get('denominator_products',n)
+        denominator_known=sample.get('denominator_known_sales_products',known)
+        coverage=denominator_known/denominator_n if denominator_n else 0
+        result['sales_coverage_percent']=round(coverage*100,1)
         share=sample.get('top5_displayed_share_approx')
         if share is not None:
             state,label=('ADVERSE','不利信号') if share>=90 else ('FAVORABLE','有利信号') if share<=50 else ('MIXED','信号一般')
-            result.update(state=state,label=label,reason=f'自然样本前5件展示销量约占{share}%；不是全类目份额')
+            if denominator_n<30 or coverage<.8:
+                state,label='INSUFFICIENT','待补销量'
+            result.update(state=state,label=label,
+                reason=f'销量最高的{len(sample.get("top5_products",[])) or 5}件展示销量之和 ÷ 全部{denominator_n}件去重商品的可读展示销量之和，约{share}%；'
+                       f'{denominator_n-denominator_known}件销量未显示，未按零处理。K/+为展示约值，周期未知')
+        else:
+            result['reason']='尚无可计算的展示销量总和。'
     return result
 
 
@@ -130,6 +149,12 @@ def build_frontend_market(run_dir):
                 versions.append((str(path), stat.st_mtime_ns, stat.st_size))
             except OSError:
                 continue
+    union=Path(run_dir)/'temu/union/products.jsonl'
+    try:
+        stat=union.stat()
+        versions.append((str(union),stat.st_mtime_ns,stat.st_size))
+    except OSError:
+        pass
     report = dict(_build(tuple(versions)))
     try:
         plan = json.loads((Path(run_dir)/'temu'/'keyword_plan.json').read_text('utf-8'))
@@ -140,16 +165,19 @@ def build_frontend_market(run_dir):
     all_keywords=report['all_keywords']
     report['all_keywords']={mode:{**all_keywords[mode],
         'signal':{**evidence_signal(all_keywords[mode],mode),
-            'scope':'所有关键词去重后的自然商品样本'}} for mode in ('sales','recent')}
+            'scope':'全部已采集去重商品' if mode=='sales' else '所有关键词最近上架排序的去重商品'}} for mode in ('sales','recent')}
     report['criteria_evidence']={'same_products':'留待第二部分严格同款分析；观察到不超过20件，不代表全站不超过20件',
         'growth':'最近上架排序只提供新品成交线索，不能计算周/月环比',
-        'concentration':'跨关键词按商品去重的搜索样本，仅供动态参考；大类目词另列，广告和未知广告属性单列'}
+        'concentration':'整体Top 5与各关键词Top 5均除以全部已采集去重商品的可读展示销量总和；广告及广告属性未知的商品也计入。'}
     return report
 
 
 @lru_cache(maxsize=4)
 def _build(versions):
     groups = {}
+    collected={}
+    union_rows=None
+    memberships={}
     all_rows={'sales':{},'recent':{}}
     all_progress={'sales':[],'recent':[]}
     def group(query):
@@ -177,31 +205,62 @@ def _build(versions):
             except (ValueError, AttributeError):
                 skipped += 1
             continue
+        is_union=path.parent.name=='union'
+        if is_union:
+            union_rows={}
         for line in content.splitlines():
             try:
                 row = json.loads(line)
                 sort = row.get('search_sort') or {}
                 mode = sort.get('requested')
-                if mode not in ('sales', 'recent') or sort.get('state') != 'UI_CONFIRMED' or not row.get('goods_id'):
+                if not row.get('goods_id'):
                     continue
                 goods_id=str(row['goods_id'])
-                if _prefer_observation(all_rows[mode].get(goods_id),row):
-                    all_rows[mode][goods_id]=row
+                if is_union:
+                    union_rows[goods_id]=row
+                if _prefer_observation(collected.get(goods_id),row):
+                    collected[goods_id]=row
                 queries = row.get('source_queries') or [row.get('search_query')]
                 if isinstance(queries, str):
                     queries = [queries]
                 for query in queries:
                     if query:
-                        group(str(query))[mode][str(row['goods_id'])] = row
+                        memberships.setdefault(str(query),set()).add(goods_id)
+                        group(str(query))
+                        if not is_union and mode=='recent' and sort.get('state')=='UI_CONFIRMED':
+                            if _prefer_observation(group(str(query))['recent'].get(goods_id),row):
+                                group(str(query))['recent'][goods_id]=row
+                if not is_union and mode=='recent' and sort.get('state')=='UI_CONFIRMED':
+                    if _prefer_observation(all_rows['recent'].get(goods_id),row):
+                        all_rows['recent'][goods_id]=row
             except (ValueError, AttributeError, TypeError):
                 skipped += 1
-    all_sets=[set(value[mode]) for value in groups.values() for mode in ('sales','recent')]
-    captured=sum(map(len,all_sets)); unique=len(set().union(*all_sets)) if all_sets else 0
+    # The accepted union is the same scope as the collection total (including
+    # provider supplements). Worker observations retain membership in each pass.
+    collected=union_rows if union_rows is not None else collected
+    ids=set(collected)
+    all_rows['sales']=collected
+    all_rows['recent']={key:row for key,row in all_rows['recent'].items() if key in ids}
+    denominator=_stats([_product(row) for row in collected.values()],'sales')
+    for query,value in groups.items():
+        value['sales']={key:collected[key] for key in sorted(memberships.get(query,set()) & ids)}
+        value['recent']={key:row for key,row in value['recent'].items() if key in ids}
+    all_sets=[set(value['sales']) for value in groups.values()]
+    captured=sum(map(len,all_sets)); unique=len(collected)
+    sales_progress=all_progress['sales']+all_progress['recent']
+    source_counts={}
+    for row in collected.values():
+        source=str(row.get('source') or 'UNKNOWN')
+        source_counts[source]=source_counts.get(source,0)+1
     return {'sampling_efficiency':{'pass_products':captured,'unique_products':unique,
-                'duplicate_percent':round(100*(1-unique/captured),1) if captured else None},
+                'duplicate_percent':round(100*(1-len(set().union(*all_sets))/captured),1) if captured else None},
+            'source_counts':source_counts, 'metric_revision':'all-collected-top5-v2',
             'basis': 'VISIBLE_FRONTEND_APPROXIMATE', 'read_issues': skipped,
             'note': '最近上架排序样本用于观察新品是否卖得动；不代表已确认在90天内上架。销量为页面展示数量级，周期不明，不是周/月环比。',
-            'all_keywords':{mode:{**_summary(all_rows[mode],mode,all_progress[mode]),
+            'all_keywords':{mode:{**_summary(all_rows[mode],mode,sales_progress if mode=='sales' else all_progress[mode],
+                                          denominator if mode=='sales' else None),
                 'keyword_count':sum(bool(value[mode]) for value in groups.values())} for mode in ('sales','recent')},
-            'queries': [{'query': query, **{mode: _summary(value[mode], mode, value['progress'][mode])
+            'queries': [{'query': query, **{mode: _summary(value[mode], mode,
+                        value['progress']['sales']+value['progress']['recent'] if mode=='sales' else value['progress'][mode],
+                        denominator if mode=='sales' else None)
                         for mode in ('sales', 'recent')}} for query, value in sorted(groups.items())]}
