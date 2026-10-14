@@ -229,16 +229,19 @@ def market_metrics(category, current_rows, history_rows, as_of=None):
 
 def match_metric(counts, expected, policy):
     confirmed = counts.get('confirmed', 0)
+    similar = counts.get('similar', 0)
+    combined = confirmed + similar
     pending = counts.get('pending', 0) + max(0, expected-sum(counts.values()))
     possible = counts.get('possible', 0)
     strict=policy.get('same_operator')=='lt'
-    if confirmed >= policy['same_limit'] if strict else confirmed > policy['same_limit']:
-        state, reason = 'FAIL', '已确认同款已超过门槛；即使继续采集也不会减少已发现数量'
+    if combined >= policy['same_limit'] if strict else combined > policy['same_limit']:
+        state, reason = 'FAIL', '最终同款与类似款合计已达到筛选门槛'
     elif not expected or pending or possible:
         state, reason = 'UNKNOWN', '候选分析或待复核尚未完成，不能将未知商品当作零同款'
     else:
-        state, reason = 'SAMPLE_PASS', ('当前采样及候选规则内已确认同款严格少于门槛' if strict else '当前采样及候选规则内已确认同款不超过门槛')+'；尚未证明TEMU全站数量'
+        state, reason = 'SAMPLE_PASS', '当前采样最终同款与类似款合计符合门槛；尚未证明TEMU全站数量'
     return metric(state, reason, confirmed=confirmed, possible=possible, pending=pending,
+                  similar=similar, same_or_similar=combined,
                   screened_out=counts.get('screened_out', 0), expected=expected,
                   threshold=policy['same_limit'], scope='本次采集及三层候选核验范围')
 
@@ -380,6 +383,8 @@ def build_report(root, category, *, as_of=None):
     counts = defaultdict(Counter)
     confirmed_goods=defaultdict(set)
     confirmed_pairs=defaultdict(dict)
+    similar_goods=defaultdict(set)
+    similar_pairs=defaultdict(dict)
     for pair in jsonl(frozen/f'layer12_rows_{key}.jsonl'):
         status = pair.get('pair_status'); asin = pair['asin'];bucket=None
         if status == 'STAGE1_EXCLUDED': counts[asin]['text_excluded'] += 1
@@ -388,38 +393,43 @@ def build_report(root, category, *, as_of=None):
             result_row = results[(asin, pair['goods_id'])]
             scored = score(category, result_row['visual_facts'])
             result = scored['state']
-            bucket = 'confirmed' if result in ('确认同款', '同款（存在规格变体）') else 'different' if result.startswith('不同款') else 'possible'
+            bucket = 'confirmed' if result in ('确认同款', '同款（存在规格变体）') else 'different' if result.startswith('不同款') else 'similar' if result=='相似款' else 'possible'
             counts[asin][bucket] += 1
         elif status == 'CANDIDATE' and (asin, pair['goods_id']) in reviews:
             review = reviews[(asin, pair['goods_id'])]
             bucket = {'SAME':'confirmed', 'DIFFERENT':'different', 'UNKNOWN':'possible'}[review['review_status']]
             counts[asin][bucket] += 1
         else: counts[asin]['pending'] += 1
-        if bucket=='confirmed':
+        if bucket in ('confirmed','similar'):
             gid=str(pair['goods_id'])
-            confirmed_goods[asin].add(gid)
+            target_goods=confirmed_goods if bucket=='confirmed' else similar_goods
+            target_pairs=confirmed_pairs if bucket=='confirmed' else similar_pairs
+            target_goods[asin].add(gid)
             if (asin,pair['goods_id']) in results:
                 from .review_evidence import visual_evidence_text, review_explanation
                 facts=result_row['visual_facts']
-                confirmed_pairs[asin][gid]={'goods_id':gid,'state':scored['state'],
+                target_pairs[asin][gid]={'goods_id':gid,'state':scored['state'],
                     'reason':review_explanation(category,facts,scored),
                     'evidence':visual_evidence_text(category,facts) or scored['reason'],
                     'model':result_row.get('model'),'score':scored['total_score'],
                     'probability':scored.get('decision_probability')}
             else:
-                confirmed_pairs[asin][gid]={'goods_id':gid,'state':'确认同款（Agent看图核验）',
+                target_pairs[asin][gid]={'goods_id':gid,'state':'确认同款（Agent看图核验）',
                     'reason':review['reason'],'evidence':f"Amazon：{review['amazon_evidence']}；TEMU：{review['temu_evidence']}",
                     'model':review.get('model'),'score':(review.get('module_result') or {}).get('total_score')}
     amazon = read_json(base/'amazon/amazon_frontend_latest.json').get('records', [])
     entries = []
     for item in amazon:
         counts[str(item['asin'])]['confirmed']=len(confirmed_goods[str(item['asin'])])
+        counts[str(item['asin'])]['similar']=len(similar_goods[str(item['asin'])])
         match = match_metric(counts[str(item['asin'])], len(products), policy)
         states = [match, market['growth'], market['concentration']]
         signals = sum(m['state'] in ('PASS', 'SAMPLE_PASS') for m in states)
         unknown = sum(m['state']=='UNKNOWN' for m in states)
         entries.append({'asin': item['asin'], 'title': item.get('title'), 'rank': item.get('rank'),
                         'confirmed_goods_ids':sorted(confirmed_goods[item['asin']]),
+                        'similar_goods_ids':sorted(similar_goods[item['asin']]),
+                        'similar_pairs':list(similar_pairs[item['asin']].values()),
                         'confirmed_pairs':list(confirmed_pairs[item['asin']].values()),
                         'product_url': item.get('product_url'), 'match': match, 'signals': signals,
                         'unknown': unknown, 'priority': '优先核实并评估成本' if signals >= 2 else '有单项机会，继续观察' if signals else '等待证据' if unknown else '当前信号较弱',

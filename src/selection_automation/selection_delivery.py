@@ -27,7 +27,8 @@ def recommendation(amazon, matches, match, market):
     if any(card['sales']['text'] is None for card in matches):
         missing.append('部分TEMU同款销量未取得')
     confirmed = match.get('confirmed', 0)
-    if len(matches) != confirmed:
+    similar = match.get('similar', 0)
+    if len(matches) != confirmed + similar:
         missing.append('部分同款商品不在当前采集快照中')
     demand = [c['sales']['lower'] for c in matches if c['sales']['lower'] is not None]
     demand = max(demand) if demand else None
@@ -55,7 +56,7 @@ def recommendation(amazon, matches, match, market):
     spread = None
     if prices and amazon_price is not None:
         spread = round(amazon_price - min(prices), 2)
-    reasons = [f'本次采样确认 {confirmed} 个去重同款；待分析 {match.get("pending", 0)} 对，待补证 {match.get("possible", 0)} 对',
+    reasons = [f'本次采样确认同款 {confirmed} 件、类似款 {similar} 件，合计 {confirmed+similar} 件；待分析 {match.get("pending", 0)} 对，待补证 {match.get("possible", 0)} 对',
                '需求证据：' + demand_text]
     if spread is not None:
         reasons.append(f'Amazon当前价减已采集TEMU同款最低当前价为 ${spread:.2f}；该页面价差未扣除采购、运费、平台费与退货成本')
@@ -77,8 +78,8 @@ def build_delivery(root, category, report):
     source = read_json(base / 'amazon/amazon_frontend_latest.json')
     amazon = {str(r['asin']): r for r in source.get('records', [])}
     # Strictly less than N, including historical runs whose older operator was <=.
-    selected = [p for p in report.get('products', []) if p['match']['confirmed'] < limit]
-    needed = {str(g) for p in selected for g in p.get('confirmed_goods_ids', [])}
+    selected = [p for p in report.get('products', []) if p['match']['confirmed']+p['match'].get('similar',0) < limit]
+    needed = {str(g) for p in selected for g in p.get('confirmed_goods_ids', [])+p.get('similar_goods_ids',[])}
     temu = {str(r['goods_id']): r for r in jsonl(base / 'temu/union/products.jsonl') if str(r['goods_id']) in needed}
     products, pairs = [], []
     for entry in selected:
@@ -87,19 +88,24 @@ def build_delivery(root, category, report):
             raise ValueError('选品报告引用的Amazon商品缺少当前来源记录')
         raw = amazon[asin]
         card = product_card(raw, 'amazon', snapshot_metadata=source)
-        gids = list(dict.fromkeys(str(g) for g in entry.get('confirmed_goods_ids', [])))
+        same_ids={str(g) for g in entry.get('confirmed_goods_ids', [])}
+        similar_ids={str(g) for g in entry.get('similar_goods_ids', [])}
+        if same_ids & similar_ids:raise ValueError('同一商品同时记为同款和类似款，拒绝发布')
+        gids = sorted(same_ids | similar_ids)
         rivals = [product_card(temu[g], 'temu') for g in gids if g in temu]
         advice = recommendation(card, rivals, entry['match'], report.get('market') or {})
         item = {'asin': asin, 'amazon': card, 'raw': raw, 'match': entry['match'],
-                'same_count': len(gids), 'advice': advice, 'temu_goods_ids': gids}
-        if item['same_count'] != entry['match']['confirmed']:
-            raise ValueError('确认同款数量与去重商品ID不一致，拒绝发布')
+                'same_count': len(gids), 'confirmed_count':len(same_ids),'similar_count':len(similar_ids),
+                'advice': advice, 'temu_goods_ids': gids}
+        if len(same_ids)!=entry['match']['confirmed'] or len(similar_ids)!=entry['match'].get('similar',0):
+            raise ValueError('同款或类似款数量与去重商品ID不一致，拒绝发布')
         products.append(item)
-        evidence = {str(p['goods_id']): p for p in entry.get('confirmed_pairs', [])}
+        evidence = {str(p['goods_id']): p for p in entry.get('confirmed_pairs', [])+entry.get('similar_pairs',[])}
         for gid in gids:
             pairs.append({'asin': asin, 'goods_id': gid, 'amazon': card,
                           'temu': product_card(temu[gid], 'temu') if gid in temu else None,
                           'amazon_raw': raw, 'temu_raw': temu.get(gid), 'same_count': len(gids),
+                          'relation':'相似款' if gid in similar_ids else '确认同款',
                           'advice': advice, 'evidence': evidence.get(gid, {})})
     return {'products': products, 'pairs': pairs, 'limit': limit,
             'category_name': category['category_name_zh'], 'as_of': report.get('as_of'),

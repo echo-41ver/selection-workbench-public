@@ -156,7 +156,9 @@ def collection_total(base, category, *, rate_snapshot=None):
     capacity = min(max(0, lanes - blocked), max(0, len(planned) - finished - len(blocked_passes)))
     speed = (rate['per_lane_per_second'] or 0) * capacity
     return {'completed': completed, 'total': total, 'planned_total': original, 'actual_count': actual,
-            'remaining': remaining, 'percent': round(100 * completed / total, 1) if total else 100,
+            'remaining': remaining,
+            'all_passes_complete':finished==len(planned),
+            'percent':100 if finished==len(planned) else min(99.9,round(100 * completed / total, 1)) if total else 0,
             'keyword_count': len({q for q, _ in planned}), 'finished_passes': finished, 'total_passes': len(planned),
             'shortfall': shortage, 'empty_keyword_count': len(empty_queries), 'blocked_lanes': blocked, 'lane_count': lanes,
             'eta_seconds': math.ceil(remaining / speed) if remaining and speed else (0 if not remaining else None),

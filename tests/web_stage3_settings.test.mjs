@@ -37,3 +37,11 @@ test('ordinary page keeps one primary delivery and collapses optional flows',()=
  assert.doesNotMatch(html,/中英文界面均可识别/);
  assert.doesNotMatch(html,/id="codex-review-controls"/);
 });
+
+
+test('static click handlers have actual page controls so initialization can reach polling',()=>{
+ const ids=new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(x=>x[1]));
+ for(const match of html.matchAll(/\$\('([^']+)'\)\.addEventListener/g))assert.ok(ids.has(match[1]),'missing UI control: '+match[1]);
+ assert.match(html,/<button[^>]*id="configure-stage3"[^>]*>保存方案与 Key（不启动）<\/button>/);
+ assert.doesNotMatch(html,/d1:free/);
+});

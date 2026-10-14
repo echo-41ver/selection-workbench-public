@@ -15,10 +15,12 @@ def test_selected_sku_price_is_not_an_all_sku_range():
     assert price_range({'listing_price_text':'CNY 12.99 - 29.99'})['min'] is None
 
 
-def test_incomplete_sku_prices_are_unknown_and_subset_is_named():
-    assert price_range({'variants':[{'price_usd':10},{'label':'unpriced'}]})['min'] is None
+def test_incomplete_sku_prices_preserve_the_known_subset():
+    partial=price_range({'variants':[{'price_usd':10},{'label':'unpriced'}]})
+    assert partial['min']==partial['max']==10
+    assert '子集' in partial['basis']
     result=price_range({'variants':[{'price_usd':10},{'price_usd':15}]})
-    assert result['basis']=='已采集可售规格子集'
+    assert result['min']==10 and result['max']==15 and '子集' in result['basis']
 
 
 def test_sales_does_not_turn_bsr_or_rating_count_into_sales():

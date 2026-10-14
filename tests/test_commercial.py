@@ -37,6 +37,14 @@ def test_match_does_not_turn_incomplete_analysis_into_low_competition(counts,exp
     assert result['confirmed']==counts.get('confirmed',0)
 
 
+def test_same_and_similar_share_the_strict_final_limit():
+    policy=settings({'same_limit':5,'same_operator':'lt'})
+    result=match_metric({'confirmed':2,'similar':3},5,policy)
+    assert result['state']=='FAIL' and result['same_or_similar']==5
+    assert match_metric({'confirmed':1,'similar':3},4,policy)['state']=='SAMPLE_PASS'
+    assert match_metric({'confirmed':1,'similar':3,'possible':1},5,policy)['state']=='UNKNOWN'
+
+
 @pytest.mark.parametrize('value',[[], {'same_limit':True}, {'new_days':0},
                                    {'min_sales_coverage':0}, {'growth_min_percent':float('nan')}])
 def test_invalid_settings_fail(value):

@@ -72,6 +72,51 @@ def test_empty_selection_has_no_cartesian_detail(tmp_path):
     book.close()
 
 
+def test_combined_same_and_similar_threshold_and_embedded_picture_order(tmp_path):
+    from PIL import Image
+    cat,report=setup(tmp_path,n=3)
+    selected=report['products'][0]
+    selected['match'].update(similar=1)
+    selected['similar_goods_ids']=['2']
+    selected['similar_pairs']=[{'goods_id':'2','state':'相似款','reason':'TEST_ONLY_SIMILAR'}]
+    data=build_delivery(tmp_path,cat,report)
+    item=next(p for p in data['products'] if p['asin']=='A1')
+    assert item['same_count']==2 and item['confirmed_count']==item['similar_count']==1
+    assert {(p['goods_id'],p['relation']) for p in data['pairs'] if p['asin']=='A1'}=={('1','确认同款'),('2','相似款')}
+    picture=tmp_path/'TEST_ONLY_IMAGE.png';Image.new('RGB',(120,80),'blue').save(picture)
+    base=tmp_path/'runs/fixture'
+    am_file=base/'amazon/amazon_frontend_latest.json';am=json.loads(am_file.read_text('utf-8'))
+    for row in am['records']:
+        row.update(local_image_path=str(picture),main_image_url='https://images.example.invalid/TEST_ONLY_IMAGE.png')
+    am_file.write_text(json.dumps(am),encoding='utf-8')
+    temu_file=base/'temu/union/products.jsonl'
+    rows=[json.loads(line) for line in temu_file.read_text('utf-8').splitlines()]
+    for row in rows:row.update(local_image_path=str(picture),main_image_url='https://images.example.invalid/TEST_ONLY_IMAGE.png')
+    temu_file.write_text('\n'.join(json.dumps(row) for row in rows),encoding='utf-8')
+    delivery=export(tmp_path,cat,report)
+    book=load_workbook(delivery['固定查看副本'])
+    prefix=['Amazon ASIN','Amazon标题','Amazon图片','TEMU图片','同款+类似款数量','Amazon商品链接','TEMU商品链接']
+    for name in ('选品结论','同款商品明细'):
+        assert [c.value for c in book[name][4]][:7]==prefix
+        assert len(book[name]._images)>=4
+        assert {(image.anchor._from.col) for image in book[name]._images}=={2,3}
+    assert book['同款商品明细']['E5'].value==2
+    book.close()
+    cat['commercial']['same_limit']=2
+    assert all(p['asin']!='A1' for p in build_delivery(tmp_path,cat,report)['products'])
+    cat['commercial']['same_limit']=3
+    selected['similar_goods_ids']=['1']
+    with pytest.raises(ValueError,match='同时记为'):build_delivery(tmp_path,cat,report)
+
+
+def test_native_similar_is_a_final_relation_not_an_unknown_or_same():
+    cat={'stage3':{'modules':{'design':100}}};apply(cat,settings({'mode':'liquid_d1'}))
+    facts={'decision_api':{'choice':'similar','probabilities':{'same':.02,'similar':.96,'different':.02},'protocol_version':'product-choice-v2'}}
+    assert score(cat,facts)['state']=='相似款'
+    facts['decision_api']['probabilities']={'same':.3,'similar':.5,'different':.2}
+    assert score(cat,facts)['state']=='待补充证据'
+
+
 @pytest.mark.parametrize('mode',['liquid_d1','multimodal_api','local_model','local_agent'])
 def test_four_modes_have_no_stored_key(mode):
     config=settings({'mode':mode})
@@ -90,7 +135,7 @@ def test_key_cannot_follow_another_endpoint(monkeypatch):
 def test_native_decision_payload_and_uncertainty():
     provider=settings({'mode':'liquid_d1'})
     calls=[]
-    probabilities={'same':.96,'different':.03,'unknown':.01}
+    probabilities={'same':.96,'different':.03,'similar':.01}
     response=SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'answers':{'same_product':{'choice':'same','probabilities':probabilities}},'usage':{'input_tokens':42,'output_tokens':0}})
     transport=SimpleNamespace(post=lambda *args,**kwargs:calls.append((args,kwargs)) or response)
     client=VisualClient(provider,transport,'TEST_ONLY_KEY',30)
@@ -98,12 +143,12 @@ def test_native_decision_payload_and_uncertainty():
         {'type':'input_image','image_url':'data:image/png;base64,TEST_ONLY_IMAGE'},
         {'type':'input_image','image_url':'data:image/png;base64,TEST_ONLY_IMAGE'}]}])
     payload=json.loads(calls[0][1]['content'])
-    assert len(payload['images'])==2 and set(payload['questions']['same_product']['criteria'])=={'same','different','unknown'}
+    assert len(payload['images'])==2 and set(payload['questions']['same_product']['criteria'])=={'same','different','similar'}
     cat={'stage3':{'modules':{'design':100}}};apply(cat,provider)
     facts=json.loads(result.output_text)['decision_facts']
     assert score(cat,facts)['state']=='确认同款'
     assert score(cat,facts)['total_score'] is None
-    facts['decision_api']['probabilities']={'same':.6,'different':.3,'unknown':.1}
+    facts['decision_api']['probabilities']={'same':.6,'different':.3,'similar':.1}
     assert score(cat,facts)['state']=='待补充证据'
 
 
@@ -149,6 +194,24 @@ def test_console_dispatches_only_selected_provider_and_never_stops_collection(tm
         console.stage3_busy=False
         assert console.start_stage3({'provider':provider})['ok']
         assert calls[-1]==('api','fixture','TEST_ONLY_SELECTED_KEY')
+
+
+def test_save_d1_provider_and_key_does_not_enable_or_start_paid_analysis(tmp_path,monkeypatch):
+    import web_console as web
+    console=web.Console(tmp_path);base=tmp_path/'runs/fixture';base.mkdir(parents=True)
+    category={'category_key':'fixture','execution_mode':'full','stage3':{'modules':{'design':100}}}
+    (base/'category.json').write_text(json.dumps(category),encoding='utf-8')
+    monkeypatch.setattr(console,'current_run_key',lambda:('fixture',True))
+    monkeypatch.setattr(console,'stage3_snapshot',lambda key:{'counting':True})
+    monkeypatch.setattr(web,'codex_review_control',lambda base:{'running':False})
+    monkeypatch.setattr(console,'invoke',lambda *a,**kw:pytest.fail('Collection touched'))
+    monkeypatch.setattr(console,'launch_stage3_controller',lambda *a:pytest.fail('Paid analysis started'))
+    result=console.start_stage3({'provider':settings({'mode':'liquid_d1'}),'api_key':'TEST_ONLY_D1_KEY'},configure_only=True)
+    assert result['ok']
+    assert console.stage3_keys[('fixture',settings({'mode':'liquid_d1'})['base_url'])]=='TEST_ONLY_D1_KEY'
+    assert not (base/'stage123/paid_enabled.json').exists()
+    assert not (base/'stage123/authorization.json').exists()
+    assert 'TEST_ONLY_D1_KEY' not in (base/'category.json').read_text()
 
 
 def test_daitu_gpt_uses_task_form_native_stream_and_records_usage(monkeypatch):

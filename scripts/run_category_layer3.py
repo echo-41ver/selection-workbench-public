@@ -287,7 +287,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                          evidence_block(batch[0],'temu','TEMU候选'),
                          {'type':'input_image','image_url':_data_url(batch[0]['temu_image_path'])}]
             from selection_automation.vision import GROUP_WIRE_VERSION
-            wire_version = 'product-choice-v1' if provider['protocol']=='decisions' else GROUP_WIRE_VERSION if 'amazon' in schema.get('properties', {}) else 'independent-candidates-v1'
+            wire_version = 'product-choice-v2' if provider['protocol']=='decisions' else GROUP_WIRE_VERSION if 'amazon' in schema.get('properties', {}) else 'independent-candidates-v1'
             budget = output_token_budget(stage, len(batch))
             with lock:
                 if stop.is_set() or not authorized() or (args.max_requests and requests >= args.max_requests):

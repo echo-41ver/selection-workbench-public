@@ -137,12 +137,14 @@ def build_shortlist(root,category,*,same_limit=None,min_sales=100,new_days=90,re
     for item in report_products:
         match=item.get('match',{});asin=str(item['asin']);reason=None;failure='DATA_INCOMPLETE'
         confirmed=number(match.get('confirmed'));expected=number(match.get('expected'))
+        similar=number(match.get('similar',0))
+        combined=confirmed+similar if confirmed is not None and similar is not None else None
         count_values=[number(match.get(field)) for field in ('confirmed','expected','pending','possible')]
         if (any(value is None or int(value)!=value for value in count_values)
-                or match.get('pending') or match.get('possible') or not expected or confirmed>expected):reason='同款核验未完成'
-        elif confirmed>=limit:reason='同款数不满足严格少于N';failure='NO_MATCH'
-        rivals=set(str(gid) for gid in item.get('confirmed_goods_ids',[]))
-        if reason is None and len(rivals)!=confirmed:reason='已确认同款商品明细尚未齐全'
+                or combined is None or int(combined)!=combined or match.get('pending') or match.get('possible') or not expected or combined>expected):reason='同款核验未完成'
+        elif combined>=limit:reason='同款与类似款合计不满足严格少于N';failure='NO_MATCH'
+        rivals=set(str(gid) for gid in item.get('confirmed_goods_ids',[])+item.get('similar_goods_ids',[]))
+        if reason is None and len(rivals)!=combined:reason='同款或类似款商品明细尚未齐全'
         cards=[product_card(temu[gid],'temu') for gid in rivals if gid in temu]
         if reason is None and len(cards)!=len(rivals):reason='同款商品当前快照缺失'
         if reason is None and asin not in amazon:reason='Amazon商品当前快照缺失'
@@ -175,10 +177,10 @@ def build_shortlist(root,category,*,same_limit=None,min_sales=100,new_days=90,re
         if any(card['evidence']['observed_at']['status']=='MISSING' or card['evidence']['source']['status']=='MISSING' for card in (amazon_card,best)):
             next_actions.append('补齐页面采集来源和时间，再确认数据时效。')
         selected.append({'asin':asin,'amazon':amazon_card,'source_run_key':category['category_key'],
-                         'temu':best,'same_count':match['confirmed'],'same_limit':limit,'same_operator':'lt',
+                         'temu':best,'same_count':combined,'confirmed_count':confirmed,'similar_count':similar,'same_limit':limit,'same_operator':'lt',
                          'all_confirmed_matches':cards,'rank':item.get('rank'),'scope':'当前采样与三层候选规则内，非TEMU全站',
                          'why':why,'next_actions':next_actions,
-                         'reason':f"当前采样确认{match['confirmed']}个同款，严格少于{limit}；所选同款达到配置销量"})
+                         'reason':f"当前采样同款{confirmed}件、类似款{similar}件，合计{combined}件，严格少于{limit}；所选商品达到配置销量"})
     selected.sort(key=lambda x:(-x['temu']['sales']['lower'],x['same_count'],x['rank'] or 999))
     complete=not rejected_by_outcome['DATA_INCOMPLETE']
     outcome='RECOMMENDED' if selected else ('NO_MATCH' if complete else 'DATA_INCOMPLETE')

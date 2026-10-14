@@ -828,7 +828,6 @@ class Console:
 
     def history_collection_complete(self,base,category,details):
         """Only distinguish proven acquisition completion from optional market gaps."""
-        if category.get('execution_mode')!='collection': return False
         amazon=selection.read(base/'amazon/amazon_frontend_latest.json',{})
         target=category.get('amazon',{}).get('target_count')
         records=amazon.get('records')
@@ -1259,7 +1258,7 @@ class Console:
             with self.lock:self.stage3_busy=False
         threading.Thread(target=wait,daemon=True).start()
 
-    def start_stage3(self, body):
+    def start_stage3(self, body, configure_only=False):
         from selection_automation.stage3_progress import controller_alive
         if set(body)-{'api_key','provider'}: raise ConsoleError('INVALID_INPUT','第三层启动参数无效')
         with self.lock:
@@ -1282,9 +1281,9 @@ class Console:
                 raise ConsoleError('ALREADY_RUNNING','本机Agent正在分析；请先停止第三层再更换方案',409)
             if self.stage3_busy and self.stage3_key==key: return {'ok':True,'phase':'第三层启动中'}
             progress=self.stage3_snapshot(key)
-            if progress.get('counting') or progress.get('refreshing') or type(progress.get('total')) is not int:
+            if not configure_only and (progress.get('counting') or progress.get('refreshing') or type(progress.get('total')) is not int):
                 raise ConsoleError('PROGRESS_NOT_READY','正在核对已处理候选，请等待进度读取完成后再启动',409)
-            if not provider_changed and not active and progress.get('total',0)>0 and progress.get('pending_after_codex',progress.get('pending'))==0:
+            if not configure_only and not provider_changed and not active and progress.get('total',0)>0 and progress.get('pending_after_codex',progress.get('pending'))==0:
                 raise ConsoleError('NO_PENDING_CANDIDATES','当前第三层候选已全部处理，无需重复启动付费分析',409)
             supplied=body.get('api_key')
             if supplied is not None and (not isinstance(supplied,str) or not supplied.strip() or len(supplied)>4096 or any(ord(c)<32 for c in supplied)):
@@ -1312,6 +1311,8 @@ class Console:
                 apply_provider(category,provider)
                 selection.save(category_path,category)
                 with self._stage3_cache_lock:self._stage3_cache.pop(key,None)
+            if configure_only:
+                return {'ok':True,'provider':provider,'message':'第三层方案和 Key 已配置；尚未启动分析，Key仅保留在当前服务内存'}
             (folder/'STOP').unlink(missing_ok=True)
             selection.save(folder/'paid_enabled.json',{'category_key':key,'enabled_at':time.time(),
                 'source':'web-console','controller':'independent','provider':provider['mode']})
@@ -1498,6 +1499,16 @@ class Console:
             if 'depth' in generation: phase=f"定位榜单 · 第{generation['depth']}步：{phase}"
         stale=not owner and not self.busy and phase in ('运行中','启动中','停止中')
         if stale: phase='监督进程已退出，旧状态未完成更新'
+        collection_complete=False
+        if key and not preparing_new:
+            overall=details.get('阶段',{}).get('temu',{}).get('overall',{})
+            amazon=selection.read(self.root/'runs'/key/'amazon/amazon_frontend_latest.json',{})
+            target=(selection.read(self.root/'runs'/key/'category.json',{}).get('amazon') or {}).get('target_count')
+            collection_complete=bool(overall.get('all_passes_complete') and workers and
+                all(worker.get('status')=='WORKER_COMPLETE' for worker in workers) and
+                type(target) is int and target>0 and amazon.get('status')=='COMPLETE' and
+                amazon.get('details_complete') is True and len(amazon.get('records') or [])>=target)
+            if collection_complete:phase='全部采集已完成'
         def tone(value):
             if not isinstance(value,dict): return 'neutral'
             state=' '.join(str(value.get(field) or '') for field in ('状态','status','采集状态','query_status')).upper()
@@ -1572,6 +1583,8 @@ class Console:
                       'commercial_error': '商业判断更新失败，暂不展示旧结论，请检查任务发布状态' if business_error else None,
                       'market_status':market_state,'market_busy':self.market_busy,
                       'frontend_market':self.frontend_market_snapshot(key) if key and not preparing_new else {},
+                      'collection_complete':collection_complete,
+                      'stage3_key_configured':bool(key and (key,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)['base_url']) in self.stage3_keys),
                       'stage3_provider':__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category),
                       'stage3_control':{'enabled':stage3_enabled,'can_start':stage3_ready,'running':stage3_running,'can_stop':stage3_enabled or stage3_running or bool(codex_control.get('running')),'progress':stage3_progress,
                                         'phase':stage3_phase,'codex_review':codex_control}})
@@ -1690,6 +1703,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/plain-rules': return self.send_json(self.server.console.plain_rules(body),202)
             if self.path=='/api/run': return self.send_json(self.server.console.run_draft(body),202)
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
+            if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))
             if self.path=='/api/stop-stage3': return self.send_json(self.server.console.stop_stage3(body),202)
             if self.path=='/api/refresh-market': return self.send_json(self.server.console.refresh_market(body),202)
             if self.path=='/api/open-excel':

@@ -23,6 +23,17 @@ def snapshot(base, folder, q, n, status='RUNNING', order='sales'):
         'started_at': '2026-10-01T00:00:00Z', 'updated_at': '2026-10-01T01:00:00Z'})
 
 
+def test_quantity_target_is_not_completion_until_both_passes_finish(tmp_path):
+    put(tmp_path/'temu/supervisors/assignments.json',{'lanes':['w1'],'jobs':[{'query':'one','max_products':1000}]})
+    for order in ('sales','recent'):snapshot(tmp_path,order,'one',1000,'RUNNING',order)
+    result=collection_total(tmp_path,{})
+    assert result['remaining']==0 and result['percent']==99.9
+    assert result['all_passes_complete'] is False
+    for order in ('sales','recent'):snapshot(tmp_path,order,'one',1000,'KEYWORD_LIMIT_REACHED',order)
+    result=collection_total(tmp_path,{})
+    assert result['percent']==100 and result['all_passes_complete'] is True
+
+
 def test_weighted_total_counts_each_sort_and_does_not_add_retry_duplicates(tmp_path):
     base = tmp_path / 'runs/current'; fixture(base)
     snapshot(base, 'general', 'general', 600)

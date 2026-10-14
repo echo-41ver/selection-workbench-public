@@ -55,7 +55,7 @@ def parse_visual_response(text: str, *, allow_preamble: bool = False) -> dict:
 def protocol(category: dict, count: int) -> tuple[str, dict]:
     if isinstance(category.get('stage3',{}).get('provider'),dict) and category['stage3']['provider'].get('protocol')=='decisions':
         from .stage3_provider import decision_instructions
-        return decision_instructions(category),{'decision_protocol_version':'product-choice-v1'}
+        return decision_instructions(category),{'decision_protocol_version':'product-choice-v2'}
     stage = category["stage3"]
     def obj(props):
         return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
