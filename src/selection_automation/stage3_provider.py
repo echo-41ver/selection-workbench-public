@@ -104,13 +104,14 @@ def from_category(category):
 def apply(category, value):
     provider = settings(value)
     stage = category['stage3']
-    prior_protocol=stage.get('provider',{}).get('protocol') if isinstance(stage.get('provider'),dict) else None
+    if provider != from_category(category):
+        from copy import deepcopy
+        previous=deepcopy(stage)
+        checkpoints=category.setdefault('stage3_checkpoint_sources',[])
+        if previous not in checkpoints:checkpoints.append(previous)
     stage.update(provider=provider, base_url=provider['base_url'], model=provider['model'],
                  max_concurrency=provider['workers'])
-    if provider['protocol'] == 'decisions' or provider['mode']=='local_model':
-        stage['batch_size'] = 1
-    elif prior_protocol=='decisions':
-        stage['batch_size']=12
+    stage['batch_size']=12
     return provider
 
 
@@ -133,7 +134,11 @@ def request_key(provider):
 
 def decision_score(category, facts):
     if from_category(category)['protocol'] != 'decisions':
-        raise ValueError('当前方案不接受决策 API 结果')
+        from copy import deepcopy
+        previous=next((stage for stage in reversed(category.get('stage3_checkpoint_sources',[]))
+                       if from_category({'stage3':stage})['protocol']=='decisions'),None)
+        if previous is None:raise ValueError('当前方案不接受决策 API 结果')
+        category={**category,'stage3':deepcopy(previous)}
     decision = facts['decision_api']
     probabilities = decision.get('probabilities')
     if (not isinstance(probabilities, dict) or set(probabilities) not in ({'same','similar','different'},{'same','different','unknown'})
@@ -223,19 +228,24 @@ class VisualClient:
             exc.status_code=response.status_code
             raise
         raw = response.json()
-        answer = raw['answers']['same_product']
-        facts = {'decision_api': {'choice': answer['choice'], 'probabilities': answer['probabilities'],
-                                 'confidence': answer.get('confidence'), 'protocol_version': 'product-choice-v2'}}
+        expected=set(json.loads(data)['questions']);answers=raw['answers']
+        if set(answers)!=expected:raise ValueError('决策响应的候选数量或 ID 不一致')
+        def facts(answer):
+            return {'decision_api': {'choice': answer['choice'], 'probabilities': answer['probabilities'],
+                'confidence':answer.get('confidence'),'protocol_version':'product-choice-v2'}}
+        result=({'decision_facts':facts(answers['same_product'])} if expected=={'same_product'} else
+                {'decision_facts_by_id':{identity:facts(answer) for identity,answer in answers.items()}})
         usage = raw.get('usage') or {}
         return SimpleNamespace(id=raw.get('id'), usage=SimpleNamespace(model_dump=lambda: usage), status='completed',
-                               output_text=json.dumps({'decision_facts': facts}), incomplete_details=None)
+                               output_text=json.dumps(result), incomplete_details=None)
 
-    def prepare(self, content, instructions):
+    def prepare(self, content, instructions, candidate_ids=None):
         """Validate the complete native payload before recording a sent request."""
         if self.provider['protocol']!='decisions':return None
         images = [b['image_url'] for b in content if b['type'] == 'input_image']
-        if len(images) != 2:
-            raise ValueError('决策 API 每次只接受一组 Amazon / TEMU 图片')
+        if len(images) != 2:raise ValueError('决策 API 需要 Amazon 基准图与 TEMU 图（或编号拼图）两张图片')
+        if candidate_ids and (self.provider['mode']=='liquid_d1' or len(candidate_ids)>12 or len(set(candidate_ids))!=len(candidate_ids)):
+            raise ValueError('D1 使用省费用的单候选请求；本地批判断不得超过 12 个唯一候选')
         payload = {'model': self.provider['model'],
             'state': {'image_1': 'Amazon 基准商品', 'image_2': 'TEMU 候选商品',
                       'records': [b['text'] for b in content if b['type'] == 'input_text']},
@@ -244,6 +254,10 @@ class VisualClient:
                 'criteria': {'same': '整体基础款、核心结构及品类要求一致；仅允许已配置的变体差异',
                              'different': '主体款式、核心结构、套装构成或其他身份特征有明确差异',
                              'similar': '整体款式相近、同类，但具体设计或核心结构不满足同一基础款'}}}}
+        if candidate_ids:
+            question=payload['questions']['same_product']
+            payload['state'].update(image_2='TEMU 编号拼图',candidate_ids=candidate_ids)
+            payload['questions']={identity:{**question,'instructions':instructions+'\n只比较图片1的 Amazon 与图片2中编号 '+identity+' 的候选，忽略其它格子。'} for identity in candidate_ids}
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         if len(data) >= 4_500_000:
             raise ValueError('决策 API 图片与文字请求超过 4.5 MB，请补采适当尺寸图片')

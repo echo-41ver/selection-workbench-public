@@ -419,6 +419,15 @@ def _vision_revision(category: dict, pair: dict, images: list[str], context=None
 def compatible_vision_keys(category: dict, pair: dict, *, context=None) -> tuple[str, ...]:
     # Legacy reuse is accepted only when the full original frozen rule hash agrees.
     images = _pair_image_digests(pair)
-    if isinstance(category['stage3'].get('provider'),dict) or category['stage3'].get('reasoning_effort', 'low') != 'low':
-        return (_vision_revision(category, pair, images, context),)
-    return _vision_revision(category, pair, images, context), _legacy_vision_revision(category, pair, images, context)
+    keys=[_vision_revision(category, pair, images, context)]
+    if not isinstance(category['stage3'].get('provider'),dict) and category['stage3'].get('reasoning_effort','low')=='low':
+        keys.append(_legacy_vision_revision(category,pair,images,context))
+    # Only an explicit runtime provider change grants checkpoint reuse. Rules,
+    # recorded specifications and both original image digests must still match.
+    for stage in category.get('stage3_checkpoint_sources',[]):
+        previous={**category,'stage3':stage}
+        if protocol(previous,1)!=protocol(category,1):continue
+        keys.append(_vision_revision(previous,pair,images))
+        if not isinstance(stage.get('provider'),dict) and stage.get('reasoning_effort','low')=='low':
+            keys.append(_legacy_vision_revision(previous,pair,images))
+    return tuple(dict.fromkeys(keys))

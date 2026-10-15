@@ -9,7 +9,7 @@ def recommended(mode, agents=1):
         import psutil
         memory_cap = max(1, int(psutil.virtual_memory().available / (600 * 1024**2)))
         return min(24, max(1, agents) * 6, memory_cap)
-    return 1 if mode == 'local_model' else 4
+    return 2 if mode == 'local_model' else 4
 
 
 class ThroughputTuner:

@@ -51,7 +51,7 @@ def test_pending_remains_total_but_eta_and_request_groups_exclude_unknown(tmp_pa
     monkeypatch.setattr(progress,'compatible_vision_keys',lambda c,r:[r['pair_revision']])
     s=progress.snapshot(base,{},history=False)
     assert (s['total'],s['pending'],s['billing_unknown_pairs'],s['runnable_pending'])==(3,3,1,2)
-    assert s['pending_requests']==1 and not s['billing_hold_fail_closed']
+    assert s['pending_requests']==2 and not s['billing_hold_fail_closed']
 
 
 @pytest.mark.parametrize('fail',[False,True])
@@ -79,6 +79,7 @@ def test_direct_transport_closed_and_only_unrequested_pairs_sent(tmp_path,monkey
     monkeypatch.setattr(openai,'DefaultHttpxClient',Transport)
     monkeypatch.setattr(openai,'OpenAI',Client)
     monkeypatch.setattr(runner,'_data_url',lambda p:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',lambda batch:('data:image/jpeg;base64,fixture',[{'id':f'C{i:02}','goods_id':r['goods_id']} for i,r in enumerate(batch)]))
     monkeypatch.setattr(runner,'protocol',lambda c,n:('fixture',{}))
     monkeypatch.setattr(runner,'decode',lambda c,d,ids:{i:{'overall_confidence':.9} for i in ids})
     monkeypatch.setattr(runner,'score',lambda c,f:{'hard_conflicts':[]})

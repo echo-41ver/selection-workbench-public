@@ -187,9 +187,11 @@ class Console:
         self.plain_application={}
         self.stage3_busy=False; self.stage3_phase='等待手动启动'; self.stage3_key=None
         self.stage3_keys={}
+        self._switch_threads=set();self._switch_lock=threading.Lock()
         self.market_busy=False
         self._frontend_cache={}; self._frontend_refreshing=set()
         self._frontend_cache_lock=threading.Lock()
+        self._matching_cache={};self._matching_refreshing=set();self._matching_lock=threading.Lock()
         self._codex_review_cache={}; self._codex_review_refreshing=set()
         self._codex_review_cache_lock=threading.Lock()
         self._stage3_cache={}; self._stage3_refreshing=set()
@@ -996,6 +998,26 @@ class Console:
         threading.Thread(target=update,daemon=True).start()
         return result
 
+    def matching_snapshot(self,key,category):
+        """Refresh result counts independently of the slower workbook publisher."""
+        from selection_automation.commercial import current_report
+        if not category.get('stage3'):return selection.read(self.root/'runs'/key/'commercial_report.json',{})
+        now=time.monotonic()
+        with self._matching_lock:
+            cached=self._matching_cache.get(key)
+            result=cached[1] if cached else selection.read(self.root/'runs'/key/'commercial_report.json',{})
+            if key in self._matching_refreshing or cached and now-cached[0]<3:return result
+            self._matching_refreshing.add(key)
+        def refresh():
+            value=result
+            try:value=current_report(self.root,category)
+            except (OSError,ValueError,KeyError,TypeError):pass
+            finally:
+                with self._matching_lock:
+                    self._matching_cache[key]=(time.monotonic(),value);self._matching_refreshing.discard(key)
+        threading.Thread(target=refresh,daemon=True).start()
+        return result
+
     def codex_review_snapshot(self,key):
         """Serve the latest review snapshot while a single background refresh scans batch files."""
         now=time.monotonic()
@@ -1261,6 +1283,36 @@ class Console:
             with self.lock:self.stage3_busy=False
         threading.Thread(target=wait,daemon=True).start()
 
+    def queue_stage3_switch(self,key,base,provider,configure_only=False):
+        """Persisted intent is resumed after a console restart, exactly once."""
+        from selection_automation.stage3_runtime import update_control,read_control
+        from selection_automation.stage3_progress import controller_alive
+        with self._switch_lock:
+            if key in self._switch_threads:return
+            self._switch_threads.add(key)
+        folder=base/'stage123'
+        def complete():
+            try:
+                while controller_alive(base) or _codex_pool_process_running(selection.read(folder/'codex_pool/pool.json',{}),base):
+                    if read_control(folder).get('switch_cancelled'):return
+                    time.sleep(2)
+                if read_control(folder).get('switch_cancelled'):return
+                for attempt in range(60):
+                    if self.current_run_key()[0]!=key:
+                        update_control(folder,paused=True,switch_pending=False,switch_error='断点已保存；当前任务已改变，请在原任务继续');return
+                    try:
+                        self.start_stage3({'provider':provider},configure_only=configure_only)
+                        update_control(folder,switch_pending=False,pending_provider=None,paused=bool(configure_only));return
+                    except ConsoleError as error:
+                        if error.code in {'PROGRESS_NOT_READY','ALREADY_RUNNING'}:time.sleep(2);continue
+                        update_control(folder,paused=True,switch_pending=False,switch_error=error.message);return
+                    except Exception:
+                        update_control(folder,paused=True,switch_pending=False,switch_error='断点已保存；新方案启动失败，请重试');return
+                update_control(folder,paused=True,switch_pending=False,switch_error='断点已保存；进度仍在读取，请点击继续')
+            finally:
+                with self._switch_lock:self._switch_threads.discard(key)
+        threading.Thread(target=complete,daemon=True).start()
+
     def start_stage3(self, body, configure_only=False):
         from selection_automation.stage3_progress import controller_alive
         if set(body)-{'api_key','provider'}: raise ConsoleError('INVALID_INPUT','第三层启动参数无效')
@@ -1278,11 +1330,16 @@ class Console:
             try: provider=provider_settings(body['provider']) if 'provider' in body else from_category(category)
             except ValueError as exc: raise ConsoleError('INVALID_INPUT',str(exc)) from None
             provider_changed=provider!=from_category(category)
-            if controller_alive(base): return {'ok':True,'phase':'第三层已启动，持续处理新增候选'}
+            api_running=controller_alive(base)
             codex_state=codex_review_control(base)
-            if codex_state.get('running'):
-                raise ConsoleError('ALREADY_RUNNING','本机Agent正在分析；请先停止第三层再更换方案',409)
-            if self.stage3_busy and self.stage3_key==key: return {'ok':True,'phase':'第三层启动中'}
+            running=api_running or codex_state.get('running')
+            if running and not provider_changed:
+                from selection_automation.stage3_runtime import update_control
+                (base/'stage123/STOP').unlink(missing_ok=True)
+                update_control(base/'stage123',paused=False,switch_error=None)
+                return {'ok':True,'phase':'第三层已继续，沿用已保存断点','provider':provider}
+            if self.stage3_busy and self.stage3_key==key and not running and not provider_changed:
+                return {'ok':True,'phase':'第三层启动中'}
             progress=self.stage3_snapshot(key)
             if not configure_only and (progress.get('counting') or progress.get('refreshing') or type(progress.get('total')) is not int):
                 raise ConsoleError('PROGRESS_NOT_READY','正在核对已处理候选，请等待进度读取完成后再启动',409)
@@ -1321,6 +1378,15 @@ class Console:
                     from selection_automation.analysis_concurrency import recommended
                     provider['workers']=min(recommended('local_agent',len(agents) or 1),sum(int(a.get('max_parallel',6)) for a in agents) or 6)
                     provider_changed=provider!=from_category(category)
+            from selection_automation.stage3_runtime import update_control,read_control
+            native_update=running and provider['mode']=='local_agent' and from_category(category)['mode']=='local_agent'
+            if running and provider_changed and not native_update:
+                update_control(folder,paused=True,switch_pending=True,switch_cancelled=False,pending_provider=provider,pending_configure_only=configure_only)
+                if api_running:selection.save(folder/'STOP',{'time':time.time(),'reason':'provider-switch'})
+                pool_path=folder/'codex_pool_config.json'
+                if pool_path.exists():selection.save(pool_path,{**selection.read(pool_path,{}),'enabled':False})
+                self.queue_stage3_switch(key,base,provider,configure_only)
+                return {'ok':True,'phase':'正在保存已发送的结果；完成后自动切换新方案，已完成商品不重跑','switch_pending':True}
             if provider_changed:
                 backup=folder/'category.before-provider.json'
                 if not backup.exists(): selection.save(backup,category)
@@ -1330,6 +1396,7 @@ class Console:
             if configure_only:
                 return {'ok':True,'provider':provider,'message':'第三层方案已保存；API Key 已在本机加密保存，尚未启动分析'}
             (folder/'STOP').unlink(missing_ok=True)
+            update_control(folder,paused=False,switch_pending=False,switch_cancelled=False,switch_error=None)
             selection.save(folder/'paid_enabled.json',{'category_key':key,'enabled_at':time.time(),
                 'source':'web-console','controller':'independent','provider':provider['mode']})
             if provider['mode']=='local_agent':
@@ -1356,10 +1423,34 @@ class Console:
         if pool_config and pool_config.exists():
             selection.save(pool_config,{**selection.read(pool_config,{}),'enabled':False})
         if not key: raise ConsoleError('NO_TASK','当前没有任务',409)
+        from selection_automation.stage3_runtime import update_control
+        update_control(self.root/'runs'/key/'stage123',paused=True,switch_pending=False,switch_cancelled=True,pending_provider=None)
         selection.save(self.root/'runs'/key/'stage123/STOP',{'time':time.time()})
         self.stage3_phase='停止中：等待已发出的请求返回并保存，采集和前两层继续运行'
         self.stage3_key=key
         return {'ok':True,'phase':self.stage3_phase}
+
+    def control_stage3(self,body):
+        if set(body)-{'action','agent_id'} or body.get('action') not in {'pause','resume','pause_agent','resume_agent'}:
+            raise ConsoleError('INVALID_INPUT','请选择暂停、继续或 Agent 暂停操作')
+        key,_=self.current_run_key()
+        if not key:raise ConsoleError('NO_TASK','当前没有任务',409)
+        from selection_automation.stage3_runtime import read_control,update_control
+        folder=self.root/'runs'/key/'stage123';value=read_control(folder);action=body['action']
+        if action in {'pause_agent','resume_agent'}:
+            agent=body.get('agent_id')
+            if agent not in {'codex','claude','gemini','opencode','workbuddy','acciowork','doubao'}:raise ConsoleError('INVALID_INPUT','Agent 无效')
+            paused=set(value.get('paused_agents',[]))
+            if action=='pause_agent':paused.add(agent)
+            else:paused.discard(agent)
+            value=update_control(folder,paused_agents=sorted(paused))
+        else:
+            value=update_control(folder,paused=action=='pause',switch_error=None)
+            if action=='resume':
+                from selection_automation.stage3_progress import controller_alive
+                if not controller_alive(self.root/'runs'/key) and not codex_review_control(self.root/'runs'/key).get('running'):
+                    return self.start_stage3({})
+        return {'ok':True,'control':value,'message':'已暂停派发新组；已发送结果会继续保存' if action.startswith('pause') else '已继续，保留原有断点'}
 
     def _run_stage3(self,key,category_path,candidates,api_key):
         base=self.root/'runs'/key
@@ -1564,6 +1655,10 @@ class Console:
                 'execution_mode':category.get('execution_mode','full')} if category else {})
         from selection_automation.stage3_progress import controller_alive
         stage3_base=self.root/'runs'/key if key else None
+        from selection_automation.stage3_runtime import read_control
+        runtime_control=read_control(stage3_base/'stage123') if stage3_base else {}
+        if runtime_control.get('switch_pending') and isinstance(runtime_control.get('pending_provider'),dict):
+            self.queue_stage3_switch(key,stage3_base,runtime_control['pending_provider'],runtime_control.get('pending_configure_only',False))
         stage3_enabled=bool(key and (stage3_base/'stage123/paid_enabled.json').is_file() and not (stage3_base/'stage123/STOP').exists())
         stage3_running=bool(key and controller_alive(stage3_base))
         stage3_state=selection.read(stage3_base/'stage123/controller.json',{}) if key else {}
@@ -1598,7 +1693,8 @@ class Console:
                           'base_url':(self.pending_scope or {}).get('api_base_url','https://api.deepseek.com'),
                           'model':(self.pending_scope or {}).get('api_model','deepseek-flash')},
                       'excel_files':self.excel_files(key),
-                      'commercial': selection.read(self.root/'runs'/key/'commercial_report.json', {}) if key and not preparing_new and not business_error else {},
+                      'commercial': self.matching_snapshot(key,category) if key and not preparing_new and not business_error else {},
+                      'stage3_runtime':runtime_control,
                       'commercial_error': '商业判断更新失败，暂不展示旧结论，请检查任务发布状态' if business_error else None,
                       'market_status':market_state,'market_busy':self.market_busy,
                       'frontend_market':self.frontend_market_snapshot(key) if key and not preparing_new else {},
@@ -1756,6 +1852,7 @@ class Handler(BaseHTTPRequestHandler):
                 if set(body)!={'confirmation'}:raise ConsoleError('INVALID_INPUT','连接确认无效')
                 return self.send_json(enable_doubao(self.server.console.root,body['confirmation']))
             if self.path=='/api/stop-stage3': return self.send_json(self.server.console.stop_stage3(body),202)
+            if self.path=='/api/control-stage3': return self.send_json(self.server.console.control_stage3(body),202)
             if self.path=='/api/refresh-market': return self.send_json(self.server.console.refresh_market(body),202)
             if self.path=='/api/open-excel':
                 if set(body)!={'kind'}: raise ConsoleError('INVALID_INPUT','Excel 类型无效')

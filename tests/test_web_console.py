@@ -605,7 +605,7 @@ def test_four_excel_buttons_use_current_run_and_newest_view(tmp_path,monkeypatch
     assert console.excel_workbook('layer123')==excel/names['layer123']
     assert console.status()['excel_files']['layer123']['available'] is True
     assert not (base/'stage123/paid_enabled.json').exists()
-    marker=base/'stage123/paid_enabled.json';marker.parent.mkdir();marker.write_text('{}')
+    marker=base/'stage123/paid_enabled.json';marker.parent.mkdir(exist_ok=True);marker.write_text('{}')
     assert console.excel_workbook('layer123')==excel/names['layer123']
     opened=[];monkeypatch.setattr(web.os,'startfile',lambda path:opened.append(path),raising=False)
     assert console.open_excel('amazon')['ok'] and len(opened)==1
@@ -799,7 +799,7 @@ def test_empty_visual_candidates_never_claim_paid_analysis_complete(tmp_path,mon
     console=web.Console(tmp_path);console.key='finished_run';console.draft_key='private-key'
     monkeypatch.setattr(console,'stage3_snapshot',lambda key:{'total':0,'pending':0,'pending_after_codex':0})
     base=tmp_path/'runs/finished_run';(base/'stage12').mkdir(parents=True)
-    web.selection.save(base/'category.json',{'category_key':'finished_run'})
+    web.selection.save(base/'category.json',{'stage3':{'base_url':'https://api.deepseek.com','model':'deepseek-flash'},'category_key':'finished_run'})
     web.selection.save(base/'stage12_config.json',{'output_dir':str(base/'stage12')})
     (base/'stage12/layer3_candidates_finished_run.jsonl').write_text('\n')
     monkeypatch.setattr(console,'owner',lambda:None)
@@ -817,7 +817,7 @@ def test_completed_stage3_uses_configured_key_without_paid_request(tmp_path,monk
     console=web.Console(tmp_path);console.key='finished_run'
     monkeypatch.setattr(console,'stage3_snapshot',lambda key:{'total':0,'pending':0,'pending_after_codex':0})
     base=tmp_path/'runs/finished_run';(base/'stage12').mkdir(parents=True)
-    web.selection.save(base/'category.json',{'category_key':'finished_run'})
+    web.selection.save(base/'category.json',{'stage3':{'base_url':'https://api.deepseek.com','model':'deepseek-flash'},'category_key':'finished_run'})
     (base/'stage12/layer3_candidates_finished_run.jsonl').write_text('{}\n')
     monkeypatch.setattr(console,'owner',lambda:None)
     if source=='environment':monkeypatch.setenv('DEEPSEEK_API_KEY','environment-test-only')
@@ -857,13 +857,13 @@ def test_stage3_button_authorizes_only_current_active_run(tmp_path,monkeypatch):
     console=web.Console(tmp_path);console.key='old_web_run'
     monkeypatch.setattr(console,'stage3_snapshot',lambda key:{'total':0,'pending':0,'pending_after_codex':0})
     base=tmp_path/'runs/live_run';base.mkdir(parents=True)
-    (base/'category.json').write_text(json.dumps({'category_key':'live_run','category_name_zh':'投影仪',
+    (base/'category.json').write_text(json.dumps({'stage3':{'base_url':'https://api.deepseek.com','model':'deepseek-flash'},'category_key':'live_run','category_name_zh':'投影仪',
         'amazon':{'target_count':10},'temu':{'max_products_per_keyword':100}}))
     (base/'stage123').mkdir()
     (base/'stage123/web_key_inherited.json').write_text(json.dumps({'pid':123,'created':1.0}))
     folder=tmp_path/'runtime';folder.mkdir()
     (folder/'last_run.json').write_text(json.dumps({'category_key':'other_run'}))
-    monkeypatch.setattr(console,'owner',lambda:{'category_key':'live_run','pid':123,'created':1.0})
+    monkeypatch.setattr(console,'owner',lambda:{'stage3':{'base_url':'https://api.deepseek.com','model':'deepseek-flash'},'category_key':'live_run','pid':123,'created':1.0})
     monkeypatch.setattr(console,'saved_credential',lambda:'test-only-key')
     monkeypatch.setattr(console,'launch_stage3_controller',lambda *args:None)
     result=console.start_stage3({})

@@ -39,7 +39,7 @@ def test_strict_threshold_and_unfinished_evidence(tmp_path):
     cat,report=setup(tmp_path)
     data=build_delivery(tmp_path,cat,report)
     assert [p['asin'] for p in data['products']]==['A1','A3']
-    assert [(p['asin'],p['goods_id']) for p in data['pairs']]==[('A1','1')]
+    assert [(p['asin'],p['goods_id']) for p in data['pairs']]==[('A1','1'),('A2','1'),('A2','2')]
     assert data['products'][1]['advice']['conclusion']=='待完成同款核验'
     assert data['products'][1]['advice']['confidence']=='未知'
     assert data['products'][0]['amazon']['price']['min'] is None
@@ -50,7 +50,7 @@ def test_reopen_focused_excel_and_full_fields(tmp_path):
     delivered=export(tmp_path,cat,report)
     book=load_workbook(delivered['固定查看副本'],read_only=False,data_only=False)
     assert book.sheetnames==['选品结论','同款商品明细','商品完整字段']
-    assert book['选品结论'].max_row==6 and book['同款商品明细'].max_row==5
+    assert book['选品结论'].max_row==6 and book['同款商品明细'].max_row==7
     assert book['选品结论']['A5'].value=='A1' and book['选品结论']['A6'].value=='A3'
     detail=book['同款商品明细'];headers=[c.value for c in detail[4]]
     assert detail.cell(5,headers.index('TEMU最低价(USD)')+1).value==3
@@ -58,9 +58,9 @@ def test_reopen_focused_excel_and_full_fields(tmp_path):
     assert detail.cell(5,headers.index('TEMU评论数')+1).value==0
     link=detail.cell(5,headers.index('TEMU商品链接')+1)
     assert link.hyperlink and link.hyperlink.target.startswith('https://www.temu.com/') or link.data_type=='f' and 'https://www.temu.com/' in link.value
-    text=''.join(row[3] for row in book['商品完整字段'].iter_rows(min_row=5,values_only=True) if row[0]=='TEMU' and row[2]=='long_detail')
+    text=''.join(row[3] for row in book['商品完整字段'].iter_rows(min_row=5,values_only=True) if row[0]=='TEMU' and row[1]=='1' and row[2]=='long_detail')
     assert text=='证据'*18000
-    assert book['选品结论'].freeze_panes=='B5'
+    assert book['选品结论'].freeze_panes=='D5'
     book.close()
 
 
@@ -68,15 +68,15 @@ def test_empty_selection_has_no_cartesian_detail(tmp_path):
     cat,report=setup(tmp_path,n=0)
     delivery=export(tmp_path,cat,report)
     book=load_workbook(delivery['固定查看副本'],read_only=True)
-    assert book['选品结论'].max_row==4 and book['同款商品明细'].max_row==4
+    assert book['选品结论'].max_row==4 and book['同款商品明细'].max_row==7
     book.close()
 
 
-def test_concise_delivery_has_four_labels_and_keeps_details_hidden(tmp_path):
+def test_summary_has_five_counts_and_visible_collected_parameters(tmp_path):
     from openpyxl.utils import get_column_letter
     from selection_automation.selection_delivery import conclusion_label
     assert [conclusion_label(value) for value in
-        ('确认同款','相似款（Agent看图核验）','DIFFERENT','待补充证据')]==['同款','类似款','不同款','未分析']
+        ('确认同款','相似款（Agent看图核验）','DIFFERENT','待补充证据',None)]==['同款','类似款','不同款','无法判断','未分析']
     cat,report=setup(tmp_path,n=4)
     first,second,third=report['products']
     first['confirmed_pairs'][0]['reason']='简短事实。'*100
@@ -85,10 +85,12 @@ def test_concise_delivery_has_four_labels_and_keeps_details_hidden(tmp_path):
     delivered=export(tmp_path,cat,report)
     book=load_workbook(delivered['固定查看副本'])
     sheet=book['选品结论'];headers=[cell.value for cell in sheet[4]]
-    assert [sheet.cell(row,headers.index('最终关系')+1).value for row in (5,6,7)]==['同款','不同款','未分析']
-    assert len(sheet.cell(5,headers.index('判断依据')+1).value)<=140
-    assert sheet.column_dimensions[get_column_letter(headers.index('综合分析依据')+1)].hidden
-    assert not sheet.column_dimensions[get_column_letter(headers.index('最终关系')+1)].hidden
+    assert [sheet.cell(row,headers.index('同款数')+1).value for row in (5,6,7)]==[1,0,0]
+    assert sheet.cell(6,headers.index('不同款数')+1).value==2
+    assert sheet.cell(7,headers.index('未分析数')+1).value==2
+    assert all(h in headers for h in ['类似款数','无法判断数','Amazon规格参数','Amazon销量原文','Amazon评分'])
+    assert not sheet.column_dimensions[get_column_letter(headers.index('Amazon评分')+1)].hidden
+    assert len(book['同款商品明细'].cell(5,12-1).value)<=140
     assert book['商品完整字段'].sheet_state=='hidden'
     book.close()
 
@@ -117,12 +119,20 @@ def test_combined_same_and_similar_threshold_and_embedded_picture_order(tmp_path
     delivery=export(tmp_path,cat,report)
     book=load_workbook(delivery['固定查看副本'])
     prefix=['Amazon ASIN','Amazon标题','Amazon图片','TEMU图片','同款+类似款数量','Amazon商品链接','TEMU商品链接']
-    for name in ('选品结论','同款商品明细'):
-        assert [c.value for c in book[name][4]][:7]==prefix
-        assert len(book[name]._images)>=4
-        assert {(image.anchor._from.col) for image in book[name]._images}=={2,3}
+    assert [c.value for c in book['同款商品明细'][4]][:7]==prefix
+    assert [c.value for c in book['选品结论'][4]][:3]==prefix[:3]
+    assert len(book['选品结论']._images)==3
+    assert {(image.anchor._from.col) for image in book['选品结论']._images}=={2}
+    assert len(book['同款商品明细']._images)==8
+    assert {(image.anchor._from.col) for image in book['同款商品明细']._images}=={2,3}
     assert book['同款商品明细']['E5'].value==2
     book.close()
+    from zipfile import ZipFile
+    with ZipFile(delivery['固定查看副本']) as archive:
+        drawings=[archive.read(n).decode() for n in archive.namelist() if n.startswith('xl/drawings/drawing') and n.endswith('.xml')]
+        assert all('hlinkClick' in drawing for drawing in drawings)
+        relations=''.join(archive.read(n).decode() for n in archive.namelist() if n.startswith('xl/drawings/_rels/'))
+        assert 'https://images.example.invalid/TEST_ONLY_IMAGE.png' in relations
     cat['commercial']['same_limit']=2
     assert all(p['asin']!='A1' for p in build_delivery(tmp_path,cat,report)['products'])
     cat['commercial']['same_limit']=3

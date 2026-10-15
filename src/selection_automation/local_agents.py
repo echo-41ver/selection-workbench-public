@@ -206,7 +206,8 @@ def analysis_command(agent, job, model=None, effort='medium'):
     prefix = command_prefix(agent['executable'], agent['id'])
     images = [str(job/'contacts/contact-001.jpg')]
     inputs = json.loads((job/'image-inputs.json').read_text(encoding='utf-8'))
-    images.extend(row['path'] for row in inputs.get('images',[]))
+    if inputs.get('attachments'):images=[item['path'] for item in inputs['attachments']]
+    else:images.extend(row['path'] for row in inputs.get('images',[]))
     per_drive={}
     for image in images:
         folder=str(Path(image).parent)

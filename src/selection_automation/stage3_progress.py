@@ -227,7 +227,7 @@ def snapshot(base, category, *, history=True, on_phase=None):
     from .codex_visual_review import load_reviews, supersedes_api
     codex_reviews = load_reviews(base, by_revision=True, category=category)
     review_pairs = {identity[:2] for identity in codex_reviews}
-    codex_counts = {'SAME': 0, 'DIFFERENT': 0, 'UNKNOWN': 0}
+    codex_counts = {'SAME':0,'SIMILAR':0,'DIFFERENT':0,'UNKNOWN':0}
     cached = {}
     phase('读取已保存的API结果')
     for row in records(base/'stage123/results.jsonl'):
@@ -244,6 +244,8 @@ def snapshot(base, category, *, history=True, on_phase=None):
     blocked = pending_blocked = retry_consumed = 0
     stage = category.get('stage3',{})
     batch_size = max(1,min(12,stage.get('batch_size',12)))
+    from .stage3_provider import from_category
+    if from_category(category)['mode']=='liquid_d1':batch_size=1
     parallel = concurrency(stage)
     seen = set()
     phase('读取当前候选文件')
@@ -315,7 +317,7 @@ def snapshot(base, category, *, history=True, on_phase=None):
         pending_requests = 0
         eta = None
     return {'total':total,'completed':completed,'api_completed':success,'failed':failed,'processed':completed+failed,
-            'codex_completed':sum(codex_counts.values()),'codex_same':codex_counts['SAME'],
+            'codex_completed':sum(codex_counts.values()),'codex_same':codex_counts['SAME'],'codex_similar':codex_counts['SIMILAR'],
             'codex_different':codex_counts['DIFFERENT'],'codex_unknown':codex_counts['UNKNOWN'],
             'pending_after_codex':pending,
             'source_candidates':source_candidates,'retained_for_review':retained,

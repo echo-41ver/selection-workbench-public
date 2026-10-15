@@ -37,7 +37,7 @@ def test_pool_dispatches_different_agents_and_binds_process_ownership(tmp_path,m
     assert all(job.get('command_marker') for job in worker.jobs.values())
 
 
-def test_doubao_dispatch_binds_only_one_pair_and_never_exceeds_one_active_job(tmp_path,monkeypatch):
+def test_doubao_dispatches_whole_twelve_pair_groups_into_independent_slots(tmp_path,monkeypatch):
     import psutil
     category=tmp_path/'category.json';category.write_text('{}')
     monkeypatch.setattr(pool,'load_category',lambda _:configured())
@@ -50,11 +50,12 @@ def test_doubao_dispatch_binds_only_one_pair_and_never_exceeds_one_active_job(tm
     monkeypatch.setattr(pool.subprocess,'Popen',lambda *a,**kw:SimpleNamespace(pid=12345,stdin=Input()))
     monkeypatch.setattr(psutil,'Process',lambda _:SimpleNamespace(create_time=lambda:1.0))
     monkeypatch.setattr('selection_automation.local_agents.analysis_command',lambda agent,job,*a:['native',str(job)])
-    worker=pool.Pool(category,{'workers':10,'agent_backends':[{'id':'doubao','name':'豆包','max_parallel':1,'max_group_size':1}]})
+    worker=pool.Pool(category,{'workers':10,'agent_backends':[{'id':'doubao','name':'豆包','max_parallel':2,'max_group_size':12}]})
     pair,_=fixture()
-    assert worker.launch({'task_id':'one'},[pair,{**pair,'goods_id':'other'}])==1
+    assert worker.launch({'task_id':'one'},[{**pair,'goods_id':str(index)} for index in range(13)])==12
     job=next(iter(worker.jobs.values()))
-    assert len(job['identities'])==len(bound[0])==1
+    assert len(job['identities'])==len(bound[0])==12
+    assert worker.launch({'task_id':'two'},[{**pair,'goods_id':'other'}])==1
     with pytest.raises(RuntimeError,match='槽位'):worker.launch({'task_id':'two'},[{**pair,'goods_id':'other'}])
 from test_codex_visual_review import fixture
 from test_set_inventory_identity import configured
@@ -87,7 +88,8 @@ def test_ready_facts_require_complete_rows_and_unchanged_original_images(tmp_pat
     pair, row = fixture()
     for side in ('amazon', 'temu'):
         image = tmp_path / f'{side}.jpg'
-        image.write_bytes(side.encode())
+        from PIL import Image
+        Image.new('RGB',(80,60),'red' if side=='amazon' else 'blue').save(image)
         pair[f'{side}_image_path'] = str(image)
     row.update(visual_facts=facts(cat, a=6, t=8))
     pool._write_jsonl(tmp_path / 'manifest.jsonl', [pair])
@@ -273,7 +275,7 @@ def test_finished_first_batch_automatically_prepares_and_starts_next(tmp_path,mo
     monkeypatch.setattr(pool,'prepare_batch',prepare)
     state=worker.tick()
     assert state['running']==2 and len(preparations)==1
-    assert preparations[0]['skip_empty'] and preparations[0]['per_shard']==12
+    assert preparations[0]['skip_empty'] and preparations[0]['per_shard']==96
 
 
 def test_one_active_group_cannot_be_dispatched_twice(tmp_path,monkeypatch):
@@ -322,15 +324,16 @@ def test_actual_originals_are_attached_and_changed_image_is_rejected(tmp_path):
     pair, _ = fixture('SAME')
     for side in ('amazon','temu'):
         image = tmp_path / (side + '.jpg')
-        image.write_bytes(side.encode())
+        from PIL import Image
+        Image.new('RGB',(80,60),'red' if side=='amazon' else 'blue').save(image)
         pair[side + '_image_path'] = str(image)
     pool.bind_original_images(tmp_path, [pair])
     args = pool.command('codex.exe', tmp_path)
-    assert args.count('-i') == 3
-    assert pair['amazon_image_path'] in args and pair['temu_image_path'] in args
+    assert args.count('-i') == 2
+    assert pair['amazon_image_path'] in args and str(tmp_path/'attachments/temu-numbered-grid.jpg') in args
     pool.check_original_binding(tmp_path, pair)
     Path(pair['amazon_image_path']).write_bytes(b'different source')
-    with pytest.raises(ValueError, match='binding changed'):
+    with pytest.raises(ValueError, match='binding changed|发生变化'):
         pool.check_original_binding(tmp_path, pair)
 
 

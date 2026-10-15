@@ -140,7 +140,7 @@ def _facts_guide(category):
     visual_features = [feature['id'] for feature in policy.get('features', [])
                        if feature.get('role') == 'identity' and feature.get('evidence') in {'image', 'both'}]
     facts = {
-        'overall_confidence': 0.0,
+        'overall_confidence': '<按原图实际可见程度填写0至1数字，禁止照抄占位>',
         'modules': {key: {'relation': 'UNKNOWN', 'amazon_evidence': '', 'temu_evidence': '',
                           'hard_conflict_code': 'NONE'} for key in modules},
         'identity': {
@@ -156,7 +156,7 @@ def _facts_guide(category):
     else:
         required = facts
     return {
-        'purpose': '根据原图判断同款、类似款、不同款或未分析；只记录事实与简短理由，不生成分数。',
+        'purpose': '根据原图判断同款、类似款、不同款或无法判断；分析失败自动补跑，不作为商品结论。',
         'recommended_model': 'gpt-6.1-sol',
         'reasoning_effort': 'medium',
         'category_key': category['category_key'],
@@ -175,26 +175,20 @@ def _facts_guide(category):
             '未知模块填 relation=UNKNOWN 且双方证据为空字符串；不要用 0 分或猜测事实代替 UNKNOWN。',
             '必须填齐所有 modules 和 feature_comparisons。hard_conflict_code 无明确冲突填 NONE。',
             '不要添加 score、total_score 或任何主观分数。',
+            'overall_confidence 不是主观打分，而是证据清晰程度；双边主体结构清楚时不能填0。必须用真实数字替换占位，不能照抄。',
         ],
     }
 
 
-def _select_coverage_first(rows, limit):
-    ordered = sorted(rows, key=lambda row: (-float(row['vector_score']), row['asin'], row['goods_id']))
-    selected = []
-    covered_asins = set()
-    for row in ordered:
-        if row['asin'] not in covered_asins:
-            selected.append(row)
-            covered_asins.add(row['asin'])
-            if len(selected) >= limit:
-                return selected
-    selected_ids = {(row['asin'], row['goods_id']) for row in selected}
-    for row in ordered:
-        if (row['asin'], row['goods_id']) not in selected_ids:
-            selected.append(row)
-            if len(selected) >= limit:
-                break
+def _select_coverage_first(rows, limit, group_size=12):
+    # Cover Amazon references by whole groups, rather than scattering one pair
+    # from every reference and destroying the shared-image benefit.
+    from selection_automation.visual_batch import groups
+    ordered=sorted(rows,key=lambda row:(-float(row['vector_score']),row['asin'],row['goods_id']))
+    selected=[]
+    for group in groups(ordered,group_size):
+        selected.extend(group[:limit-len(selected)])
+        if len(selected)>=limit:break
     return selected
 
 
@@ -271,15 +265,17 @@ def prepare_batch(category_path: Path, *, shards=3, per_shard=96, output_dir: Pa
     completed = _existing_current_results(category, base, current_keys, payload_by_pair)
     reserved = _unfinished_allocations(base)
     eligible = [row for row in eligible if (row['asin'], row['goods_id']) not in completed and
-                (row['asin'], row['goods_id'], row['vision_revision_key']) not in reserved]
-    selected = _select_coverage_first(eligible, shards * per_shard)
+                not any((row['asin'],row['goods_id'],version) in reserved for version in current_keys[(row['asin'],row['goods_id'])])]
+    group_size=min(contact_group_size,per_shard)
+    selected = _select_coverage_first(eligible, shards * per_shard, group_size)
     if skip_empty and not selected:
         return {'selected':0, 'shard_targets':[], 'missing_image_sides':len(missing_images),
                 'unavailable_candidates':len(unavailable), 'covered_amazon_asins':0,
                 'shortfall':shards * per_shard, 'eligible_after_dedup':len(eligible)}
     distribution = [[] for _ in range(shards)]
-    for index, row in enumerate(selected):
-        distribution[index % shards].append(row)
+    from selection_automation.visual_batch import groups
+    for group in groups(selected,group_size):
+        min(distribution,key=len).extend(group)
 
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     folder = Path(output_dir).resolve() if output_dir else base / 'nightly_review' / timestamp

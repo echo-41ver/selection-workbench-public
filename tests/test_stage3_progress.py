@@ -13,6 +13,16 @@ def test_isolated_reader_uses_normal_windows_priority_without_changing_unix_nice
     assert priorities==[psutil.NORMAL_PRIORITY_CLASS if os.name=='nt' else 10]
 
 
+def test_agent_similar_is_counted_and_does_not_crash_live_progress(tmp_path,monkeypatch):
+    import selection_automation.codex_visual_review as reviews
+    base=tmp_path/'task';base.mkdir()
+    write(progress.candidate_path(base),[{'asin':'A','goods_id':'T','pair_revision':'p'}])
+    monkeypatch.setattr(progress,'compatible_vision_keys',lambda *a,**kw:('v',))
+    monkeypatch.setattr(reviews,'load_reviews',lambda *a,**kw:{('A','T','v'):{'review_status':'SIMILAR'}})
+    result=progress.snapshot(base,{},history=False)
+    assert result['completed']==result['codex_similar']==1 and result['pending']==0
+
+
 def write(path, rows):
     path.parent.mkdir(parents=True,exist_ok=True)
     path.write_text(''.join(json.dumps(r)+'\n' for r in rows),encoding='utf-8')

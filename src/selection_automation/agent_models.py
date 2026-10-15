@@ -170,10 +170,9 @@ def select_doubao_model(cdp,model):
     try:
         rows,_=doubao_menu(cdp)
         if model not in {row['id'] for row in rows if row}:raise RuntimeError('所选豆包模型已不可用，未发送任务')
-        point=cdp.evaluate("(()=>{const e=[...document.querySelectorAll('[role=menuitem],[role=option],[role=menuitemradio]')].find(e=>e.getClientRects().length&&e.innerText.trim().replace(/\\s+/g,' ')==="+json.dumps(model)+");if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()")
-        if not point:raise RuntimeError('所选豆包模型已不可用，未发送任务')
-        for kind in ('mousePressed','mouseReleased'):cdp.call('Input.dispatchMouseEvent',{'type':kind,**point,'button':'left','clickCount':1})
-        for _ in range(20):
+        selected=cdp.evaluate("(()=>{const e=[...document.querySelectorAll('[role=menuitem],[role=option],[role=menuitemradio]')].find(e=>e.getClientRects().length&&e.innerText.trim().replace(/\\s+/g,' ')==="+json.dumps(model)+");if(!e||e.getAttribute('aria-disabled')==='true')return false;e.click();return true;})()")
+        if not selected:raise RuntimeError('所选豆包模型已不可用，未发送任务')
+        for _ in range(100):
             value=cdp.evaluate("document.querySelector('[data-testid=chat_input_action_model]')?.innerText")
             if ' '.join((value or '').split())==model:return
             time.sleep(.1)
@@ -187,7 +186,7 @@ def _doubao(root,agent):
     path=Path(os.environ.get('LOCALAPPDATA',Path.home()))/'SelectionWorkbench/agent-locks/doubao.lock'
     path.parent.mkdir(parents=True,exist_ok=True)
     with ProcessLock(path):
-        for target in doubao_targets(root):
+        for target in doubao_targets(root,include_owned=False):
             cdp=CDP(target['webSocketDebuggerUrl'])
             try:
                 if not cdp.evaluate("Boolean(document.querySelector('[data-testid=chat_input_action_model]'))"):continue
@@ -220,6 +219,8 @@ def catalog(root,agent_id,refresh=False,agent=None):
         result['message']=str(error) if type(error) is RuntimeError else '模型读取失败，请检查客户端与网络'
     if result['status']=='ready':
         with _lock:_cache[key]=time.monotonic(),dict(result)
+        from .merge_temu_snapshots import atomic_write
+        atomic_write(Path(root)/'runtime/agent-config/model-catalogs'/f'{agent_id}.json',json.dumps(result,ensure_ascii=False))
     return result
 
 

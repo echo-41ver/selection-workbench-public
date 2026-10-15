@@ -27,6 +27,9 @@ header{padding-top:18px;padding-bottom:4px}header p{display:none}header h1{font-
 @media(max-width:600px){.workspace-nav{flex-wrap:wrap}}
 .warning{color:#80580c;background:#fff9e8;border-color:#e7cc80}.progress-card.warning .progress-state,.module.warning .state,.warning .advice{color:#80580c}.progress-card.warning .progress-fill{background:#bd8a18}.lane-card.warning>.advice{display:block;grid-column:1/-1}.notice:empty{display:none}#feedback{display:none}button:disabled{cursor:not-allowed}.workflow-help{margin:0 0 20px;padding:14px 18px;background:#edf5fa;border:1px solid #c6dde9;border-radius:10px}.workflow-help strong{color:var(--blue)}.workflow-help p{margin:4px 0}.button-help{font-size:13px;color:var(--muted);margin:8px 0}.progress-card.success{border-color:#b6d7c3;background:#f1faf4}.lane-card.danger>.advice{display:block;grid-column:1/-1}.notice[role=status]{line-height:1.7}
 [data-excel]:not([data-excel="layer123"]){display:none}#stage3-settings{background:white;padding:14px;border-radius:8px}#stage3-settings summary{font-weight:600}.workflow-help{padding:10px 14px}
+.matching-scroll{overflow:auto;border:1px solid #d7e3ed;border-radius:12px}.matching-table{width:100%;border-collapse:collapse;font-size:14px}.matching-table th,.matching-table td{padding:12px;vertical-align:top;border-bottom:1px solid #e4ebf2;text-align:left}.matching-table th{background:#edf3f8;white-space:nowrap;position:sticky;top:0}.matching-table .count{text-align:center;font-size:20px;font-weight:700;min-width:65px}.matching-table .product-title{min-width:220px;max-width:320px}.matching-table img{width:92px;height:80px;object-fit:contain;background:white}.matching-table details{min-width:180px}.agent-runtime-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0}.agent-runtime-row span{flex:1;min-width:180px}.agent-runtime-row button{padding:8px 14px}.matching-note{margin:12px 0}
+input[type=checkbox],input[type=radio]{width:auto;flex:0 0 auto;margin:0}label:has(>input[type=checkbox]),label:has(>input[type=radio]){display:flex;align-items:center;gap:8px}
+@media(max-width:760px){.matching-scroll{border:0;overflow:visible}.matching-table thead{display:none}.matching-table tbody,.matching-table tr{display:block}.matching-table tr{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;border:1px solid var(--line);border-radius:12px;padding:10px;margin:12px 0;background:white}.matching-table td{display:block;min-width:0!important;max-width:none!important;border:0;padding:6px;overflow-wrap:anywhere;font-size:12px}.matching-table td:nth-child(1){grid-column:2/6;grid-row:1}.matching-table td:nth-child(2){grid-column:2/6;grid-row:2;padding-top:0}.matching-table td:nth-child(3){grid-column:1;grid-row:1/3;padding:0;align-self:center}.matching-table img{width:100%;height:72px}.matching-table td.count{font-size:21px;padding:8px 2px;background:#f2f6fa;border-radius:6px}.matching-table td.count::before,.matching-table td:nth-child(n+9)::before{display:block;content:attr(data-label);font-size:11px;font-weight:400;color:var(--muted)}.matching-table td:nth-child(9){grid-column:1/3}.matching-table td:nth-child(10){grid-column:3/5}.matching-table td:nth-child(11){grid-column:5}.matching-table td:nth-child(12){grid-column:1/6}.matching-table details{min-width:0}.matching-table td:nth-child(12)::before{display:none}}
 </style>
 <style>
 input[type="checkbox"],input[type="radio"]{width:16px;height:16px;padding:0;margin:0;flex:0 0 16px;accent-color:var(--blue);vertical-align:middle}
@@ -104,11 +107,11 @@ function stage3ProviderFields(){
  $('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取。自动并发从 4 路起步，依据成功吞吐量调整。':mode==='local_model'?'连接已启动的本地看图模型服务。':local?'默认只使用你选中的一个 Agent；它可以按并发数同时处理多组商品。需要多个 Agent 分担时，在下方展开添加。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';
 }
 function chooseStage3Mode(){
- const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:18181/v1/systemone','d1-3b','decisions',1],local_agent:['','gpt-6.1-sol','responses',6]};
+ const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:18181/v1/systemone','d1-3b','decisions',2],local_agent:['','gpt-6.1-sol','responses',6]};
  const [url,model,protocol,workers]=values[$('stage3-mode').value];$('stage3-base-url').value=url;$('stage3-model').value=model;$('stage3-protocol').value=protocol;$('stage3-workers').value=workers;$('stage3-api-key').value='';if($('stage3-auto'))$('stage3-auto').checked=true;
  stage3SettingsDirty=true;stage3ProviderFields();if($('stage3-mode').value==='local_agent'){stage3AgentSelection=[];refreshLocalAgents();}if(lastStatus)stage3Button(lastStatus);
 }
-function localAgentSettingsLocked(){return Boolean(lastStatus?.stage3_control?.running||lastStatus?.stage3_control?.codex_review?.running);}
+function localAgentSettingsLocked(){return Boolean(lastStatus?.stage3_runtime?.switch_pending);}
 function stage3AgentInputsReady(){return stage3AgentSelection.length>0&&stage3AgentSelection.every(id=>{
  const catalog=stage3AgentCatalogs[id],model=stage3AgentModels[id];return catalog?.status==='ready'&&(!model||catalog.models.some(m=>m.id===model&&m.vision!==false));
 });}
@@ -121,7 +124,7 @@ function renderStage3Settings(data){
   $('stage3-mode').value=p.mode;$('stage3-base-url').value=p.base_url;$('stage3-model').value=p.model;$('stage3-protocol').value=p.protocol;$('stage3-workers').value=p.workers;$('stage3-confidence').value=Math.round(p.confidence*100);if($('stage3-auto'))$('stage3-auto').checked=p.concurrency_mode==='auto';stage3AgentSelection=[...(p.agent_ids||[])];stage3AgentModels={...(p.agent_models||{})};
   if(before!==JSON.stringify([stage3AgentSelection,stage3AgentModels])||changedRun)renderAgentControls();
  }
- stage3ProviderFields();const locked=Boolean(data.stage3_control?.running||data.stage3_control?.codex_review?.running);
+ stage3ProviderFields();const locked=Boolean(data.stage3_runtime?.switch_pending);
  for(const id of ['stage3-mode','stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-api-key','stage3-auto'])if($(id))$(id).disabled=locked||(id==='stage3-workers'&&Boolean($('stage3-auto')?.checked));
  for(const select of document.querySelectorAll('[data-agent-select]'))select.disabled=locked;
  for(const select of document.querySelectorAll('[data-agent-model]'))select.disabled=locked||select.dataset.available!=='true';
@@ -148,7 +151,7 @@ function renderAgentStatus(node,id){
  const agent=stage3DetectedAgents.find(a=>a.id===id),catalog=stage3AgentCatalogs[id];
  const modelChanged=agent&&stage3AgentModels[id]&&(agent.selected_model||'')!==stage3AgentModels[id];
  node.textContent=!id?'只会使用你选择的 Agent。':catalog&&catalog.status!=='ready'?catalog.message:modelChanged?'已选择模型，启动时会自动验证连接。':agent?.status||'等待识别';
- if(agent)node.textContent+=` · 每组最多 ${agent.max_group_size||12} 对${id==='doubao'?'，单窗口同时处理 1 组':''}`;
+ if(agent)node.textContent+=` · 1 个 Amazon＋最多 ${agent.max_group_size||12} 个 TEMU，整组分析${id==='doubao'?'；各组使用独立聊天并发':''}`;
 }
 function renderAgentControls(){
  if(!$('stage3-agent'))return;
@@ -210,7 +213,20 @@ async function enableSelectedDoubao(){
  catch(error){$('stage3-agent-message').textContent=error.message;}
 }
 
-function renderSelectionSummary(report,box=$('commercial'),historical=false){box.replaceChildren();const h=document.createElement('h2');h.textContent='选品结论';box.append(h);if(!report?.policy){const p=document.createElement('p');p.textContent='等待同款分析；结果 Excel 会持续更新。';box.append(p);return;}const limit=report.policy.same_limit,rows=(report.products||[]).filter(p=>p.match.confirmed+(p.match.similar||0)<limit);const note=document.createElement('p');note.className='small';note.textContent=`最终同款与类似款合计严格小于 ${limit}：${rows.length} 件 Amazon 商品。未完成核验会标明，完整双边信息见选品结果 Excel。`;box.append(note);for(const row of rows){const card=document.createElement('div');card.className='notice';const title=document.createElement('strong');title.textContent=row.title||row.asin;const p=document.createElement('p');p.textContent=`${row.asin} · 同款 ${row.match.confirmed} · 类似款 ${row.match.similar||0} · 合计 ${row.match.confirmed+(row.match.similar||0)} · 待分析 ${row.match.pending||0} · 待补证 ${row.match.possible||0} · ${row.selection_advice?.conclusion||row.match.label}`;card.append(title,p);const d=document.createElement('details'),sum=document.createElement('summary'),body=document.createElement('p');sum.textContent='查看综合分析';body.textContent=row.selection_advice?.reason||row.match.reason;d.append(sum,body);card.append(d);box.append(card);}}
+function renderSelectionSummary(report,box=$('commercial'),historical=false){
+ box.replaceChildren();const heading=document.createElement('h2');heading.textContent='Amazon 商品分析进度';box.append(heading);
+ if(!report?.products?.length){const p=document.createElement('p');p.textContent='等待 Amazon 商品与分析结果。';box.append(p);return;}
+ const note=document.createElement('p');note.className='small matching-note';note.textContent=`${historical?'历史结果':'随分析自动更新'} · 共 ${report.products.length} 件 Amazon 商品。无法判断：已有结果但证据不足；未分析：尚未完成。Excel 选品结论只保留同款＋类似款小于 ${report.policy?.same_limit??'N'} 的商品。`;box.append(note);
+ const wrap=document.createElement('div'),table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody');wrap.className='matching-scroll';table.className='matching-table';
+ const hr=document.createElement('tr');for(const label of ['Amazon ASIN','标题','图片','同款','类似款','不同款','无法判断','未分析','价格','销量','评分 / 评论','商品详细参数']){const th=document.createElement('th');th.textContent=label;hr.append(th);}head.append(hr);
+ for(const row of report.products){const tr=document.createElement('tr'),card=row.amazon_card||{},match=row.match||{};const cell=(value,cls='')=>{const td=document.createElement('td');td.textContent=value??'未取得';td.className=cls;tr.append(td);return td;};
+  const asin=cell('');if(card.url){const a=document.createElement('a');a.href=card.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.asin;asin.append(a);}else asin.textContent=row.asin;
+  cell(row.title||card.title,'product-title');const photo=cell('');if(card.image&&/^https?:\/\//.test(card.image)){const a=document.createElement('a'),img=document.createElement('img');a.href=card.image;a.target='_blank';a.rel='noopener noreferrer';img.src=card.image;img.alt=row.title||row.asin;img.loading='lazy';a.append(img);photo.append(a);}else photo.textContent='图片未取得';
+  for(const key of ['confirmed','similar','different','possible','pending']){const td=cell(Number((key==='pending'?match.unanalysed??match.pending:match[key])||0),'count');if(key==='pending'&&match.screened_out)td.title=`其中 ${match.screened_out} 个在前两层筛除，尚未做看图判断，未计作不同款。`;}
+  const price=card.price||{},sales=card.sales||{};cell(price.observed_price!=null?'$'+price.observed_price:price.min!=null?'$'+price.min+(price.max!=null?'–$'+price.max:''):'未取得');cell(sales.text||'未取得');cell((card.rating??'未取得')+' / '+(card.review_count??'未取得'));
+  const td=cell(''),details=document.createElement('details'),summary=document.createElement('summary'),dl=document.createElement('dl');summary.textContent='展开已采集参数';for(const [name,value] of Object.entries(row.amazon_parameters||{})){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=name;dd.textContent=typeof value==='object'?JSON.stringify(value):String(value);dl.append(dt,dd);}details.append(summary,dl);td.append(details);[...tr.children].forEach((cell,index)=>cell.dataset.label=hr.children[index].textContent);body.append(tr);
+ }table.append(head,body);wrap.append(table);box.append(wrap);
+}
 
 
 function businessSettings(){const result={};for(const input of document.querySelectorAll('[id^="biz-"]')){const key=input.id.slice(4);result[key]=['growth_period','same_operator'].includes(key)?input.value:Number(input.value);if(key==='min_sales_coverage')result[key]/=100;}return result;}
@@ -299,10 +315,18 @@ function stage3Button(data){
  const unavailable=!statusFresh||busy||!data?.category_key||data?.scope?.execution_mode==='collection';
  renderStage3Settings(data);
  const providerChanged=JSON.stringify(stage3ProviderSettings())!==JSON.stringify(data?.stage3_provider);
- $('start-stage3').textContent=running||data?.stage3_control?.codex_review?.running?'第三层分析中':$('stage3-mode').value==='local_agent'?'开始分析':'启动 / 继续第三层';
- $('start-stage3').disabled=unavailable||Boolean(data?.release_update?.pending)||(state.can_start===false&&!providerChanged)||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||running||($('stage3-mode').value==='local_agent'&&!stage3AgentInputsReady());
+ const active=running||Boolean(state.codex_review?.running),runtime=data?.stage3_runtime||{};
+ $('start-stage3').textContent=runtime.switch_pending?'正在保存断点并切换':active&&providerChanged?'保存断点并切换方案':runtime.paused?'继续第三层':active?'第三层分析中':$('stage3-mode').value==='local_agent'?'开始分析':'启动 / 继续第三层';
+ $('start-stage3').disabled=unavailable||Boolean(data?.release_update?.pending)||runtime.switch_pending||active&&!providerChanged&&!runtime.paused||(!active&&state.can_start===false&&!providerChanged)||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||($('stage3-mode').value==='local_agent'&&!stage3AgentInputsReady());
+ $('configure-stage3').disabled=unavailable||active||runtime.switch_pending;
+ let pause=$('pause-stage3');if(!pause){pause=document.createElement('button');pause.type='button';pause.id='pause-stage3';$('stop-stage3').before(pause);pause.addEventListener('click',()=>action('/api/control-stage3',{action:lastStatus?.stage3_runtime?.paused?'resume':'pause'}));}
+ pause.textContent=runtime.paused?'继续派发':'暂停第三层';pause.disabled=unavailable||runtime.switch_pending||!active&&!runtime.paused;
+ let agentsBox=$('stage3-runtime-agents');if(!agentsBox){agentsBox=document.createElement('div');agentsBox.id='stage3-runtime-agents';$('stage3-phase').after(agentsBox);}agentsBox.replaceChildren();
+ for(const agent of state.codex_review?.pool?.agents||[]){const row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button'),paused=(runtime.paused_agents||[]).includes(agent.id);row.className='agent-runtime-row';label.textContent=`${agent.name||agent.id} · ${Number(agent.running||0)} 组处理中${paused?' · 已暂停新组':''}`;button.type='button';button.textContent=paused?'继续此 Agent':'暂停此 Agent';button.disabled=unavailable||runtime.switch_pending;button.addEventListener('click',()=>action('/api/control-stage3',{action:paused?'resume_agent':'pause_agent',agent_id:agent.id}));row.append(label,button);agentsBox.append(row);}
  $('stop-stage3').disabled=unavailable||!state.can_stop;
  $('stage3-phase').textContent=refreshing?'最近核验快照；新增输入核对中，当前待处理尚未确认':p.counting?(p.message||state.phase||'正在核对已处理候选，请等待进度读取完成'):state.phase||'等待手动启动';
+ if(state.codex_review?.running)$('stage3-phase').textContent=state.codex_review.pool?.phase||state.codex_review.phase||'本机 Agent 正在分析';
+ if(runtime.switch_pending)$('stage3-phase').textContent='正在保存已发送的结果，随后自动切换；已完成商品不重跑。';else if(runtime.switch_error)$('stage3-phase').textContent=runtime.switch_error;else if(runtime.paused)$('stage3-phase').textContent='已暂停派发新组；已发送结果继续保存。可更改上方方案后点击“保存断点并切换方案”。';
  const reviewed=p.api_completed!=null?Number(p.completed||0):Number(p.completed||0)+Number(p.codex_completed||0),remaining=p.pending_after_codex??p.pending??0;
  $('stage3-count').textContent=`已进入第三层 ${(p.total||0).toLocaleString()} 对 · 已处理 ${reviewed.toLocaleString()} 对 · ${refreshing?'快照待处理':'待处理'} ${Number(remaining).toLocaleString()} 对${p.failed?` · 失败 ${p.failed} 对`:''}${p.billing_unknown_pairs?` · ${p.billing_unknown_pairs.toLocaleString()} 对费用待核对，继续时不会重发`:''}${p.billing_hold_fail_closed?' · 费用记录无法对应，已暂停付费请求':''}`;
  if(p.counting&&!Number.isInteger(p.total)){$('stage3-count').textContent=(p.message||'正在核对候选')+'；完整候选、已处理和待处理数量核对后显示';}
@@ -337,7 +361,7 @@ function codexReviewPanel(data){
   const local=data?.stage3_provider?.mode==='local_agent';
   const agents=(pool.agents||[]).map(a=>`${a.name||a.id} ${count(a.running)} 组运行中`).join('、');
   const engine=local?(agents||'所选本机 Agent'):`${pool.model||'Codex'} ${pool.effort||'high'}`;
-  poolLine.textContent=`持续看图队列运行中 · ${count(pool.workers)} 路 · ${engine} · 同一 Amazon 分组，每组最多 ${count(pool.group_size||12)} 对${local?'（豆包每组 1 对）':''} · 当前处理 ${groups} 组 · 已分配待处理 ${pending} 对 · 已完成 ${done} 组 · 队列空闲时自动接续下一组`;
+  poolLine.textContent=`持续看图队列运行中 · ${count(pool.workers)} 组并发 · ${engine} · 每组 1 个 Amazon＋最多 ${count(pool.group_size||12)} 个 TEMU 编号拼图 · 当前处理 ${groups} 组 · 已分配待处理 ${pending} 对 · 已完成 ${done} 组 · 队列空闲时自动接续下一组`;
  }else{poolLine.textContent='持续看图队列已配置，但当前没有通过进程身份校验的运行进程。';}
  const publisherLine=$('codex-review-publisher'),publisher=c.publisher||{};
  if(publisher.phase||publisher.error){publisherLine.hidden=false;publisherLine.textContent=`Excel发布：${publisher.phase||'状态未知'}${publisher.error?' · '+publisher.error:''}`;}

@@ -15,13 +15,38 @@ def test_three_desktop_agents_are_selectable_and_have_independent_limits():
     assert settings({'mode':'local_agent','agent_ids':['workbuddy','acciowork','doubao']})['agent_ids']==['workbuddy','acciowork','doubao']
 
 
+def test_compact_desktop_response_expands_twelve_bound_candidates_without_losing_facts(tmp_path,monkeypatch):
+    from test_vision_group_compact import responses
+    from selection_automation.vision import decode
+    cat,_,raw=responses(12)
+    rows=[{'asin':'TEST_A','goods_id':f'TEST_T{i}','vision_revision_key':f'TEST_HASH_{i}'} for i in range(12)]
+    (tmp_path/'manifest.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows),'utf-8')
+    native.save(tmp_path/'analysis-contract.json',{'category':'TEST_ONLY_CATEGORY.json'})
+    native.save(tmp_path/'job.json',{'model':'TEST_ONLY_MODEL'})
+    native.save(tmp_path/'comparison-input.json',{'amazon':{},'candidates':[{'id':f'C{i:02}','record':{}} for i in range(12)]})
+    monkeypatch.setattr('selection_automation.category_config.load_category',lambda path:cat)
+    request=native.doubao_request(tmp_path,'unused')
+    assert 'TEST_HASH_' not in request and 'asin' not in request
+    assert (tmp_path/'compact-output.json').is_file()
+    assert native.write_response(tmp_path,json.dumps(raw,ensure_ascii=False))
+    actual=[json.loads(line) for line in (tmp_path/'reviews.jsonl').read_text('utf-8').splitlines()]
+    expected=decode(cat,raw,[f'C{i:02}' for i in range(12)])
+    assert len(actual)==12
+    assert [row['goods_id'] for row in actual]==[row['goods_id'] for row in rows]
+    assert all(row['visual_facts']==expected[f'C{i:02}'] for i,row in enumerate(actual))
+    before=(tmp_path/'reviews.jsonl').read_bytes()
+    raw['candidates'][11]['i']='C00'
+    assert not native.write_response(tmp_path,json.dumps(raw))
+    assert (tmp_path/'reviews.jsonl').read_bytes()==before
+
+
 def test_installed_desktop_executable_is_never_invoked_as_a_generic_cli(tmp_path,monkeypatch):
     app=tmp_path/'Doubao.exe';app.touch()
     monkeypatch.setattr(desktop,'installations',lambda agent:app)
     monkeypatch.setattr(desktop,'doubao_endpoint',lambda root:(_ for _ in ()).throw(RuntimeError('not enabled')))
     result=desktop.probe(tmp_path,'doubao')
     assert result['installed'] and result['requires_enable'] and not result['ready']
-    assert result['max_parallel']==1 and result['max_group_size']==1
+    assert result['max_parallel']==6 and result['max_group_size']==12
     command=desktop.command(tmp_path,result,tmp_path/'job with spaces')
     assert str(app) not in command and 'run_desktop_agent.py' in command[1]
 

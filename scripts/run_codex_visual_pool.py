@@ -13,7 +13,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-POOL_SCHEMA_REVISION = 3
+POOL_SCHEMA_REVISION = 4
 sys.path.insert(0, str(ROOT / 'src'))
 from selection_automation.category_config import load_category
 from selection_automation.codex_visual_review import checked_facts, import_reviews, normalize_review
@@ -59,6 +59,7 @@ def pool_facts_guide(category):
                                    'kind':'IDENTITY','variant_field':'NONE'}},
     }
     guide['strict_validation_notes'] = [
+        'overall_confidence 是当前证据清晰程度，必须根据本组原图填写0至1的真实数值；0仅用于完全不可见。模板中的占位值不能照抄。明确的双边核心结构冲突应判DIFFERENT；文字自相矛盾或图像缺失才需UNKNOWN。',
         'identity.matches 与 identity.differences 必须是对象数组，禁止写字符串数组或把模块名当作整个对象。空数组只在确实没有该类证据时使用。',
         '每个 matches 对象只能含 feature、amazon、temu；每个 differences 对象必须含 field、amazon、temu、kind、variant_field。',
         'kind=IDENTITY 或 UNRESOLVED 时 variant_field 必须为 NONE；kind=VARIANT 时 variant_field 必须使用本指南列出的规范值。',
@@ -194,9 +195,13 @@ def command(executable, job, model='gpt-6.1-sol', effort='medium'):
             '-m', model, '-c', f'model_reasoning_effort="{effort}"',
             '-c', 'service_tier="default"', '-c', 'approval_policy="never"',
             '-c', 'sandbox_mode="danger-full-access"', '--json',
-            '--output-last-message', str(job / 'summary.txt'),
-            '-i', str(job / 'contacts/contact-001.jpg')]
-    # Give the model the actual images, not just a crowded contact sheet.
+            '--output-last-message', str(job / 'summary.txt')]
+    inputs=read(job/'image-inputs.json',{})
+    if inputs.get('attachments'):
+        for image in inputs['attachments']:args.extend(['-i',image['path']])
+        return args+['-']
+    # Legacy in-flight jobs retain their original image presentation.
+    args.extend(['-i',str(job/'contacts/contact-001.jpg')])
     inputs = read(job / 'image-inputs.json', {})
     for image in inputs.get('images', []):
         args.extend(['-i', image['path']])
@@ -213,11 +218,15 @@ def bind_original_images(job, rows):
             images.setdefault(str(path), {'path':str(path), 'sha256':digest})
             bound[side] = str(path)
         pairs.append(bound)
-    save(job / 'image-inputs.json', {'images':list(images.values()), 'pairs':pairs})
+    from selection_automation.visual_batch import save_assets,comparison_input
+    save(job / 'image-inputs.json', {'images':list(images.values()), 'pairs':pairs,**save_assets(job,rows)})
+    save(job/'comparison-input.json',comparison_input(rows))
 
 
 def check_original_binding(job, pair):
     inputs = read(job / 'image-inputs.json', {})
+    from selection_automation.visual_batch import check_assets
+    check_assets(inputs,pair)
     if not inputs:
         if read(job / 'job.json', {}).get('schema_revision', 0) >= 3:
             raise ValueError('confirmed pair has no attached original image receipt')
@@ -238,11 +247,8 @@ def check_original_binding(job, pair):
 
 
 def same_amazon_groups(rows, group_size):
-    groups = {}
-    for row in rows:
-        groups.setdefault(row['asin'], []).append(row)
-    return [group[offset:offset+group_size] for group in groups.values()
-            for offset in range(0, len(group), group_size)]
+    from selection_automation.visual_batch import groups
+    return groups(rows,group_size)
 
 
 def job_environment(config):
@@ -277,8 +283,8 @@ def prompt(job, target, model, category_path):
     validate_command = (f"& '{python}' '{validator}' --category '{category_path}' "
                         f"--manifest '{job / 'manifest.jsonl'}' --reviews '{job / 'reviews.jsonl'}'")
     return f"""核验本组 {target} 对商品。只按绑定的 Amazon/TEMU 双方原图和品类规则判断，禁止串图或照搬相邻商品事实。
-联系图左 A 为 Amazon、右 T 为 TEMU；manifest.jsonl 与 image-inputs.json 给出身份、绝对原图路径及对应顺序。实际查看双方原图。
-只读本组文件与规则：{job / 'manifest.jsonl'}、{job / 'visual-facts-guide.json'}。
+附件1为唯一 Amazon 基准原图，附件2为 TEMU 的 Cxx 编号拼图；image-inputs.json 保存每格原图来源与身份。先看两张附件；仅某格细节不清时再读取该格原图，不重复读12次 Amazon，不把候选互相比较。
+只读本组紧凑资料与规则：{job / 'comparison-input.json'}、{job / 'visual-facts-guide.json'}。Amazon 图只提供一次，TEMU 为最多12个 Cxx 编号格；依据对应编号逐个与同一 Amazon 比较。不得混用候选资料。
 同款：主体设计、核心结构和部件布局一致，仅存在品类明确允许的变体。类似款：整体款式接近但具体设计不满足同一基础款。不同款：存在明确双边身份差异。看不清或相互矛盾则 UNKNOWN，不能冒充不同款。
 忽略背景、光线与营销水印；本体图案、结构、套装构成按品类边界判断。文字、向量相似度和同类通用部件均不能证明同款。
 把结果写入 {job / 'reviews.jsonl'}，每对一条合法 UTF-8 JSONL。严格保留 asin、goods_id、vision_revision_key；review_status 为 SAME/SIMILAR/DIFFERENT/UNKNOWN。
@@ -316,8 +322,12 @@ def import_job(category, task, job):
     expected = list(read_jsonl(job / 'manifest.jsonl'))
     bound = {key(row): row for row in expected}
     good, errors, validation_errors = {}, [], []
+    job_info=read(job/'job.json',{})
     for line, row in enumerate(read_jsonl(job / 'reviews.jsonl', allow_incomplete_tail=True), 1):
         try:
+            if job_info.get('model') and job_info['model']!='agent-default':
+                from selection_automation.model_labels import model_label
+                row={**row,'model':model_label(job_info['model'],ROOT,job_info.get('agent_id'))}
             identity = key(row)
             if identity not in bound:
                 raise ValueError('review absent from group manifest')
@@ -344,12 +354,17 @@ def import_job(category, task, job):
     if complete_group:
         # Keep group membership stable across schema retries; partial valid rows
         # remain in reviews.jsonl and are not needlessly re-reviewed.
-        import_reviews(category, task['rows'], list(good.values()), task['output'], task['task_id'])
+        for member in task.get('members',[task]):
+            assigned={tuple(value) for value in member.get('assigned_identities',[])} or {key(row) for row in member['rows']}
+            values=[row for identity,row in good.items() if identity in assigned]
+            if values:import_reviews(category,member['rows'],values,member['output'],member['task_id'])
     if good:
-        raw = Path(task['raw_reviews'])
-        prior = {key(row): row for row in read_jsonl(raw, allow_incomplete_tail=True)}
-        prior.update(good)
-        save_rows(raw, list(prior.values()))
+        for member in task.get('members',[task]):
+            assigned={tuple(value) for value in member.get('assigned_identities',[])} or {key(row) for row in member['rows']}
+            values={identity:row for identity,row in good.items() if identity in assigned}
+            if not values:continue
+            raw=Path(member['raw_reviews']);prior={key(row):row for row in read_jsonl(raw,allow_incomplete_tail=True)}
+            prior.update(values);save_rows(raw,list(prior.values()))
     return (len(good) if complete_group else 0), errors
 
 
@@ -431,6 +446,7 @@ class Pool:
         self.errors = []
         self.last_prepare = 0
         self.completed_groups = 0
+        self.started_at=time.time();self.window_started=time.monotonic();self.sample_success=0;self.sample_failed=0;self.tuner=None;self.tuning_key=None
         # Adopt owned subprocesses after a supervisor restart instead of duplicating them.
         for path in sorted((self.folder / 'jobs').glob('*/job.json')):
             row = read(path, {})
@@ -441,7 +457,10 @@ class Pool:
     def launch(self, task, rows):
         import psutil
         backends=self.config.get('agent_backends',[])
-        available=[a for a in backends if sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+        from selection_automation.stage3_runtime import read_control
+        paused=read_control(self.base/'stage123').get('paused_agents',[])
+        available=[a for a in backends if (a['id'] not in paused or task.get('required_agent')==a['id']) and sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+        if task.get('required_agent'):available=[a for a in available if a['id']==task['required_agent']]
         if backends and not available:raise RuntimeError('Agent 并发槽位已满')
         agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())/int(a.get('max_parallel',6))) if available else None
         rows = _absolute_image_rows(rows[:int(agent.get('max_group_size',12))] if agent else rows)
@@ -471,6 +490,7 @@ class Pool:
         if reused_from:
             shutil.copy2(reused_from / 'reviews.jsonl', job / 'reviews.jsonl')
             if native_pending:shutil.copy2(reused_from/'native-session.json',job/'native-session.json')
+            if native_pending and (reused_from/'compact-output.json').is_file():shutil.copy2(reused_from/'compact-output.json',job/'compact-output.json')
             prior_errors = reused_from / 'validation_errors.json'
             if prior_errors.is_file():
                 shutil.copy2(prior_errors, job / 'validation_errors.json')
@@ -485,7 +505,7 @@ class Pool:
             limit=int(agent.get('max_group_size',12))
             if len(rows)>limit:
                 raise RuntimeError('Agent 分组必须在创建图片凭据前限制')
-        selected=(agent or {}).get('selected_model') or self.config.get('agent_models',{}).get(agent_id)
+        selected=task.get('required_model') or (agent or {}).get('selected_model') or self.config.get('agent_models',{}).get(agent_id)
         model=selected or (self.config.get('model','gpt-6.1-sol') if agent_id=='codex' else 'agent-default')
         if agent:agent={**agent,'selected_model':selected}
         text = prompt(job, len(rows), model, self.category_path)
@@ -511,7 +531,9 @@ class Pool:
                'state':'running', 'identities':[list(key(value)) for value in rows],
                'digest':digest, 'attempt':attempt, 'schema_revision':POOL_SCHEMA_REVISION,
                'reused_reviews_from':str(reused_from) if reused_from else None,
-               'agent_id':agent_id,'model':model,'command_marker':command_marker}
+               'agent_id':agent_id,'model':model,'command_marker':command_marker,
+               'observation_only':bool(native_pending),
+               'member_tasks':{member['task_id']:member['assigned_identities'] for member in task.get('members',[])}}
         save(job / 'job.json', row)
         self.jobs[job.name] = row
         self.processes[job.name] = child
@@ -527,7 +549,11 @@ class Pool:
             process = self.processes.get(name)
             alive = process.poll() is None if process is not None else alive_job(job)
             task = current.get(job.get('task_id'))
+            if job.get('member_tasks'):
+                members=[{**current[task_id],'assigned_identities':identities} for task_id,identities in job['member_tasks'].items() if task_id in current]
+                task={'task_id':job['task_id'],'members':members} if len(members)==len(job['member_tasks']) else None
             if alive:
+                if job.get('agent_id') in {'acciowork','doubao','workbuddy'}:continue
                 if not task or not job_reviews_ready(self.category, job) or not stop_owned_job(job):
                     continue
             try:
@@ -553,6 +579,9 @@ class Pool:
                     errors.append(f"看图组只写入{count}/{len(job['identities'])}条，将补齐缺失行")
                 save(self.folder/'attempts.json',self.attempts)
             save(Path(job['folder']) / 'job.json', state)
+            if job.get('started_at',0)>=self.started_at and not job.get('observation_only'):
+                self.sample_success+=count if state['state']=='complete' else 0
+                self.sample_failed+=len(job['identities']) if state['state']!='complete' else 0
             self.errors.extend(errors)
             self.completed_groups += state['state'] == 'complete'
             self.jobs.pop(name)
@@ -562,42 +591,90 @@ class Pool:
         waiting = []
         seen = set()
         external_pending = 0
+        candidates={task_id:pending_rows(self.category,task) for task_id,task in current.items()}
+        pending_keys={task_id:{key(row) for row in rows} for task_id,rows in candidates.items()}
+        completed={key(row) for task_id,task in current.items() for row in task['rows'] if key(row) not in pending_keys[task_id]}
+        source_by_key={};all_available=[]
         for task in current.values():
-            rows = pending_rows(self.category, task)
+            rows = candidates[task['task_id']]
             if task['task_id'] in owners and owner_active(owners[task['task_id']]):
                 external_pending += len(rows)
                 continue
-            available = [row for row in rows if key(row) not in active and key(row) not in seen]
+            available = [row for row in rows if key(row) not in active and key(row) not in seen and key(row) not in completed]
             seen.update(key(row) for row in available)
-            group_size = int(self.config.get('group_size', 12))
-            if self.config.get('agent_backends'):
-                group_size=min(group_size,max(int(a.get('max_group_size',12)) for a in self.config['agent_backends']))
-            for group in same_amazon_groups(available, group_size):
-                waiting.append((task, group))
+            for row in available:source_by_key[key(row)]=task
+            all_available.extend(available)
+        def grouped_task(group,required_agent=None):
+            members={}
+            for row in group:
+                source=source_by_key[key(row)]
+                member=members.setdefault(source['task_id'],{**source,'assigned_identities':[]})
+                member['assigned_identities'].append(list(key(row)))
+            if len(members)==1 and not required_agent:return next(iter(members.values()))
+            return {'task_id':'group-'+_group_digest(group),'members':list(members.values()),'required_agent':required_agent}
+        reserved=set();held_pending=0
+        for path in sorted((self.folder/'jobs').glob('*/job.json'),key=lambda p:p.stat().st_mtime_ns,reverse=True):
+            prior=read(path,{})
+            if prior.get('state')!='retry':continue
+            native=read(path.parent/'native-session.json',{})
+            if not native or native.get('state')=='complete':continue
+            identities={tuple(value) for value in prior.get('identities',[])}
+            if not identities or identities & (reserved|active):continue
+            reserved.update(identities)
+            if not identities<=source_by_key.keys():held_pending+=len(identities-completed-active);continue
+            group=list(read_jsonl(path.parent/'manifest.jsonl'))
+            resume=grouped_task(group,prior.get('agent_id'));resume['required_model']=prior.get('model')
+            waiting.append((resume,group))
+        group_size=int(self.config.get('group_size',12))
+        if self.config.get('agent_backends'):group_size=min(group_size,max(int(a.get('max_group_size',12)) for a in self.config['agent_backends']))
+        for group in same_amazon_groups([row for row in all_available if key(row) not in reserved],group_size):
+            waiting.append((grouped_task(group),group))
         workers = int(self.config.get('workers', 6))
+        from selection_automation.stage3_runtime import read_control
+        control=read_control(self.base/'stage123')
+        paused=control.get('paused_agents',[])
+        if control.get('paused') or control.get('switch_pending') or not self.config.get('enabled',True):workers=0
         if self.config.get('agent_backends'):
-            workers=min(workers,sum(int(a.get('max_parallel',6)) for a in self.config['agent_backends']))
+            workers=min(workers,sum(int(a.get('max_parallel',6)) for a in self.config['agent_backends'] if a['id'] not in paused))
+        if workers and self.config.get('concurrency_mode')=='auto':
+            from selection_automation.analysis_concurrency import ThroughputTuner
+            tuning_key=json.dumps([self.config.get('agent_models',{}),sorted(paused),group_size,workers],sort_keys=True)
+            tuning_path=self.folder/'concurrency.json'
+            if self.tuning_key!=tuning_key:
+                previous=read(tuning_path,{})
+                self.tuner=ThroughputTuner(min(2,workers),workers,previous if previous.get('configuration')==tuning_key else None)
+                self.tuning_key=tuning_key;self.window_started=time.monotonic()
+            if self.sample_success+self.sample_failed>=max(8,self.tuner.width*2):
+                self.tuner.observe(self.sample_success,self.sample_failed,time.monotonic()-self.window_started,bool(waiting))
+                self.sample_success=self.sample_failed=0;self.window_started=time.monotonic()
+            workers=min(workers,self.tuner.width)
+            save(tuning_path,{**self.tuner.snapshot(),'configuration':tuning_key,'updated_at':time.time()})
         def ready(rows):
             digest = _group_digest(rows)
             prior = _strict_attempt(self.attempts.get(digest,{}))
             return (prior.get('count',0) < int(self.config.get('max_attempts',3))
                     and time.time() >= prior.get('next_retry_at',0))
-        if (len(self.jobs) < workers and sum(ready(rows) for _,rows in waiting) < workers-len(self.jobs)
-                and time.monotonic() - self.last_prepare >= 30):
+        full_groups=sum(ready(rows) and len(rows)>=group_size for task,rows in waiting if not task.get('required_agent'))
+        if (workers and full_groups<workers*4 and time.monotonic()-self.last_prepare>=30):
             self.last_prepare = time.monotonic()
             timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-            outcome = prepare_batch(self.category_path, shards=workers, per_shard=int(self.config.get('group_size',12)), skip_empty=True,
+            outcome = prepare_batch(self.category_path, shards=workers, per_shard=int(self.config.get('group_size',12))*8, skip_empty=True,
                                     contact_group_size=int(self.config.get('group_size',12)),
                                     output_dir=self.base / 'nightly_review' / timestamp)
             if outcome['selected']:
                 return self.tick()
         retry_exhausted = 0
         newly_dispatched = 0
+        waiting.sort(key=lambda item:(not bool(item[0].get('required_agent')),-len(item[1])))
         for task, rows in waiting:
-            if len(self.jobs) >= workers:
-                break
+            active_load=sum(not job.get('observation_only') and job.get('agent_id') not in paused for job in self.jobs.values())
+            if workers==0:break
+            if active_load>=workers and not task.get('required_agent'):continue
             backends=self.config.get('agent_backends',[])
-            available=[a for a in backends if sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+            available=[a for a in backends if (a['id'] not in paused or task.get('required_agent')==a['id']) and sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+            if task.get('required_agent'):
+                available=[a for a in available if a['id']==task['required_agent']]
+                if not available:continue
             if backends and not available:break
             if available:
                 agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())/int(a.get('max_parallel',6)))
@@ -616,15 +693,15 @@ class Pool:
             except (OSError, ValueError, RuntimeError) as exc:
                 self.errors.append(str(exc))
         ensure_publisher(self.category_path, root=ROOT)
-        return {'phase':('并行看图并自动接续下一组' if self.jobs else
+        return {'phase':('已暂停派发，正在保存已发送的结果' if workers==0 and self.jobs else '已暂停，结果和断点已保存' if workers==0 else '并行看图并自动接续下一组' if self.jobs else
                          '有任务需重试或人工处理，已保存结果保留' if self.errors or retry_exhausted else
                          '等待已有任务或冷却后自动补齐，结果保留' if waiting or external_pending else
                          '当前候选已分析，持续检测新增候选并汇总Excel'),
                 'running':len(self.jobs), 'pending':sum(len(rows) for _, rows in waiting)-newly_dispatched,
-                'external_pending':external_pending, 'retry_exhausted':retry_exhausted,
+                'external_pending':external_pending, 'held_pending':held_pending,'paused':bool(control.get('paused')),'paused_agents':paused,'retry_exhausted':retry_exhausted,
                 'workers':workers, 'group_size':int(self.config.get('group_size',12)),
                 'model':self.config.get('model','gpt-6.1-sol'), 'effort':self.config.get('effort','medium'),
-                'agents':[{'id':a['id'],'name':a['name'],'running':sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())} for a in self.config.get('agent_backends',[])],
+                'agents':[{'id':a['id'],'name':a['name'],'paused':a['id'] in paused,'running':sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())} for a in self.config.get('agent_backends',[])],
                 'service_tier':'default', 'completed_groups':self.completed_groups,
                 'jobs':list(self.jobs.values()), 'errors':self.errors, 'api_requests_sent':0,
                 'updated_at':time.time()}
@@ -667,13 +744,10 @@ def watch(category_path, interval=5):
         pool = Pool(category_path, read(category_path.parent / 'stage123/codex_pool_config.json', {}))
         while True:
             config = read(category_path.parent / 'stage123/codex_pool_config.json', {})
-            if not config.get('enabled') or (category_path.parent / 'STOP').exists():
-                # Only terminate subprocesses owned by this pool; collectors stay intact.
-                for job in pool.jobs.values():
-                    if alive_job(job):
-                        psutil.Process(job['pid']).terminate()
+            if (not config.get('enabled') or (category_path.parent / 'STOP').exists()) and not pool.jobs:
                 save(folder / 'pool.json', {**identity, 'phase':'已停止，结果保留', 'running':0, 'updated_at':time.time()})
                 return
+            if (category_path.parent/'STOP').exists():config={**config,'workers':0}
             pool.config = config
             try:
                 state = pool.tick()

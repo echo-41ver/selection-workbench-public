@@ -76,7 +76,26 @@ def conclusion_label(value):
     if text in {'DIFFERENT','NOT_SAME'} or text.startswith('不同款'):return '不同款'
     if text in {'SIMILAR','相似款','类似款'} or text.startswith(('相似款（','类似款（')):return '类似款'
     if text in {'SAME','CONFIRMED_SAME','确认同款','同款'} or text.startswith(('确认同款（','同款（')):return '同款'
+    if text in {'UNKNOWN','无法判断','待补充证据','待补证','重点复核'} or text.startswith(('待补充证据','重点复核')):return '无法判断'
     return '未分析'
+
+
+PARAMETER_NAMES={'brand':'品牌','seller':'卖家','availability':'库存提示','specifications':'规格参数',
+    'variants':'已采集变体','skus':'已采集SKU','sku':'SKU','best_sellers_rank':'详情页榜单排名',
+    'rank':'榜单排名','price_usd':'当前价格(USD)','price_range':'已采集规格价格带','rating':'评分',
+    'review_count':'评论数','review_count_text':'评论数原文','sales_text':'销量原文','sales_count':'页面销量',
+    'monthly_sales_text':'页面月销量原文','sales_basis':'销量口径','sales_precision':'销量精度',
+    'listed_at':'上架时间','listed_at_source':'上架时间来源','observed_at':'采集时间',
+    'negative_reviews':'已采集差评','shipping':'配送信息','description':'商品描述','bullet_points':'商品卖点'}
+
+
+def collected_parameters(raw):
+    import json
+    excluded={'asin','goods_id','title','main_image_url','image_url','local_image_path','product_url',
+        'api_key','password','access_token','proxy_password','cookies','headers','raw_record','card_rect','card_metrics'}
+    return {PARAMETER_NAMES.get(key,key):json.dumps(value,ensure_ascii=False) if isinstance(value,(dict,list)) else value
+            for key,value in (raw or {}).items() if key not in excluded and value is not None and value not in ('',[],{})
+            and not any(word in key.lower() for word in ('token','password','cookie','secret'))}
 
 
 def short_reason(value,limit=140):
@@ -93,10 +112,11 @@ def build_delivery(root, category, report):
     amazon = {str(r['asin']): r for r in source.get('records', [])}
     # Strictly less than N, including historical runs whose older operator was <=.
     selected = [p for p in report.get('products', []) if p['match']['confirmed']+p['match'].get('similar',0) < limit]
-    needed = {str(g) for p in selected for g in p.get('confirmed_goods_ids', [])+p.get('similar_goods_ids',[])}
+    needed = {str(g) for p in report.get('products',[]) for g in p.get('confirmed_goods_ids', [])+p.get('similar_goods_ids',[])}
     temu = {str(r['goods_id']): r for r in jsonl(base / 'temu/union/products.jsonl') if str(r['goods_id']) in needed}
     products, pairs = [], []
-    for entry in selected:
+    selected_ids={str(entry['asin']) for entry in selected}
+    for entry in report.get('products',[]):
         asin = str(entry['asin'])
         if asin not in amazon:
             raise ValueError('选品报告引用的Amazon商品缺少当前来源记录')
@@ -113,7 +133,7 @@ def build_delivery(root, category, report):
                 'advice': advice, 'temu_goods_ids': gids}
         if len(same_ids)!=entry['match']['confirmed'] or len(similar_ids)!=entry['match'].get('similar',0):
             raise ValueError('同款或类似款数量与去重商品ID不一致，拒绝发布')
-        products.append(item)
+        if asin in selected_ids:products.append(item)
         evidence = {str(p['goods_id']): p for p in entry.get('confirmed_pairs', [])+entry.get('similar_pairs',[])}
         for gid in gids:
             pairs.append({'asin': asin, 'goods_id': gid, 'amazon': card,

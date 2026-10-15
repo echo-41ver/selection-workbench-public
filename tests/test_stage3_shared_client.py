@@ -136,6 +136,7 @@ def test_local_service_failure_does_not_create_paid_billing_hold(tmp_path,monkey
         def post(self,*args,**kwargs):calls.append(True);raise OSError('fixture local service down')
     monkeypatch.setattr(openai,'DefaultHttpxClient',Transport)
     monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',lambda rows:('data:image/png;base64,fixture',[{'id':f'C{i:02}','goods_id':row['goods_id']} for i,row in enumerate(rows)]))
     monkeypatch.setattr(runner,'protocol',lambda cat,n:('fixture',{}))
     cat={'stage3':{'modules':{'one':100}}};apply(cat,settings({'mode':'local_model'}))
     rows=[{'asin':'A','goods_id':str(i),'amazon_image_path':'a','temu_image_path':str(i),

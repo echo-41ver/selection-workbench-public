@@ -34,6 +34,13 @@ def watch(category_path):
         maintain_publisher()
         try:
             while (folder/'paid_enabled.json').exists() and not (folder/'STOP').exists():
+                from selection_automation.stage3_runtime import dispatch_allowed
+                if not dispatch_allowed(folder):
+                    state('已暂停派发，结果和断点已保存');time.sleep(2);continue
+                category=json.loads(category_path.read_text(encoding='utf-8'))
+                from selection_automation.stage3_provider import from_category
+                if from_category(category)['mode']=='local_agent':
+                    state('已切换至本机 Agent，断点保留');return
                 progress=snapshot(base,category,history=False)
                 if progress.get('billing_hold_fail_closed'):
                     state('分析暂停：请求费用记录无法对应，请核对用量',error=True); return

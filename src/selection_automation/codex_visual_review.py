@@ -112,6 +112,10 @@ def checked_facts(category, facts, goods_id):
         if any(evidence_pairs.count(pair) >= 3 for pair in set(evidence_pairs)):
             raise ValueError('reused evidence across visual modules')
     reverse = {value: key for key, value in REL.items()}
+    if (facts.get('overall_confidence')==0 and facts.get('identity',{}).get('verdict') in {'SAME','SIMILAR','DIFFERENT'}
+            and any(module.get('relation')!='UNKNOWN' and module.get('amazon_evidence','').strip()
+                    and module.get('temu_evidence','').strip() for module in facts['modules'].values())):
+        raise ValueError('证据清晰度0与已填写的双边明确事实矛盾，请按原图修正；禁止照抄模板占位值')
     candidate = {'i': goods_id, 'c': facts['overall_confidence'], 'v': facts['identity'],
                  'm': {str(i): {'r': reverse[facts['modules'][key]['relation']],
                                  'a': facts['modules'][key]['amazon_evidence'],

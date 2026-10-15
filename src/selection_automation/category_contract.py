@@ -86,7 +86,7 @@ def category_contract() -> dict:
                        "confirmation_minimums": {}, "identity_hard_conflicts": [], "variant_fields": [],
                        "visual_instructions": None, "same_threshold": 88, "different_score_ceiling": 69,
                        "threshold_status": "PROVISIONAL_PENDING_HUMAN_GROUND_TRUTH_CALIBRATION",
-                       "batch_size": 1, "max_concurrency": 4, "reasoning_effort": "low"},
+                       "batch_size": 12, "max_concurrency": 4, "reasoning_effort": "low"},
         },
     }
 

@@ -26,6 +26,11 @@ from selection_automation.stage3_admission import admitted, concurrency
 from selection_automation.visual_text_evidence import evidence_block
 from selection_automation.stage3_billing import billing_hold, retry_authorizations, authorized_retry_attempt
 from selection_workflow.bath_towel_deepseek import _data_url
+from selection_automation.visual_batch import data_url, grid_data_url, amazon_key
+
+
+def cached_image_url(path):
+    return data_url(path,encoder=_data_url)
 
 
 class IncompleteVisualResponse(RuntimeError):
@@ -202,7 +207,8 @@ def run(args, candidate_path):
 def consume(args, cat, fatal_file, key_identity, pending):
     def authorized():
         marker = getattr(args, 'authorization', None)
-        return marker is None or (marker.is_file() and not (marker.parent/'STOP').exists())
+        from selection_automation.stage3_runtime import dispatch_allowed
+        return dispatch_allowed(args.results.parent) and (marker is None or (marker.is_file() and not (marker.parent/'STOP').exists()))
     stage = cat['stage3']
     width = concurrency(stage)
     timeout_seconds = request_timeout_seconds(stage)
@@ -277,16 +283,28 @@ def consume(args, cat, fatal_file, key_identity, pending):
         try:
             from selection_automation.visual_examples import example_content
             content = example_content(cat,[p for row in batch for p in [row['amazon_image_path'],row['temu_image_path']]])
-            content += [evidence_block(batch[0],'amazon','Amazon基准'), {'type': 'input_image', 'image_url': _data_url(batch[0]['amazon_image_path']), 'detail': 'high'}]
-            for identity, row in zip(ids, batch):
-                content += [evidence_block(row,'temu',identity), {'type': 'input_image', 'image_url': _data_url(row['temu_image_path']), 'detail': 'high'}]
+            content += [evidence_block(batch[0],'amazon','Amazon基准'), {'type': 'input_image', 'image_url': cached_image_url(batch[0]['amazon_image_path']), 'detail': 'high'}]
+            if len(batch)>1:
+                grid,mapping=grid_data_url(batch)
+                content += [{'type':'input_text','text':'TEMU 编号拼图，各格只与 Amazon 比较：'+json.dumps([{k:item[k] for k in ('id','goods_id')} for item in mapping])},
+                            {'type':'input_image','image_url':grid,'detail':'high'}]
+            else:
+                grid=cached_image_url(batch[0]['temu_image_path'])
+                content += [{'type':'input_image','image_url':grid,'detail':'high'}]
+            content += [evidence_block(row,'temu',identity) for identity,row in zip(ids,batch)]
             prompt, schema = protocol(cat, len(batch))
+            if len(batch)>1:prompt+='\n本组图片只有 Amazon 基准原图和 TEMU 编号拼图；Cxx 标签位于每格上方，按标签与商品记录对应。逐格独立比较，不做候选互比。'
             if provider['protocol']=='decisions':
-                # Native decisions are pairwise; reference examples would change image positions.
-                content=[evidence_block(batch[0],'amazon','Amazon基准'),
-                         {'type':'input_image','image_url':_data_url(batch[0]['amazon_image_path'])},
-                         evidence_block(batch[0],'temu','TEMU候选'),
-                         {'type':'input_image','image_url':_data_url(batch[0]['temu_image_path'])}]
+                # D1 bills every question for all images: retain the economical
+                # one-candidate call. Local decision services can batch questions.
+                if provider['mode']=='liquid_d1':
+                    content=[evidence_block(batch[0],'amazon','Amazon基准'),
+                             {'type':'input_image','image_url':cached_image_url(batch[0]['amazon_image_path'])},
+                             evidence_block(batch[0],'temu','TEMU候选'),
+                             {'type':'input_image','image_url':cached_image_url(batch[0]['temu_image_path'])}]
+                else:content=[item for item in content if item.get('type')=='input_text']+[
+                    {'type':'input_image','image_url':cached_image_url(batch[0]['amazon_image_path'])},
+                    {'type':'input_image','image_url':grid}]
             from selection_automation.vision import GROUP_WIRE_VERSION
             wire_version = 'product-choice-v2' if provider['protocol']=='decisions' else GROUP_WIRE_VERSION if 'amazon' in schema.get('properties', {}) else 'independent-candidates-v1'
             budget = output_token_budget(stage, len(batch))
@@ -296,7 +314,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     return
                 requests += 1
             if client_setup_error is not None:raise client_setup_error
-            prepared_data=client.prepare(content,prompt)
+            prepared_data=(client.prepare(content,prompt,candidate_ids=ids) if provider['protocol']=='decisions' and len(batch)>1
+                           else client.prepare(content,prompt))
             append(intent_log, {'request_id': request_id, 'status': 'started', 'time': time.time(),
                                 'pairs': len(batch), 'vision_revision_keys': [row['vision_revision_key'] for row in batch],
                                 'effort': effort, 'max_output_tokens': budget, 'wire_version': wire_version})
@@ -318,7 +337,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
             if response_status == 'incomplete':
                 raise IncompleteVisualResponse(incomplete_reason)
             parsed, format_repairs = parse_visual_response_compatible(response.output_text, allow_preamble=True)
-            facts = {ids[0]:parsed['decision_facts']} if provider['protocol']=='decisions' else decode(cat, parsed, ids)
+            facts = (parsed['decision_facts_by_id'] if len(batch)>1 else {ids[0]:parsed['decision_facts']}) if provider['protocol']=='decisions' else decode(cat, parsed, ids)
             for i, (identity, row) in enumerate(zip(ids, batch)):
                 scored = score(cat, facts[identity])
                 if effort == 'low' and scored['hard_conflicts'] and facts[identity].get('overall_confidence',1) < .65:
@@ -389,12 +408,12 @@ def consume(args, cat, fatal_file, key_identity, pending):
         if not billing_uncertain:
             settle_intent()
         return completed
-    size = 1 if provider['protocol']=='decisions' else max(1, min(12, stage.get('batch_size', 12)))
+    size = 1 if provider['mode']=='liquid_d1' else max(1,min(12,stage.get('batch_size',12)))
     def batches():
         # At most one partial batch per Amazon image, instead of N*M pending rows.
         groups = defaultdict(list)
         for row in pending:
-            group = groups[(row['asin'], row['amazon_image_path'])]
+            group = groups[amazon_key(row)]
             group.append(row)
             if len(group) >= size:
                 yield list(group)
@@ -407,13 +426,13 @@ def consume(args, cat, fatal_file, key_identity, pending):
     client=None;client_setup_error=None
     from selection_automation.analysis_concurrency import ThroughputTuner
     from selection_automation.merge_temu_snapshots import atomic_write
-    auto = provider.get('concurrency_mode')=='auto' and provider['mode']=='liquid_d1'
-    capacity = 16 if auto else width
+    auto = provider.get('concurrency_mode')=='auto'
+    capacity = (4 if provider['mode']=='local_model' else 16) if auto else width
     tuning_path = args.results.with_name('concurrency.json')
     fingerprint = {k:provider[k] for k in ('mode','base_url','model','protocol')}
     try:prior_tuning=json.loads(tuning_path.read_text(encoding='utf-8'))
     except (OSError,ValueError):prior_tuning={}
-    tuner=ThroughputTuner(4 if auto else width,capacity,prior_tuning if prior_tuning.get('provider')==fingerprint else None)
+    tuner=ThroughputTuner((2 if provider['mode']=='local_model' else 4) if auto else width,capacity,prior_tuning if prior_tuning.get('provider')==fingerprint else None)
     if auto:width=tuner.width
     with ExitStack() as resources:
         try:

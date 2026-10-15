@@ -240,7 +240,9 @@ def match_metric(counts, expected, policy):
         state, reason = 'UNKNOWN', '候选分析或待复核尚未完成，不能将未知商品当作零同款'
     else:
         state, reason = 'SAMPLE_PASS', '当前采样最终同款与类似款合计符合门槛；尚未证明TEMU全站数量'
-    return metric(state, reason, confirmed=confirmed, possible=possible, pending=pending,different=counts.get('different',0),
+    return metric(state, reason, confirmed=confirmed, possible=possible, pending=pending,
+                  different=counts.get('different',0)+counts.get('text_excluded',0),
+                  unanalysed=pending+counts.get('screened_out',0),
                   similar=similar, same_or_similar=combined,
                   screened_out=counts.get('screened_out', 0), expected=expected,
                   threshold=policy['same_limit'], scope='本次采集及三层候选核验范围')
@@ -436,12 +438,14 @@ def build_report(root, category, *, as_of=None):
                         'profitability': '成本与利润未评估，采样信号不是盈利保证'})
     entries.sort(key=lambda row: (-row['signals'], row['unknown'], row['rank'] or 999))
     from .operations import product_card
-    from .selection_delivery import recommendation
+    from .selection_delivery import recommendation,collected_parameters
     amazon_by_id={str(row['asin']):row for row in amazon}
     temu_by_id={str(row['goods_id']):row for row in products}
     for entry in entries:
-        if entry['match']['confirmed'] >= policy['same_limit']:continue
         card=product_card(amazon_by_id[str(entry['asin'])],'amazon')
+        entry['amazon_card']=card
+        entry['amazon_parameters']=collected_parameters(amazon_by_id[str(entry['asin'])])
+        if entry['match']['confirmed']+entry['match'].get('similar',0) >= policy['same_limit']:continue
         rivals=[product_card(temu_by_id[g],'temu') for g in entry['confirmed_goods_ids'] if g in temu_by_id]
         entry['selection_advice']=recommendation(card,rivals,entry['match'],market)
         entry['amazon_card']=card

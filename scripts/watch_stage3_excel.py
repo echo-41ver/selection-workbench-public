@@ -106,6 +106,7 @@ def export_code_paths():
     return [ROOT / 'scripts' / f'{name}.py' for name in (
         'export_category_workbooks', 'export_selection_result', 'export_incremental_layer123_excel', 'export_shower_layer123_excel')] + [
             ROOT/'src/selection_automation/selection_delivery.py',
+            ROOT/'src/selection_automation/model_labels.py',
             ROOT/'src/selection_automation/operations.py',
             ROOT/'src/selection_automation/stage3_provider.py',
             ROOT/'src/selection_automation/vision.py',
