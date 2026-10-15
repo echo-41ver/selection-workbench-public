@@ -70,7 +70,7 @@ def prepare(root: Path, python: Path) -> dict:
 
     files = sorted(path for path in assets.rglob("*") if path.is_file() and path.name != "manifest.json")
     manifest = {
-        "target": {"os": "Windows x64", "python": "CPython 3.12.x", "node_package": "package-lock.json"},
+        "target": {"os": "Windows x64", "python": "CPython 3.12.10", "node": "24.19.0", "powershell": "7.6.5", "adspower": "8.7.23", "adspower_firefox_kernel": "153", "node_package": "package-lock.json"},
         "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
         "files": {path.relative_to(assets).as_posix(): {"bytes": path.stat().st_size, "sha256": sha256(path)} for path in files},
     }

@@ -299,10 +299,11 @@ if (-not $SkipAdsPower) {
         $downloads = Join-Path $root 'runtime\downloads'
         New-Item -ItemType Directory -Force -Path $downloads | Out-Null
         $html = (Invoke-WebRequest 'https://www.adspower.com/download' -UseBasicParsing).Content
-        $match = [regex]::Match($html, 'https://version\.adspower\.net/software/win64-global/[^"\s<>]+\.exe')
-        if (-not $match.Success) { throw '无法从 AdsPower 官方下载页解析 Windows 安装器，未执行未知下载地址。' }
-        $installer = Join-Path $downloads 'AdsPower-setup.exe'
-        Invoke-WebRequest $match.Value -OutFile $installer -UseBasicParsing
+        $adspowerVersion = '8.7.23'
+        $downloadUrl = "https://version.adspower.net/software/win64-global/$adspowerVersion/AdsPower-Global-$adspowerVersion-x64.exe"
+        if (-not $html.Contains($downloadUrl)) { throw "AdsPower 官方下载页不再列出固定版本 $adspowerVersion；停止安装以保持版本一致。" }
+        $installer = Join-Path $downloads "AdsPower-Global-$adspowerVersion-x64.exe"
+        Invoke-WebRequest $downloadUrl -OutFile $installer -UseBasicParsing
         $signature = Get-AuthenticodeSignature -LiteralPath $installer
         if ($signature.Status -ne 'Valid') { throw 'AdsPower 安装器数字签名无效，停止安装。' }
         (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash | Set-Content (Join-Path $downloads 'AdsPower.sha256')

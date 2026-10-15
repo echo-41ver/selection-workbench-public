@@ -33,7 +33,7 @@ function Get-DeploymentPreflight {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) { throw "部署源缺少文件：$relative" }
     }
     $drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Root)))
-    if ($drive.AvailableFreeSpace -lt 6GB) { throw '剩余磁盘不足 6 GB，未开始安装。' }
+    if ($drive.AvailableFreeSpace -lt 8GB) { throw '剩余磁盘不足 8 GB，未开始安装。' }
     [pscustomobject]@{ platform='Windows'; source_complete=$true; free_gb=[math]::Round($drive.AvailableFreeSpace/1GB,1); configuration_read=$false }
 }
 function Start-ProjectDeployment {
