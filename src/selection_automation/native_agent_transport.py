@@ -19,6 +19,16 @@ def read(path,default=None):
 def save(path,value):atomic_write(Path(path),json.dumps(value,ensure_ascii=False,indent=2))
 
 
+def finish_native_response(job,state):
+    """Settle the original conversation too; fact validation remains separate."""
+    job=Path(job);state['state']='complete';save(job/'native-session.json',state)
+    original=Path(state.get('result_job',job))
+    if original.resolve()!=job.resolve():
+        prior=read(original/'native-session.json',{})
+        save(original/'native-session.json',{**prior,'state':'complete','completed_by':str(job)})
+        if (job/'reviews.jsonl').is_file():atomic_write(original/'reviews.jsonl',(job/'reviews.jsonl').read_text('utf-8'))
+
+
 def input_images(job):
     job=Path(job)
     attachments=read(job/'image-inputs.json',{}).get('attachments')
@@ -140,8 +150,7 @@ def accio_run(root,job,prompt,timeout=900,model=None):
         save(receipt,state)
     original=Path(state.get('result_job',job))
     if result_exists(original):
-        state['state']='complete';save(receipt,state)
-        copy_result(original,job);return
+        copy_result(original,job);finish_native_response(job,state);return
     parsed=urlsplit(cfg['url']);wsurl=urlunsplit(('ws',parsed.netloc,'/websocket/connect',urlencode({'clientId':'selection-'+uuid.uuid4().hex}),''))
     headers=[key+': '+value for key,value in gateway_headers(cfg).items() if key=='Authorization']
     connection=websocket.create_connection(wsurl,header=headers,timeout=10,suppress_origin=True,
@@ -165,7 +174,7 @@ def accio_run(root,job,prompt,timeout=900,model=None):
             connection.send(json.dumps({'type':'req','method':'observeConversation','params':{'conversationId':state['conversation_id']}}))
         deadline=time.monotonic()+timeout
         while time.monotonic()<deadline:
-            if result_exists(original):copy_result(original,job);state['state']='complete';save(receipt,state);return
+            if result_exists(original):copy_result(original,job);finish_native_response(job,state);return
             try:message=json.loads(connection.recv())
             except websocket.WebSocketTimeoutException:continue
             except ValueError:continue
@@ -176,7 +185,7 @@ def accio_run(root,job,prompt,timeout=900,model=None):
             if cid and str(cid)!=state['conversation_id']:continue
             if message.get('method')=='finished' and payload.get('role') in ('assistant','agent'):
                 text=payload.get('content') or payload.get('message') or ''
-                if write_response(job,text):state['state']='complete';save(receipt,state);return
+                if write_response(job,text):finish_native_response(job,state);return
                 # The native agent can finish its final file write just after
                 # its text event; continue observing the owned job directory.
         raise RuntimeError('AccioWork 任务超时；已保留任务标识，重试只观察原任务，不重发')
@@ -227,6 +236,9 @@ def doubao_targets(root,include_owned=True):
 
 
 def new_doubao_target(root,job,url='doubao://doubao-chat/chat'):
+    # document.location exposes the internal WebUI alias; new native views
+    # must use Doubao's registered scheme to restore the logged-in chat.
+    if url.startswith('chrome://doubao-chat/'):url='doubao://doubao-chat/'+url[len('chrome://doubao-chat/'):]
     endpoint=doubao_endpoint(root)
     with build_opener(ProxyHandler({})).open(endpoint+'/json/version',timeout=10) as response:version=json.load(response)
     browser=CDP(version['webSocketDebuggerUrl'])
@@ -511,7 +523,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 state.update(target_id=target['id'],owned_target=True);save(receipt,state)
             original=Path(state.get('result_job',job));deadline=time.monotonic()+timeout
             while time.monotonic()<deadline:
-                if result_exists(original):copy_result(original,job);state['state']='complete';save(receipt,state);return
+                if result_exists(original):copy_result(original,job);finish_native_response(job,state);return
                 current=cdp.evaluate('location.href')
                 marker=state.get('marker') or str(original)
                 owned=cdp.evaluate("[...document.querySelectorAll('[data-testid=send_message]')].some(e=>e.innerText.includes("+json.dumps(marker)+"))")
@@ -524,7 +536,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 answer=cdp.evaluate("""(()=>{const busy=[...document.querySelectorAll('button,[role="button"]')].some(e=>e.getClientRects().length&&/停止|Stop generating/i.test(e.getAttribute('aria-label')||e.textContent||''));if(busy)return null;
                   const nodes=[...document.querySelectorAll('[data-testid=receive_message] [data-testid=message_text_content],[data-message-role="assistant"],[data-role="assistant"],[data-testid*="assistant-message"]')].filter(e=>e.getClientRects().length&&e.getAttribute('data-streaming')!=='true');
                   if(!nodes.length)return null;const last=nodes.at(-1),blocks=[...last.querySelectorAll('pre')].map(e=>e.querySelector('code')?.innerText||e.innerText);return blocks.length?blocks.join(String.fromCharCode(10)):last.innerText;})()""")
-                if answer and write_response(job,answer):state['state']='complete';save(receipt,state);return
+                if answer and write_response(job,answer):finish_native_response(job,state);return
                 time.sleep(1)
             raise RuntimeError('豆包任务超时；已保留原任务，不自动重复发送')
         finally:

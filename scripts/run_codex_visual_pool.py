@@ -481,6 +481,10 @@ class Pool:
         if native_pending:
             prior_agent=read(reused_from/'job.json',{}).get('agent_id')
             if not agent or prior_agent!=agent['id']:raise RuntimeError('原桌面 Agent 任务需要先恢复，不能重复改派')
+            receipt=read(reused_from/'native-session.json',{})
+            original=Path(receipt.get('result_job',reused_from))
+            original_attempt=read(original/'job.json',{}).get('attempt')
+            if type(original_attempt) is int and original_attempt>0:attempt=original_attempt
         job = jobs_dir / f'{digest}-{attempt}-{time.time_ns()}'
         job.mkdir(parents=True, exist_ok=True)
         _write_jsonl(job / 'manifest.jsonl', rows)
@@ -682,7 +686,7 @@ class Pool:
             digest = _group_digest(rows)
             prior = _strict_attempt(self.attempts.get(digest, {}))
             self.attempts[digest] = prior
-            if prior.get('count',0) >= int(self.config.get('max_attempts',3)):
+            if prior.get('count',0) >= int(self.config.get('max_attempts',3)) and not task.get('required_agent'):
                 retry_exhausted += len(rows)
                 continue
             if time.time() < prior.get('next_retry_at',0):

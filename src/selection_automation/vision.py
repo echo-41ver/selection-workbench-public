@@ -426,7 +426,8 @@ def compatible_vision_keys(category: dict, pair: dict, *, context=None) -> tuple
     # recorded specifications and both original image digests must still match.
     for stage in category.get('stage3_checkpoint_sources',[]):
         previous={**category,'stage3':stage}
-        if protocol(previous,1)!=protocol(category,1):continue
+        transport={'provider','base_url','model','max_concurrency','batch_size'}
+        if {k:v for k,v in stage.items() if k not in transport}!={k:v for k,v in category['stage3'].items() if k not in transport}:continue
         keys.append(_vision_revision(previous,pair,images))
         if not isinstance(stage.get('provider'),dict) and stage.get('reasoning_effort','low')=='low':
             keys.append(_legacy_vision_revision(previous,pair,images))

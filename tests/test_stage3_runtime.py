@@ -47,6 +47,20 @@ def test_previous_decision_result_survives_switch_to_agent():
     assert score(cat,facts)['state']=='不同款'
 
 
+def test_cross_protocol_switch_reuses_paid_key_only_when_identity_rules_and_images_match(tmp_path):
+    from test_identity_policy import category
+    from PIL import Image
+    cat=category();picture=tmp_path/'original.png';Image.new('RGB',(20,20),'red').save(picture)
+    pair={'asin':'TEST_A','goods_id':'TEST_T','pair_revision':'p','amazon_image_path':str(picture),'temu_image_path':str(picture)}
+    apply(cat,settings({'mode':'liquid_d1'}));old=compatible_vision_keys(cat,pair)[0]
+    apply(cat,settings({'mode':'local_agent','agent_ids':['doubao']}))
+    assert old in compatible_vision_keys(cat,pair)
+    changed=deepcopy(cat);changed['stage3']['visual_instructions']='TEST_CHANGED_IDENTITY_RULE'
+    assert old not in compatible_vision_keys(changed,pair)
+    Image.new('RGB',(20,20),'blue').save(picture)
+    assert old not in compatible_vision_keys(cat,pair)
+
+
 def test_zero_placeholder_with_clear_facts_is_retryable_not_unknown():
     import pytest
     from test_set_inventory_identity import configured,facts as make_facts

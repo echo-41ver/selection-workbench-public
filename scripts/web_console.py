@@ -1803,12 +1803,14 @@ class Handler(BaseHTTPRequestHandler):
         with getattr(self.server,'release_lock',nullcontext()):self._do_POST()
 
     def _do_POST(self):
+        body_read=False
         try:
             self.trusted(True)
             if self.headers.get('Content-Type','').split(';')[0]!='application/json': raise ConsoleError('INVALID_INPUT','仅接受JSON')
             length=int(self.headers.get('Content-Length','0'))
             if not 0<length<=524288: raise ConsoleError('INVALID_INPUT','请求体大小无效')
             body=json.loads(self.rfile.read(length))
+            body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
             if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market'):
                 update=self.server.release.check(force=True)
@@ -1860,7 +1862,18 @@ class Handler(BaseHTTPRequestHandler):
             if self.path in ('/api/stop','/api/change-session'):
                 return self.send_json(self.server.console.action('stop' if self.path.endswith('/stop') else 'rotate',body))
             raise ConsoleError('NOT_FOUND','不存在',404)
-        except ConsoleError as exc: self.send_json({'ok':False,'error':{'code':exc.code,'message':exc.message}},exc.status)
+        except ConsoleError as exc:
+            if exc.status==403 and not body_read:
+                # Windows can reset a closed HTTP/1.0 connection with unread
+                # request bytes before the client receives the rejection.
+                previous_timeout=self.connection.gettimeout()
+                try:
+                    length=int(self.headers.get('Content-Length','0'))
+                    if 0<length<=8192:
+                        self.connection.settimeout(.25);self.rfile.read(length)
+                except (OSError,ValueError):pass
+                finally:self.connection.settimeout(previous_timeout)
+            self.send_json({'ok':False,'error':{'code':exc.code,'message':exc.message}},exc.status)
         except Exception: self.send_json({'ok':False,'error':{'code':'REQUEST_FAILED','message':'请求失败，请检查输入'}},400)
 
 

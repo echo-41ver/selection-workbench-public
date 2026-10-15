@@ -61,6 +61,31 @@ from test_codex_visual_review import fixture
 from test_set_inventory_identity import configured
 
 
+def test_observing_an_existing_native_turn_does_not_spend_another_model_retry(tmp_path,monkeypatch):
+    import psutil
+    category=tmp_path/'category.json';category.write_text('{}')
+    monkeypatch.setattr(pool,'load_category',lambda _:configured())
+    monkeypatch.setattr(pool,'_contact_sheets',lambda *args,**kw:None)
+    monkeypatch.setattr(pool,'bind_original_images',lambda *args:None)
+    class Input:
+        def write(self,data):pass
+        def close(self):pass
+    monkeypatch.setattr(pool.subprocess,'Popen',lambda *args,**kw:SimpleNamespace(pid=12345,stdin=Input()))
+    monkeypatch.setattr(psutil,'Process',lambda pid:SimpleNamespace(create_time=lambda:1.0))
+    monkeypatch.setattr('selection_automation.local_agents.analysis_command',lambda agent,job,*args:['native',str(job)])
+    worker=pool.Pool(category,{'workers':1,'agent_backends':[{'id':'doubao','name':'豆包','selected_model':'TEST_MODEL'}]})
+    pair,_=fixture();digest=pool._group_digest([pair]);old=worker.folder/'jobs/old';old.mkdir(parents=True)
+    pool._write_jsonl(old/'manifest.jsonl',[pair]);(old/'reviews.jsonl').touch()
+    pool.save(old/'job.json',{'digest':digest,'state':'retry','identities':[list(pool.key(pair))],'agent_id':'doubao','attempt':1})
+    pool.save(old/'native-session.json',{'agent':'doubao','model':'TEST_MODEL','state':'send_intended','result_job':str(old),'conversation_id':'TEST_ORIGINAL_TURN'})
+    worker.attempts[digest]={'count':3,'schema_revision':pool.POOL_SCHEMA_REVISION}
+    worker.launch({'task_id':'recovery','required_agent':'doubao'},[pair])
+    job=next(iter(worker.jobs.values()))
+    assert job['observation_only'] and job['attempt']==1
+    assert worker.attempts[digest]['count']==1
+    assert pool.read(Path(job['folder'])/'native-session.json')['conversation_id']=='TEST_ORIGINAL_TURN'
+
+
 def test_inventory_guide_template_matches_the_strict_decoder():
     from selection_automation.set_inventory import validate_inventory
     cat = configured()

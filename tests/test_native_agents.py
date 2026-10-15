@@ -15,6 +15,19 @@ def test_three_desktop_agents_are_selectable_and_have_independent_limits():
     assert settings({'mode':'local_agent','agent_ids':['workbuddy','acciowork','doubao']})['agent_ids']==['workbuddy','acciowork','doubao']
 
 
+def test_recovered_response_settles_original_receipt_without_claiming_valid_classification(tmp_path):
+    original=tmp_path/'original';recovery=tmp_path/'recovery';original.mkdir();recovery.mkdir()
+    native.save(original/'native-session.json',{'agent':'doubao','state':'send_intended','model':'TEST_MODEL'})
+    state={'agent':'doubao','state':'send_intended','model':'TEST_MODEL','result_job':str(original)}
+    # A complete model response may still fail the independent fact validator.
+    (recovery/'reviews.jsonl').write_text('{"TEST_ONLY":"invalid facts are retained for correction"}\n','utf-8')
+    native.finish_native_response(recovery,state)
+    assert native.read(original/'native-session.json')['state']=='complete'
+    assert native.read(original/'native-session.json')['model']=='TEST_MODEL'
+    assert (original/'reviews.jsonl').read_bytes()==(recovery/'reviews.jsonl').read_bytes()
+    assert not native.result_exists(original)
+
+
 def test_compact_desktop_response_expands_twelve_bound_candidates_without_losing_facts(tmp_path,monkeypatch):
     from test_vision_group_compact import responses
     from selection_automation.vision import decode
