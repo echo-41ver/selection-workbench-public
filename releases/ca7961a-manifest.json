@@ -1,0 +1,12 @@
+{
+  "source_commit": "ca7961a7cb3578e48fc22ff1e402bc668943960e",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/deployment-ca7961a",
+  "artifacts": [
+    {
+      "name": "selection-workbench-ca7961a-public.zip",
+      "bytes": 519726616,
+      "sha256": "aa296ea9f962f11e0aba728626d96b4f880cb82ae75c5e3d99f4a1dbbe5ebd9a",
+      "contains_company_credentials": false
+    }
+  ]
+}

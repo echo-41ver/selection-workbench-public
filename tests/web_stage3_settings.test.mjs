@@ -28,13 +28,35 @@ test('first render before status arrives preserves the initialization flow',()=>
  assert.doesNotThrow(()=>vm.runInContext('renderStage3Settings(null)',context));
 });
 
-test('each agent keeps an independent model choice in the submitted provider',()=>{
+test('single Agent sends only the selected Agent and its model',()=>{
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',hidden:false,replaceChildren(){},append(){}});return nodes.get(id);};
  const context=vm.createContext({$:get,lastStatus:null});vm.runInContext(code,context);
- vm.runInContext("stage3AgentModels={codex:'native-codex',acciowork:'native-accio'}",context);
+ get('stage3-mode').value='local_agent';
+ vm.runInContext("stage3AgentSelection=['codex'];stage3AgentModels={codex:'native-codex',acciowork:'native-accio'}",context);
  const provider=vm.runInContext('stage3ProviderSettings()',context);
- assert.equal(provider.agent_models.codex,'native-codex');assert.equal(provider.agent_models.acciowork,'native-accio');
+ assert.equal(provider.agent_models.codex,'native-codex');assert.equal(provider.agent_models.acciowork,undefined);
+ assert.deepEqual(Array.from(provider.agent_ids),['codex']);
  assert.match(html,/id="stage3-model-box"/);assert.match(html,/\/api\/local-agents\/models/);
+});
+
+test('multiple Agents require explicit selection and retain their separate models',()=>{
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',hidden:false});return nodes.get(id);};
+ const context=vm.createContext({$:get,lastStatus:null});vm.runInContext(code,context);get('stage3-mode').value='local_agent';
+ vm.runInContext("stage3AgentSelection=['codex','doubao'];stage3AgentModels={codex:'native-codex',doubao:'native-doubao',acciowork:'unused'}",context);
+ const provider=vm.runInContext('stage3ProviderSettings()',context);
+ assert.deepEqual(Array.from(provider.agent_ids),['codex','doubao']);
+ assert.equal(provider.agent_models.doubao,'native-doubao');assert.equal(provider.agent_models.acciowork,undefined);
+ assert.match(html,/<details id="stage3-multi-agent-details"[^>]*>/);
+ assert.doesNotMatch(html,/<details id="stage3-multi-agent-details"[^>]*\bopen\b/);
+ assert.doesNotMatch(html,/id="stage3-agent-list"|各 Agent 使用的模型/);
+});
+
+test('no Agent or an unavailable model cannot silently dispatch to all Agents',()=>{
+ const context=vm.createContext({$:()=>({value:''}),lastStatus:null});vm.runInContext(code,context);
+ assert.equal(vm.runInContext('stage3AgentInputsReady()',context),false);
+ vm.runInContext("stage3AgentSelection=['codex'];stage3AgentCatalogs={codex:{status:'ready',models:[{id:'vision',vision:true},{id:'text',vision:false}]}};stage3AgentModels={codex:'text'}",context);
+ assert.equal(vm.runInContext('stage3AgentInputsReady()',context),false);
+ vm.runInContext("stage3AgentModels.codex='vision'",context);assert.equal(vm.runInContext('stage3AgentInputsReady()',context),true);
 });
 
 test('ordinary page keeps one primary delivery and collapses optional flows',()=>{

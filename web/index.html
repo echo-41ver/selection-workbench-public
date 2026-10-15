@@ -28,6 +28,12 @@ header{padding-top:18px;padding-bottom:4px}header p{display:none}header h1{font-
 .warning{color:#80580c;background:#fff9e8;border-color:#e7cc80}.progress-card.warning .progress-state,.module.warning .state,.warning .advice{color:#80580c}.progress-card.warning .progress-fill{background:#bd8a18}.lane-card.warning>.advice{display:block;grid-column:1/-1}.notice:empty{display:none}#feedback{display:none}button:disabled{cursor:not-allowed}.workflow-help{margin:0 0 20px;padding:14px 18px;background:#edf5fa;border:1px solid #c6dde9;border-radius:10px}.workflow-help strong{color:var(--blue)}.workflow-help p{margin:4px 0}.button-help{font-size:13px;color:var(--muted);margin:8px 0}.progress-card.success{border-color:#b6d7c3;background:#f1faf4}.lane-card.danger>.advice{display:block;grid-column:1/-1}.notice[role=status]{line-height:1.7}
 [data-excel]:not([data-excel="layer123"]){display:none}#stage3-settings{background:white;padding:14px;border-radius:8px}#stage3-settings summary{font-weight:600}.workflow-help{padding:10px 14px}
 </style>
+<style>
+input[type="checkbox"],input[type="radio"]{width:16px;height:16px;padding:0;margin:0;flex:0 0 16px;accent-color:var(--blue);vertical-align:middle}
+label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;align-items:center;gap:8px;line-height:1.5}
+#stage3-controls,#stage3-agents{white-space:normal}.agent-toolbar,.agent-extra-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.agent-toolbar{margin:14px 0 12px}.agent-toolbar p{margin:0}.agent-toolbar button,.agent-inline-actions button,.agent-extra-heading button,#stage3-add-agent{padding:7px 12px;font-size:13px}.agent-primary,.agent-extra{border:1px solid var(--line);border-radius:10px;background:#fff;padding:16px}.agent-fields{display:grid;grid-template-columns:1fr;gap:14px;min-width:0}.agent-fields label{margin:0 0 6px}.agent-inline-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.agent-advanced{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}.agent-advanced summary{font-weight:600}.agent-extra{margin:12px 0}.agent-extra-heading{margin-bottom:12px}.agent-extra-heading strong{font-size:13px}#stage3-agent-message:empty{display:none}#stage3-agents [hidden]{display:none!important}
+@media(max-width:600px){.agent-primary,.agent-extra{padding:12px}.agent-toolbar{align-items:flex-start}.agent-inline-actions button{flex:1}}
+</style>
 </head>
 <body>
 <header><div><div class="eyebrow">LOCAL SELECTION WORKSPACE</div><h1>选品工作台</h1><p>输入品类，查看采集与同款分析的实际进度。</p></div><span class="badge" id="connection">正在连接本地服务</span></header>
@@ -58,14 +64,26 @@ header{padding-top:18px;padding-bottom:4px}header p{display:none}header h1{font-
 <details id="stage3-settings" class="review-divider" open><summary>第三层分析方案</summary>
 <label for="stage3-mode">分析方式</label><select id="stage3-mode">
 <option value="liquid_d1" selected>1 · Liquid D1 决策 API</option><option value="multimodal_api">2 · DeepSeek / 其他多模态 API</option>
-<option value="local_model">3 · 本地部署的模型</option><option value="local_agent">4 · 本机 Agent 多任务分析</option></select>
+<option value="local_model">3 · 本地部署的模型</option><option value="local_agent">4 · Agent 分析</option></select>
+<div id="stage3-agents" hidden>
+ <div class="agent-toolbar"><p class="small">先选择 Agent，再选择它使用的模型。</p><button id="stage3-agents-refresh" type="button">重新识别</button></div>
+ <div class="agent-primary"><div class="agent-fields">
+  <div><label for="stage3-agent">选择 Agent</label><select id="stage3-agent" data-agent-select="primary"><option value="">请选择本机 Agent</option></select></div>
+  <div id="stage3-model-box" hidden><label for="stage3-agent-model">选择模型</label><select id="stage3-agent-model" disabled><option value="">请先选择 Agent</option></select></div>
+ </div><p id="stage3-agent-status" class="small" role="status">只会使用你选择的 Agent。</p>
+ <p id="stage3-agent-note" class="small" hidden>通过 WorkBuddy 内置 CLI 分析，任务记录保存在工作台；桌面端不会新增聊天任务。</p>
+ <div id="stage3-agent-actions" class="agent-inline-actions"><button id="stage3-agent-connect" data-agent-action="connect" type="button" disabled>连接测试</button><button id="stage3-agent-login" data-agent-action="login" type="button" disabled>登录</button><button id="stage3-enable-doubao" type="button" hidden>启用豆包连接</button></div></div>
+ <details id="stage3-multi-agent-details" class="agent-advanced"><summary>多 Agent 同时分析（可选）</summary><p class="small">添加后，多个 Agent 分担不同商品。每对商品只交给其中一个 Agent，不会重复分析。</p><div id="stage3-extra-agents"></div><button id="stage3-add-agent" type="button" disabled>＋ 添加一个 Agent</button></details>
+ <p id="stage3-agent-message" class="small" role="status"></p>
+</div>
 <div id="stage3-api-fields"><div class="two"><div><label for="stage3-base-url">服务地址 / 端口</label><input id="stage3-base-url" value="https://api.liquid.ai/decisions/v1/systemone" type="url" autocomplete="off"></div>
 <div><label for="stage3-api-key">该服务的 API key</label><input id="stage3-api-key" type="password" autocomplete="new-password" placeholder="本地服务无需 Key 时可留空"></div></div>
 <label for="stage3-protocol">服务接口</label><select id="stage3-protocol"><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option><option value="decisions" selected>D1 决策接口</option></select></div>
-<div class="two"><div><label for="stage3-model">模型 ID</label><input id="stage3-model" value="d1" maxlength="200" autocomplete="off"></div>
-<div><label for="stage3-workers">分析并发数</label><input id="stage3-workers" type="number" value="4" min="1" max="256"></div></div>
+<label class="check-option"><input id="stage3-auto" type="checkbox" checked> 自动选择并发（可取消后手动设置）</label>
+<div class="two"><div id="stage3-model-field"><label for="stage3-model">模型 ID</label><input id="stage3-model" value="d1" maxlength="200" autocomplete="off"></div>
+<div id="stage3-workers-field"><label for="stage3-workers">分析并发数</label><input id="stage3-workers" type="number" value="4" min="1" max="256"></div></div>
 <div id="stage3-confidence-field" hidden><label for="stage3-confidence">决策确认概率（%）</label><input id="stage3-confidence" type="number" value="90" min="50" max="100"><p class="small">仅供决策接口分流，尚未按当前品类校准；中间区间保留证据不足。</p></div>
-<label><input id="stage3-auto" type="checkbox" checked> 自动选择并发（根据成功吞吐量调整；可取消后手动指定）</label><div id="stage3-agents" hidden><button id="stage3-agents-refresh" type="button">重新识别 Agent 与模型</button><div id="stage3-agent-list">选择本地 Agent 后自动检测。</div><fieldset id="stage3-model-box" class="notice"><legend>各 Agent 使用的模型</legend><p class="small">从当前电脑的 Agent 实际读取。每个 Agent 可单独选择；换机后重新识别。更换模型后会重新验证看图能力。</p><div id="stage3-agent-models">识别 Agent 后自动读取模型。</div></fieldset><p id="stage3-agent-message" class="small" role="status"></p></div>
+
 <p id="stage3-provider-hint" class="small">服务地址、Key 与模型必须来自同一服务商；提交后清空 Key。</p></details>
 <p id="stage3-phase" class="small">等待读取任务状态。</p><div class="actions"><button type="button" id="configure-stage3">保存方案与 Key（不启动）</button><button type="button" id="start-stage3" disabled>启动第三层</button><button type="button" id="stop-stage3" disabled>停止第三层</button></div><p id="stage3-count" class="small"></p><div id="stage3-progress-track" class="progress-track" role="progressbar" aria-label="第三层处理进度" aria-valuemin="0" aria-valuemax="100"><div id="stage3-progress-fill" class="progress-fill" style="width:0%"></div></div><p id="stage3-speed" class="small"></p><p class="small">点击启动后使用所选方案；远程 API 和 Agent 按对应账户计费，本地模型使用本机资源。采集及前两层可以继续运行。</p></div><details id="visual-review" class="review-divider"><summary>为什么待复核 / 查看判断证据</summary><div id="visual-review-content" class="small">展开后读取最近已发布结果，不启动分析或付费。</div></details><div id="excel-controls" class="notice span-all"><strong>Excel 持续更新</strong><p class="small">点击后打开当前任务的最新查看文件；尚未生成时按钮不可用。</p><div class="excel-actions"><button type="button" data-excel="amazon" disabled>Amazon原始采集</button><button type="button" data-excel="temu" disabled>TEMU原始采集</button><button type="button" data-excel="layer12" disabled>本地分析结果</button><button type="button" data-excel="layer123" disabled>打开选品结果 Excel</button></div><p id="excel-open-status" class="small" role="status" aria-live="polite"></p><a id="excel-download" hidden>下载当前最新 Excel</a><p id="excel-hint" class="small" aria-live="polite">等待读取选品结果文件状态。</p></div><details class="review-divider"><summary>更多市场数据 · 极鲸云</summary><div id="market-status" class="notice">等待读取</div><button id="refresh-market" type="button">刷新市场数据 / 登录后继续</button><p class="small">新任务自动查询。有效授权保存在本机，后续任务复用。首次授权后返回工作台会自动继续，也可点击按钮重试；不会启动第三层付费分析。</p></details><details class="review-divider"><summary>运营订阅（可选）</summary><section id="operator-panel" class="review-divider"><h2>运营候选与每日推荐</h2><p class="small">按当前采样中已完成的三层同款核验筛选。每天按北京时间选一个新品销量候选；缺少证据时显示数据未齐；只有完成核验且不达标时才显示无符合条件商品。价格区间来自页面或已采集规格，单个标价不冒充全部规格的最高／最低价。</p><div class="two"><div><label for="op-label">运营 / 订阅名称</label><input id="op-label" value="运营"></div><div><label for="op-time">每日推荐时间（北京时间）</label><input id="op-time" type="time" value="08:30"></div><div><label for="op-limit">同款 + 类似款合计严格少于 N</label><input id="op-limit" type="number" min="1" max="10000" value="5"></div><div><label for="op-sales">同款页面显示销量至少</label><input id="op-sales" type="number" min="1" value="100"></div><div><label for="op-days">最近多少天上架</label><input id="op-days" type="number" min="1" max="365" value="90"></div><div><label for="op-repeat">多少天内不重复推荐</label><input id="op-repeat" type="number" min="1" max="365" value="30"></div></div><label><input id="op-new" type="checkbox" checked> 必须有真实上架时间，满足新品条件</label><label><input id="op-enabled" type="checkbox" checked> 启用本地每日推荐</label><label><input id="op-collect" type="checkbox" checked> 每日重新采集，使用当天新证据推荐</label><div><label for="op-lead">提前多少分钟开始采集</label><input id="op-lead" type="number" min="1" max="720" value="120"></div><p class="small">已有任务未结束时排队，不停止现有浏览器；到推荐时间仍无完整证据则记录数据未齐，暂时无法推荐。第三层付费分析需单独启动。</p><div class="actions"><button id="op-save" type="button">保存当前品类订阅</button><button id="op-refresh" type="button">查看运营候选与今日推荐</button></div><p id="op-status" class="small" role="status"></p><div id="op-products"></div><p class="small">本地日报保存在工作台。程序与电脑需保持运行；外部消息推送尚未配置渠道及收件人。</p></section></details><details class="review-divider"><summary>市场参考（展开查看）</summary><section id="frontend-market" class="review-divider" aria-live="polite"><h2>TEMU 采集市场参考</h2><p>等待销量最高与最近上架两轮采集。</p></section></details><section id="commercial" class="review-divider" aria-live="polite"><h2>商业选品判断</h2><p>等待本轮数据。</p></section></section><section class="card page-panel" id="history-panel"><h2>历史记录</h2><p class="small">过去的任务和文件会保留，新建任务不会覆盖它们。</p><button id="reload-history" type="button">刷新记录</button><div id="history-list"></div><div id="history-detail"></div></section>
 </div></main>
@@ -74,45 +92,123 @@ header{padding-top:18px;padding-bottom:4px}header p{display:none}header h1{font-
 
 let stage3SettingsDirty=false,stage3SettingsRun=null;
 let stage3AgentSelection=[],stage3AgentModels={},stage3AgentLoadedFor=null,stage3ModelReadGeneration=0;
-function stage3ProviderSettings(){return {mode:$('stage3-mode').value,base_url:$('stage3-base-url').value.trim(),model:$('stage3-model').value.trim(),protocol:$('stage3-protocol').value,workers:Number($('stage3-workers').value),confidence:Number($('stage3-confidence').value)/100,concurrency_mode:$('stage3-auto')?.checked?'auto':'manual',agent_ids:stage3AgentSelection,agent_models:{...stage3AgentModels}};}
-function stage3ProviderFields(){const mode=$('stage3-mode').value,local=mode==='local_agent';$('stage3-api-fields').hidden=local;$('stage3-confidence-field').hidden=local||$('stage3-protocol').value!=='decisions';if($('stage3-agents'))$('stage3-agents').hidden=!local;if($('stage3-auto'))$('stage3-workers').disabled=$('stage3-auto').checked;$('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取；完整内部包导入后也可使用。自动并发从 4 路起步，依据成功吞吐量调整。':mode==='local_model'?'默认连接本机 D1-3B（18181）；也可改为已启动的其他本地多模态模型服务。':local?'自动发现 Codex、Claude、Gemini、OpenCode、WorkBuddy、AccioWork、豆包；只派发到通过实际看图连接测试的 Agent。自动并发参考历史 6 路，每组最多 12 对；每个 Agent 可在独立模型框中选择本机实际可用的模型。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';}
-function chooseStage3Mode(){const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:18181/v1/systemone','d1-3b','decisions',1],local_agent:['','gpt-6.1-sol','responses',6]};const [url,model,protocol,workers]=values[$('stage3-mode').value];$('stage3-base-url').value=url;$('stage3-model').value=model;$('stage3-protocol').value=protocol;$('stage3-workers').value=workers;$('stage3-api-key').value='';if($('stage3-auto'))$('stage3-auto').checked=true;stage3SettingsDirty=true;stage3ProviderFields();if($('stage3-mode').value==='local_agent')refreshLocalAgents();if(lastStatus)stage3Button(lastStatus);}
-function renderStage3Settings(data){data=data||{};if(stage3SettingsRun!==data.category_key){stage3SettingsDirty=false;stage3SettingsRun=data.category_key;$('stage3-api-key').value='';}const p=data.stage3_provider;if(p&&!stage3SettingsDirty){$('stage3-mode').value=p.mode;$('stage3-base-url').value=p.base_url;$('stage3-model').value=p.model;$('stage3-protocol').value=p.protocol;$('stage3-workers').value=p.workers;$('stage3-confidence').value=Math.round(p.confidence*100);if($('stage3-auto'))$('stage3-auto').checked=p.concurrency_mode==='auto';stage3AgentSelection=p.agent_ids||[];stage3AgentModels={...(p.agent_models||{})};}stage3ProviderFields();const locked=Boolean(data.stage3_control?.running||data.stage3_control?.codex_review?.running);for(const id of ['stage3-mode','stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-api-key','stage3-auto'])if($(id))$(id).disabled=locked||(id==='stage3-workers'&&Boolean($('stage3-auto')?.checked));for(const select of document.querySelectorAll('[data-agent-model]'))select.disabled=locked||select.dataset.available!=='true';if(p?.mode==='local_agent'&&stage3AgentLoadedFor!==(data.category_key||'')){stage3AgentLoadedFor=data.category_key||'';refreshLocalAgents();}}
+let stage3DetectedAgents=[],stage3AgentCatalogs={};
+function stage3ProviderSettings(){
+ const mode=$('stage3-mode').value,ids=mode==='local_agent'?[...new Set(stage3AgentSelection.filter(Boolean))]:[];
+ const models=Object.fromEntries(ids.filter(id=>stage3AgentModels[id]).map(id=>[id,stage3AgentModels[id]]));
+ return {mode,base_url:$('stage3-base-url').value.trim(),model:$('stage3-model').value.trim(),protocol:$('stage3-protocol').value,workers:Number($('stage3-workers').value),confidence:Number($('stage3-confidence').value)/100,concurrency_mode:$('stage3-auto')?.checked?'auto':'manual',agent_ids:ids,agent_models:models};
+}
+function stage3ProviderFields(){
+ const mode=$('stage3-mode').value,local=mode==='local_agent';$('stage3-api-fields').hidden=local;$('stage3-confidence-field').hidden=local||$('stage3-protocol').value!=='decisions';$('stage3-agents').hidden=!local;if($('stage3-model-field'))$('stage3-model-field').hidden=local;if($('configure-stage3'))$('configure-stage3').textContent=local?'保存方案（不启动）':'保存方案与 Key（不启动）';
+ if($('stage3-auto')){$('stage3-workers').disabled=$('stage3-auto').checked;if($('stage3-workers-field'))$('stage3-workers-field').hidden=$('stage3-auto').checked;}
+ $('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取。自动并发从 4 路起步，依据成功吞吐量调整。':mode==='local_model'?'连接已启动的本地看图模型服务。':local?'默认只使用你选中的一个 Agent；它可以按并发数同时处理多组商品。需要多个 Agent 分担时，在下方展开添加。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';
+}
+function chooseStage3Mode(){
+ const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:18181/v1/systemone','d1-3b','decisions',1],local_agent:['','gpt-6.1-sol','responses',6]};
+ const [url,model,protocol,workers]=values[$('stage3-mode').value];$('stage3-base-url').value=url;$('stage3-model').value=model;$('stage3-protocol').value=protocol;$('stage3-workers').value=workers;$('stage3-api-key').value='';if($('stage3-auto'))$('stage3-auto').checked=true;
+ stage3SettingsDirty=true;stage3ProviderFields();if($('stage3-mode').value==='local_agent'){stage3AgentSelection=[];refreshLocalAgents();}if(lastStatus)stage3Button(lastStatus);
+}
 function localAgentSettingsLocked(){return Boolean(lastStatus?.stage3_control?.running||lastStatus?.stage3_control?.codex_review?.running);}
-async function refreshAgentModels(agents){
- const box=$('stage3-agent-models');if(!box)return;const generation=++stage3ModelReadGeneration;box.textContent='正在从本机 Agent 读取可用模型…';
- try{
-  const response=await fetch('/api/local-agents/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:agents.filter(a=>a.installed).map(a=>a.id)})}),data=await response.json();
-  if(generation!==stage3ModelReadGeneration)return;if(!response.ok)throw Error(data.error?.message||'模型读取失败');box.replaceChildren();
-  for(const catalog of data.catalogs||[]){
-   if(catalog.status==='not_installed')continue;const row=document.createElement('div'),label=document.createElement('label'),select=document.createElement('select'),note=document.createElement('p');
-   label.textContent=catalog.name;select.dataset.agentModel=catalog.id;select.dataset.available=String(catalog.status==='ready');select.setAttribute('aria-label',catalog.name+' 模型');
-   const option=document.createElement('option');option.value='';const current=catalog.models.find(m=>m.id===catalog.default);option.textContent=current?'使用 Agent 默认（'+current.name+'）':'使用 Agent 当前默认模型';select.append(option);
-   for(const model of catalog.models){const option=document.createElement('option');option.value=model.id;option.textContent=model.name+(model.name===model.id?'':'（'+model.id+'）')+(model.vision===false?' · 不支持图片':'');option.disabled=model.vision===false;select.append(option);}
-   const saved=stage3AgentModels[catalog.id]||'';if(saved&&!catalog.models.some(m=>m.id===saved)){const missing=document.createElement('option');missing.value=saved;missing.textContent='已保存模型目前不可用：'+saved;missing.disabled=true;select.append(missing);}
-   select.value=saved;select.disabled=localAgentSettingsLocked()||catalog.status!=='ready';note.className='small';note.textContent=catalog.status==='ready'?catalog.models.length+' 个模型，来自本机 Agent':catalog.message;note.title=catalog.source||'';
-   select.addEventListener('change',()=>{if(select.value)stage3AgentModels[catalog.id]=select.value;else delete stage3AgentModels[catalog.id];stage3SettingsDirty=true;note.textContent='模型已选择；连接测试和启动分析均使用此模型。更换后需重新验证看图。';});
-   label.append(select);row.append(label,note);box.append(row);
+function stage3AgentInputsReady(){return stage3AgentSelection.length>0&&stage3AgentSelection.every(id=>{
+ const catalog=stage3AgentCatalogs[id],model=stage3AgentModels[id];return catalog?.status==='ready'&&(!model||catalog.models.some(m=>m.id===model&&m.vision!==false));
+});}
+function renderStage3Settings(data){
+ data=data||{};const changedRun=stage3SettingsRun!==data.category_key;
+ if(changedRun){stage3SettingsDirty=false;stage3SettingsRun=data.category_key;$('stage3-api-key').value='';}
+ const p=data.stage3_provider;
+ if(p&&!stage3SettingsDirty){
+  const before=JSON.stringify([stage3AgentSelection,stage3AgentModels]);
+  $('stage3-mode').value=p.mode;$('stage3-base-url').value=p.base_url;$('stage3-model').value=p.model;$('stage3-protocol').value=p.protocol;$('stage3-workers').value=p.workers;$('stage3-confidence').value=Math.round(p.confidence*100);if($('stage3-auto'))$('stage3-auto').checked=p.concurrency_mode==='auto';stage3AgentSelection=[...(p.agent_ids||[])];stage3AgentModels={...(p.agent_models||{})};
+  if(before!==JSON.stringify([stage3AgentSelection,stage3AgentModels])||changedRun)renderAgentControls();
+ }
+ stage3ProviderFields();const locked=Boolean(data.stage3_control?.running||data.stage3_control?.codex_review?.running);
+ for(const id of ['stage3-mode','stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-api-key','stage3-auto'])if($(id))$(id).disabled=locked||(id==='stage3-workers'&&Boolean($('stage3-auto')?.checked));
+ for(const select of document.querySelectorAll('[data-agent-select]'))select.disabled=locked;
+ for(const select of document.querySelectorAll('[data-agent-model]'))select.disabled=locked||select.dataset.available!=='true';
+ for(const button of document.querySelectorAll('[data-agent-action]'))button.disabled=locked||!button.dataset.agent;
+ if($('stage3-add-agent'))$('stage3-add-agent').disabled=locked||!stage3AgentSelection.length||!stage3DetectedAgents.some(a=>a.installed&&!stage3AgentSelection.includes(a.id));
+ if(p?.mode==='local_agent'&&stage3AgentLoadedFor!==(data.category_key||'')){stage3AgentLoadedFor=data.category_key||'';refreshLocalAgents();}
+}
+function agentOption(select,value,text,disabled=false){const option=document.createElement('option');option.value=value;option.textContent=text;option.disabled=disabled;select.append(option);}
+function populateAgentSelect(select,id){
+ select.replaceChildren();agentOption(select,'','请选择本机 Agent');
+ for(const agent of stage3DetectedAgents.filter(a=>a.installed))agentOption(select,agent.id,agent.name,agent.id!==id&&stage3AgentSelection.includes(agent.id));
+ if(id&&!stage3DetectedAgents.some(a=>a.id===id&&a.installed))agentOption(select,id,'已保存的 Agent 当前未安装',true);
+ select.value=id||'';select.disabled=localAgentSettingsLocked();
+}
+function populateAgentModel(select,id){
+ select.replaceChildren();select.dataset.agentModel=id||'';const catalog=stage3AgentCatalogs[id];select.dataset.available=String(catalog?.status==='ready');
+ if(catalog?.status!=='ready'){agentOption(select,'',catalog?'模型读取失败，请重新识别':'正在读取可用模型…');select.disabled=true;return;}
+ const current=catalog.models.find(m=>m.id===catalog.default);agentOption(select,'',current?'默认模型 · '+current.name:'使用 Agent 当前默认模型');
+ for(const model of catalog.models)agentOption(select,model.id,model.name+(model.vision===false?' · 不支持图片':''),model.vision===false);
+ const saved=stage3AgentModels[id]||'';if(saved&&!catalog.models.some(m=>m.id===saved))agentOption(select,saved,'已保存模型当前不可用，请重新选择',true);
+ select.value=saved;select.disabled=localAgentSettingsLocked();
+}
+function renderAgentStatus(node,id){
+ const agent=stage3DetectedAgents.find(a=>a.id===id),catalog=stage3AgentCatalogs[id];
+ const modelChanged=agent&&stage3AgentModels[id]&&(agent.selected_model||'')!==stage3AgentModels[id];
+ node.textContent=!id?'只会使用你选择的 Agent。':catalog&&catalog.status!=='ready'?catalog.message:modelChanged?'已选择模型，启动时会自动验证连接。':agent?.status||'等待识别';
+}
+function renderAgentControls(){
+ if(!$('stage3-agent'))return;
+ const id=stage3AgentSelection[0]||'';populateAgentSelect($('stage3-agent'),id);$('stage3-model-box').hidden=!id;populateAgentModel($('stage3-agent-model'),id);renderAgentStatus($('stage3-agent-status'),id);
+ $('stage3-agent-note').hidden=id!=='workbuddy';
+ for(const button of $('stage3-agent-actions').querySelectorAll('[data-agent-action]')){button.dataset.agent=id;button.disabled=!id||localAgentSettingsLocked();}
+ $('stage3-enable-doubao').hidden=id!=='doubao'||!stage3DetectedAgents.find(a=>a.id===id)?.requires_enable;
+ const extra=$('stage3-extra-agents');extra.replaceChildren();
+ stage3AgentSelection.slice(1).forEach((agentId,offset)=>{
+  const index=offset+1,row=document.createElement('div'),heading=document.createElement('div'),title=document.createElement('strong'),remove=document.createElement('button');row.className='agent-extra';heading.className='agent-extra-heading';title.textContent='额外 Agent '+index;remove.type='button';remove.textContent='移除';remove.disabled=localAgentSettingsLocked();
+  remove.addEventListener('click',()=>{stage3AgentSelection.splice(index,1);agentSelectionChanged();});heading.append(title,remove);row.append(heading);
+  const fields=document.createElement('div');fields.className='agent-fields';
+  for(const [kind,text] of [['agent','Agent'],['model','模型']]){
+   const group=document.createElement('div'),label=document.createElement('label'),select=document.createElement('select');select.id='stage3-extra-'+kind+'-'+index;label.htmlFor=select.id;label.textContent=text;
+   if(kind==='agent'){select.dataset.agentSelect='extra';populateAgentSelect(select,agentId);select.addEventListener('change',()=>{if(!select.value)return;stage3AgentSelection[index]=select.value;agentSelectionChanged(true);});}
+   else{populateAgentModel(select,agentId);select.addEventListener('change',()=>{setAgentModel(agentId,select.value);});}
+   group.append(label,select);fields.append(group);
   }
- }catch(error){if(generation===stage3ModelReadGeneration)box.textContent=error.message;}
+  row.append(fields);const status=document.createElement('p');status.className='small';renderAgentStatus(status,agentId);row.append(status);
+  const actions=document.createElement('div');actions.className='agent-inline-actions';
+  for(const [action,text] of [['connect','连接测试'],['login','登录']]){const button=document.createElement('button');button.type='button';button.textContent=text;button.dataset.agentAction=action;button.dataset.agent=agentId;button.disabled=localAgentSettingsLocked();button.addEventListener('click',()=>agentAction(action,agentId,button));actions.append(button);}
+  row.append(actions);extra.append(row);
+ });
+ if(stage3AgentSelection.length>1)$('stage3-multi-agent-details').open=true;
+ $('stage3-add-agent').disabled=localAgentSettingsLocked()||!id||!stage3DetectedAgents.some(a=>a.installed&&!stage3AgentSelection.includes(a.id));
+}
+function agentSelectionChanged(readModels=false){stage3SettingsDirty=true;renderAgentControls();if(lastStatus)stage3Button(lastStatus);if(readModels)refreshAgentModels();}
+function choosePrimaryAgent(){const id=$('stage3-agent').value;stage3AgentSelection=id?[id,...stage3AgentSelection.slice(1).filter(a=>a!==id)]:[];agentSelectionChanged(true);}
+function addAnalysisAgent(){const next=stage3DetectedAgents.find(a=>a.installed&&!stage3AgentSelection.includes(a.id));if(!stage3AgentSelection.length||!next)return;stage3AgentSelection.push(next.id);agentSelectionChanged(true);}
+function setAgentModel(id,model){if(model)stage3AgentModels[id]=model;else delete stage3AgentModels[id];agentSelectionChanged();}
+async function refreshAgentModels(){
+ const ids=stage3AgentSelection.filter(id=>stage3DetectedAgents.some(a=>a.id===id&&a.installed));const generation=++stage3ModelReadGeneration;
+ if(!ids.length){renderAgentControls();return;}
+ for(const id of ids)delete stage3AgentCatalogs[id];renderAgentControls();if(lastStatus)stage3Button(lastStatus);
+ try{
+  const response=await fetch('/api/local-agents/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})}),data=await response.json();if(generation!==stage3ModelReadGeneration)return;if(!response.ok)throw Error(data.error?.message||'模型读取失败');
+  for(const catalog of data.catalogs||[])stage3AgentCatalogs[catalog.id]=catalog;
+ }catch(error){if(generation!==stage3ModelReadGeneration)return;for(const id of ids)stage3AgentCatalogs[id]={status:'unavailable',models:[],message:error.message};}
+ renderAgentControls();if(lastStatus)stage3Button(lastStatus);
 }
 async function refreshLocalAgents(){
- const box=$('stage3-agent-list');if(!box)return;stage3AgentLoadedFor=lastStatus?.category_key||'';box.textContent='正在识别本机 Agent…';
+ stage3AgentLoadedFor=lastStatus?.category_key||'';$('stage3-agent-status').textContent='正在识别本机 Agent…';$('stage3-agents-refresh').disabled=true;
  try{
-  const response=await fetch('/api/local-agents/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_models:stage3AgentModels})}),data=await response.json();if(!response.ok)throw Error(data.error?.message||'检测失败');box.replaceChildren();
-  for(const agent of data.agents){
-   const row=document.createElement('div'),label=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.checked=agent.installed&&(!stage3AgentSelection.length||stage3AgentSelection.includes(agent.id));check.disabled=!agent.installed||localAgentSettingsLocked();check.dataset.agent=agent.id;
-   check.addEventListener('change',()=>{const selected=Array.from(box.querySelectorAll('input:checked')).map(input=>input.dataset.agent);if(!selected.length){check.checked=true;$('stage3-agent-message').textContent='至少保留一个 Agent。';return;}stage3AgentSelection=selected;stage3SettingsDirty=true;});
-   label.append(check,document.createTextNode(`${agent.name} ${agent.version||''} · ${agent.status}`));row.append(label);
-   if(agent.installed){
-    if(agent.id==='doubao'&&agent.requires_enable){const enable=document.createElement('button');enable.type='button';enable.textContent='启用豆包本机连接（重启客户端）';enable.disabled=localAgentSettingsLocked();enable.addEventListener('click',async()=>{if(!window.confirm('将关闭并重启当前用户的豆包，启用仅 127.0.0.1 的本机控制接口。未发送的草稿可能丢失，请先保存。确认启用？'))return;enable.disabled=true;try{const response=await fetch('/api/local-agents/enable-doubao',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmation:'restart-doubao-and-enable-loopback-control'})}),out=await response.json();$('stage3-agent-message').textContent=out.message||out.error?.message||'连接处理中';await refreshLocalAgents();}catch(error){$('stage3-agent-message').textContent=error.message;}finally{enable.disabled=localAgentSettingsLocked();}});row.append(enable);}
-    for(const [path,text] of [['connect','连接测试'],['login','登录']]){const button=document.createElement('button');button.type='button';button.textContent=text;button.disabled=localAgentSettingsLocked();button.addEventListener('click',async()=>{button.disabled=true;try{const res=await fetch('/api/local-agents/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:agent.id,model:stage3AgentModels[agent.id]||undefined})}),out=await res.json();if(!res.ok)throw Error(out.error?.message||'操作失败');$('stage3-agent-message').textContent=out.message||out.agent?.status||'完成';await refreshLocalAgents();}catch(error){$('stage3-agent-message').textContent=error.message;}finally{button.disabled=localAgentSettingsLocked();}});row.append(button);}
-   }
-   box.append(row);
-  }
-  await refreshAgentModels(data.agents);
- }catch(error){box.textContent=error.message;}
+  const response=await fetch('/api/local-agents/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_models:stage3AgentModels})}),data=await response.json();if(!response.ok)throw Error(data.error?.message||'检测失败');stage3DetectedAgents=data.agents;renderAgentControls();
+  if(!data.agents.some(a=>a.installed))$('stage3-agent-status').textContent='未检测到已安装的 Agent，请先安装并登录。';
+  await refreshAgentModels();
+ }catch(error){$('stage3-agent-status').textContent=error.message;}
+ finally{$('stage3-agents-refresh').disabled=localAgentSettingsLocked();}
 }
+async function agentAction(action,id,button){
+ if(!id)return;button.disabled=true;
+ try{const response=await fetch('/api/local-agents/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,model:stage3AgentModels[id]||undefined})}),data=await response.json();if(!response.ok)throw Error(data.error?.message||'操作失败');$('stage3-agent-message').textContent=data.message||data.agent?.status||'完成';await refreshLocalAgents();}
+ catch(error){$('stage3-agent-message').textContent=error.message;}
+ finally{button.disabled=localAgentSettingsLocked();}
+}
+async function enableSelectedDoubao(){
+ if(!window.confirm('将重启豆包并开启仅限本机的连接。未发送草稿可能丢失，请先保存。确认启用？'))return;
+ try{const response=await fetch('/api/local-agents/enable-doubao',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmation:'restart-doubao-and-enable-loopback-control'})}),data=await response.json();if(!response.ok)throw Error(data.error?.message||'启用失败');$('stage3-agent-message').textContent=data.message||'完成';await refreshLocalAgents();}
+ catch(error){$('stage3-agent-message').textContent=error.message;}
+}
+
 function renderSelectionSummary(report,box=$('commercial'),historical=false){box.replaceChildren();const h=document.createElement('h2');h.textContent='选品结论';box.append(h);if(!report?.policy){const p=document.createElement('p');p.textContent='等待同款分析；结果 Excel 会持续更新。';box.append(p);return;}const limit=report.policy.same_limit,rows=(report.products||[]).filter(p=>p.match.confirmed+(p.match.similar||0)<limit);const note=document.createElement('p');note.className='small';note.textContent=`最终同款与类似款合计严格小于 ${limit}：${rows.length} 件 Amazon 商品。未完成核验会标明，完整双边信息见选品结果 Excel。`;box.append(note);for(const row of rows){const card=document.createElement('div');card.className='notice';const title=document.createElement('strong');title.textContent=row.title||row.asin;const p=document.createElement('p');p.textContent=`${row.asin} · 同款 ${row.match.confirmed} · 类似款 ${row.match.similar||0} · 合计 ${row.match.confirmed+(row.match.similar||0)} · 待分析 ${row.match.pending||0} · 待补证 ${row.match.possible||0} · ${row.selection_advice?.conclusion||row.match.label}`;card.append(title,p);const d=document.createElement('details'),sum=document.createElement('summary'),body=document.createElement('p');sum.textContent='查看综合分析';body.textContent=row.selection_advice?.reason||row.match.reason;d.append(sum,body);card.append(d);box.append(card);}}
 
 
@@ -202,8 +298,8 @@ function stage3Button(data){
  const unavailable=!statusFresh||busy||!data?.category_key||data?.scope?.execution_mode==='collection';
  renderStage3Settings(data);
  const providerChanged=JSON.stringify(stage3ProviderSettings())!==JSON.stringify(data?.stage3_provider);
- $('start-stage3').textContent=running||data?.stage3_control?.codex_review?.running?'第三层分析中':'启动 / 继续第三层';
- $('start-stage3').disabled=unavailable||Boolean(data?.release_update?.pending)||(state.can_start===false&&!providerChanged)||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||running;
+ $('start-stage3').textContent=running||data?.stage3_control?.codex_review?.running?'第三层分析中':$('stage3-mode').value==='local_agent'?'开始分析':'启动 / 继续第三层';
+ $('start-stage3').disabled=unavailable||Boolean(data?.release_update?.pending)||(state.can_start===false&&!providerChanged)||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||running||($('stage3-mode').value==='local_agent'&&!stage3AgentInputsReady());
  $('stop-stage3').disabled=unavailable||!state.can_stop;
  $('stage3-phase').textContent=refreshing?'最近核验快照；新增输入核对中，当前待处理尚未确认':p.counting?(p.message||state.phase||'正在核对已处理候选，请等待进度读取完成'):state.phase||'等待手动启动';
  const reviewed=p.api_completed!=null?Number(p.completed||0):Number(p.completed||0)+Number(p.codex_completed||0),remaining=p.pending_after_codex??p.pending??0;
@@ -288,10 +384,16 @@ $('apply-plain3').addEventListener('click',()=>applyLayer('stage3','plain-rule3'
 $('plain-rule3').addEventListener('input',()=>{$('plain-changes').textContent='第三层有未应用的修改，请先应用第三层要求。';updateControls();});
 $('plain-rule').addEventListener('input',()=>{$('plain-changes').textContent=$('plain-rule').value===plainApplied?'当前说明已应用。':'有尚未应用的要求，请先点击“解释 / 应用第一层要求”。';updateControls();});
 $('run').addEventListener('click',()=>action('/api/run',{draft_id:draftId,stage1_text:$('stage1-rule').value,stage2_threshold:Number($('stage2-threshold').value),stage3_text:$('stage3-rule').value,stage3_modules_json:$('stage3-modules').value,commercial:businessSettings(),worker_count:Number($('worker-count').value)}));
-$('configure-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()},key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/configure-stage3',body);});
-$('start-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()},key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/start-stage3',body);});
+$('configure-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()};if(body.provider.mode==='local_agent'&&!stage3AgentInputsReady()){$('stage3-agent-message').textContent='请先选择一个 Agent，并等待读取可用模型。';return;}const key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/configure-stage3',body);});
+$('start-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()};if(body.provider.mode==='local_agent'&&!stage3AgentInputsReady()){$('stage3-agent-message').textContent='请先选择一个 Agent，并等待读取可用模型。';return;}const key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/start-stage3',body);});
 $('stage3-mode').addEventListener('change',chooseStage3Mode);
 $('stage3-agents-refresh').addEventListener('click',refreshLocalAgents);
+$('stage3-agent').addEventListener('change',choosePrimaryAgent);
+$('stage3-agent-model').addEventListener('change',()=>setAgentModel(stage3AgentSelection[0],$('stage3-agent-model').value));
+$('stage3-add-agent').addEventListener('click',addAnalysisAgent);
+$('stage3-agent-connect').addEventListener('click',()=>agentAction('connect',stage3AgentSelection[0],$('stage3-agent-connect')));
+$('stage3-agent-login').addEventListener('click',()=>agentAction('login',stage3AgentSelection[0],$('stage3-agent-login')));
+$('stage3-enable-doubao').addEventListener('click',enableSelectedDoubao);
 for(const id of ['stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-auto'])$(id).addEventListener('input',()=>{stage3SettingsDirty=true;stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);});
 $('stop-stage3').addEventListener('click',()=>action('/api/stop-stage3',{}));
 $('stop').addEventListener('click',()=>action('/api/stop',{}));
