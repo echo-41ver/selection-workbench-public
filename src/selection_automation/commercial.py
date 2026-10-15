@@ -240,7 +240,7 @@ def match_metric(counts, expected, policy):
         state, reason = 'UNKNOWN', '候选分析或待复核尚未完成，不能将未知商品当作零同款'
     else:
         state, reason = 'SAMPLE_PASS', '当前采样最终同款与类似款合计符合门槛；尚未证明TEMU全站数量'
-    return metric(state, reason, confirmed=confirmed, possible=possible, pending=pending,
+    return metric(state, reason, confirmed=confirmed, possible=possible, pending=pending,different=counts.get('different',0),
                   similar=similar, same_or_similar=combined,
                   screened_out=counts.get('screened_out', 0), expected=expected,
                   threshold=policy['same_limit'], scope='本次采集及三层候选核验范围')
@@ -397,7 +397,7 @@ def build_report(root, category, *, as_of=None):
             counts[asin][bucket] += 1
         elif status == 'CANDIDATE' and (asin, pair['goods_id']) in reviews:
             review = reviews[(asin, pair['goods_id'])]
-            bucket = {'SAME':'confirmed', 'DIFFERENT':'different', 'UNKNOWN':'possible'}[review['review_status']]
+            bucket = {'SAME':'confirmed','SIMILAR':'similar', 'DIFFERENT':'different', 'UNKNOWN':'possible'}[review['review_status']]
             counts[asin][bucket] += 1
         else: counts[asin]['pending'] += 1
         if bucket in ('confirmed','similar'):
@@ -414,7 +414,7 @@ def build_report(root, category, *, as_of=None):
                     'model':result_row.get('model'),'score':scored['total_score'],
                     'probability':scored.get('decision_probability')}
             else:
-                target_pairs[asin][gid]={'goods_id':gid,'state':'确认同款（Agent看图核验）',
+                target_pairs[asin][gid]={'goods_id':gid,'state':'相似款（Agent看图核验）' if bucket=='similar' else '确认同款（Agent看图核验）',
                     'reason':review['reason'],'evidence':f"Amazon：{review['amazon_evidence']}；TEMU：{review['temu_evidence']}",
                     'model':review.get('model'),'score':(review.get('module_result') or {}).get('total_score')}
     amazon = read_json(base/'amazon/amazon_frontend_latest.json').get('records', [])

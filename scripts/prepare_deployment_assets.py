@@ -30,6 +30,22 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def bundle_codex(root: Path) -> dict:
+    sys.path.insert(0,str(root/'src'))
+    from selection_automation.local_agents import find_executable
+    source=find_executable(root,'codex')
+    if not source or Path(source).suffix.lower()!='.exe':
+        raise RuntimeError('Native Codex CLI is required to reproduce this Windows installation')
+    source=Path(source)
+    version=subprocess.run([str(source),'--version'],capture_output=True,text=True,check=True).stdout.strip()
+    target=root/'deployment-assets/tools/codex';target.mkdir(parents=True,exist_ok=True)
+    for name in ('codex.exe','codex-code-mode-host.exe','codex-command-runner.exe','codex-windows-sandbox-setup.exe'):
+        path=source.parent/name
+        if not path.is_file():raise RuntimeError('Codex distribution helper missing: '+name)
+        if path.resolve()!=(target/name).resolve():shutil.copy2(path,target/name)
+    return {'version':version,'credential_cache_included':False,'entry':'tools/codex/codex.exe'}
+
+
 def prepare(root: Path, python: Path) -> dict:
     assets = root / "deployment-assets"
     wheelhouse = assets / "wheelhouse"
@@ -38,6 +54,7 @@ def prepare(root: Path, python: Path) -> dict:
     wheelhouse.mkdir(parents=True, exist_ok=True)
     modules.mkdir(parents=True, exist_ok=True)
     model.parent.mkdir(parents=True, exist_ok=True)
+    codex=bundle_codex(root)
 
     lock = (root / "requirements.lock.txt").read_text(encoding="utf-8-sig")
     if lock.count(GEEKBI) != 1:
@@ -72,6 +89,7 @@ def prepare(root: Path, python: Path) -> dict:
     manifest = {
         "target": {"os": "Windows x64", "python": "CPython 3.12.10", "node": "24.19.0", "powershell": "7.6.5", "adspower": "8.7.23", "adspower_firefox_kernel": "153", "node_package": "package-lock.json"},
         "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
+        "agent_tools":{'codex':codex},
         "files": {path.relative_to(assets).as_posix(): {"bytes": path.stat().st_size, "sha256": sha256(path)} for path in files},
     }
     (assets / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

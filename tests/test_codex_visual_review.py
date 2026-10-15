@@ -308,76 +308,48 @@ def test_publisher_source_signature_includes_independent_reviews(tmp_path):
 
 
 @pytest.mark.parametrize('with_api,replace_api', [(False,False),(True,False),(True,True)])
-def test_excel_uses_api_success_unless_complete_recheck_authorized(tmp_path, monkeypatch, with_api, replace_api):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
+def test_simple_excel_uses_api_success_unless_complete_recheck_authorized(tmp_path, monkeypatch, with_api, replace_api):
+    from openpyxl import load_workbook
+    from selection_automation import vision
+    from selection_automation.commercial import current_report
     import export_category_workbooks as exporter
-    cat = configured()
-    cat['execution_mode'] = 'collection'
-    key = cat['category_key']
-    base = tmp_path/'runs'/key
-    frozen = base/'stage123/export_frozen'
-    frozen.mkdir(parents=True)
-    pair, review = fixture()
+    cat=configured();cat['execution_mode']='full';key=cat['category_key']
+    base=tmp_path/'runs'/key;frozen=base/'stage123/export_frozen';frozen.mkdir(parents=True)
+    (base/'amazon').mkdir();(base/'temu/union').mkdir(parents=True)
+    (base/'amazon/amazon_frontend_latest.json').write_text(json.dumps({'records':[{'asin':'A','title':'TEST_ONLY_AMAZON'}]}),'utf-8')
+    (base/'temu/union/products.jsonl').write_text(json.dumps({'goods_id':'T','title':'TEST_ONLY_TEMU'})+'\n','utf-8')
+    pair,review=fixture()
     if replace_api:
-        pair['supersedes_api'] = True
-        review['visual_facts'] = facts(cat, a=6, t=8)
-    row = {**pair, 'pair_status':'CANDIDATE', 'vector_score':100}
-    for name in ('layer3_candidates', 'layer12_rows'):
-        (frozen/f'{name}_{key}.jsonl').write_text(json.dumps(row)+'\n', encoding='utf-8')
-    (frozen/f'layer12_summary_{key}.json').write_text(json.dumps({'actual_pairs':1,'amazon_products':1,'temu_products':1}), encoding='utf-8')
-    import_reviews(cat, {'pairs':[pair]}, [review], base/'stage123/codex_reviews/01.jsonl', '01')
+        pair['supersedes_api']=True;review['visual_facts']=facts(cat,a=6,t=8)
+    row={**pair,'pair_status':'CANDIDATE','vector_score':100}
+    for name in ('layer3_candidates','layer12_rows'):
+        (frozen/f'{name}_{key}.jsonl').write_text(json.dumps(row)+'\n','utf-8')
+    import_reviews(cat,{'pairs':[pair]},[review],base/'stage123/codex_reviews/01.jsonl','01')
     if with_api:
-        api = {**pair, 'api_status':'success', 'visual_facts':facts(cat), 'model':'existing-api', 'usage':{'total_tokens':321}}
-        (base/'stage123/results.jsonl').write_text(json.dumps(api)+'\n', encoding='utf-8')
+        api={**pair,'api_status':'success','visual_facts':facts(cat),'model':'existing-api'}
+        (base/'stage123/results.jsonl').write_text(json.dumps(api)+'\n','utf-8')
     monkeypatch.setattr(exporter,'ROOT',tmp_path)
     monkeypatch.setattr(exporter,'load_category',lambda _:cat)
-    monkeypatch.setattr(exporter,'compatible_vision_keys',lambda *_, **__:('revision',))
-    monkeypatch.setattr(exporter,'export_stage_book',lambda destination,headers,rows,summary,*a,**kw: {'headers':headers,'rows':list(rows),'summary':summary})
-    output = exporter.export(tmp_path/'category.json','layer123')
-    values = dict(zip(output['headers'], output['rows'][0]))
+    monkeypatch.setattr(vision,'compatible_vision_keys',lambda *a,**kw:('revision',))
+    report=current_report(tmp_path,cat)
+    assert report['products'][0]['match']['confirmed']==int(with_api and not replace_api)
+    output=exporter.export(tmp_path/'category.json','layer123')
+    book=load_workbook(output['固定查看副本']);sheet=book['选品结论']
+    headers=[c.value for c in sheet[4]]
+    assert sheet.cell(5,headers.index('最终关系')+1).value==('同款' if with_api and not replace_api else '不同款')
     if with_api and not replace_api:
-        assert values['模型']=='existing-api' and values['token']==321
-        assert values['最终判断']=='确认同款'
-        assert output['summary']['Codex看图复核完成数']==0
-    else:
-        if not replace_api:assert values['第三层总分']=='未评分（Codex看图复核）'
-        assert values['最终判断']=='不同款（Codex看图复核）'
-        assert values['token'] is None
-        assert output['summary']['Codex看图复核完成数']==1
-    assert output['summary']['第三层有效结果']==1
-    assert output['summary']['视觉API有效结果']==int(with_api and not replace_api)
-    assert output['summary']['第三层综合已分析商品对']==1
+        detail=book['同款商品明细'];cols=[c.value for c in detail[4]]
+        assert detail.cell(5,cols.index('分析模型')+1).value=='existing-api'
+    book.close()
 
 
-def test_excel_exports_unknown_review_scores_from_complete_facts(tmp_path, monkeypatch):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
+def test_collection_only_task_does_not_export_a_fabricated_analysis(tmp_path,monkeypatch):
     import export_category_workbooks as exporter
-    cat = configured()
-    cat['execution_mode'] = 'collection'
-    key = cat['category_key']
-    base = tmp_path/'runs'/key
-    frozen = base/'stage123/export_frozen'
-    frozen.mkdir(parents=True)
-    pair, review = fixture('UNKNOWN')
-    review['visual_facts'] = facts(cat)
-    review['visual_facts']['modules']['appearance'].update(relation='UNKNOWN', amazon_evidence='', temu_evidence='')
-    row = {**pair, 'pair_status':'CANDIDATE', 'vector_score':100}
-    for name in ('layer3_candidates', 'layer12_rows'):
-        (frozen/f'{name}_{key}.jsonl').write_text(json.dumps(row)+'\n', encoding='utf-8')
-    (frozen/f'layer12_summary_{key}.json').write_text(json.dumps({'actual_pairs':1,'amazon_products':1,'temu_products':1}), encoding='utf-8')
-    import_reviews(cat, {'pairs':[pair]}, [review], base/'stage123/codex_reviews/01.jsonl', '01')
+    cat=configured();cat['execution_mode']='collection'
     monkeypatch.setattr(exporter,'ROOT',tmp_path)
     monkeypatch.setattr(exporter,'load_category',lambda _:cat)
-    monkeypatch.setattr(exporter,'compatible_vision_keys',lambda *_, **__:('revision',))
-    monkeypatch.setattr(exporter,'export_stage_book',lambda destination,headers,rows,summary,*a,**kw: {'headers':headers,'rows':list(rows),'summary':summary})
-    output = exporter.export(tmp_path/'category.json','layer123')
-    values = dict(zip(output['headers'], output['rows'][0]))
-    body_column = next(header for header in output['headers'] if header.endswith('/80'))
-    appearance_column = next(header for header in output['headers'] if header.endswith('/20'))
-    assert values[body_column] == 80
-    assert values[appearance_column] == '无法判断'
-    assert values['第三层总分'] == '未汇总（证据不全）'
-    assert values['最终判断'] == '待补充证据（Codex看图复核）'
+    with pytest.raises(ValueError,match='尚未接入同款分析'):
+        exporter.export(tmp_path/'category.json','layer123')
 
 
 def test_progress_reports_codex_separately_and_ignores_stale_or_api_success(tmp_path, monkeypatch):

@@ -14,7 +14,6 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 POOL_SCHEMA_REVISION = 3
-WINDOWS_BUNDLED_PYTHON = Path(r'C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe')
 sys.path.insert(0, str(ROOT / 'src'))
 from selection_automation.category_config import load_category
 from selection_automation.codex_visual_review import checked_facts, import_reviews, normalize_review
@@ -122,6 +121,11 @@ def key(row):
 
 
 def codex_executable(config):
+    if not config.get('codex_executable'):
+        from selection_automation.local_agents import find_executable
+        found = find_executable(ROOT, 'codex')
+        if found:
+            return found
     configured = config.get('codex_executable') or shutil.which('codex')
     if configured and Path(configured).is_file():
         return str(Path(configured).resolve())
@@ -186,7 +190,7 @@ def pending_rows(category, task):
 
 
 def command(executable, job, model='gpt-6.1-sol', effort='medium'):
-    args = [executable, 'exec', '--ignore-user-config', '--ephemeral',
+    args = [executable, 'exec', '--ignore-user-config', '--ephemeral', '--skip-git-repo-check',
             '-m', model, '-c', f'model_reasoning_effort="{effort}"',
             '-c', 'service_tier="default"', '-c', 'approval_policy="never"',
             '-c', 'sandbox_mode="danger-full-access"', '--json',
@@ -242,7 +246,8 @@ def same_amazon_groups(rows, group_size):
 
 
 def job_environment(config):
-    env = {k: v for k, v in os.environ.items() if k not in ('DEEPSEEK_API_KEY', 'OPENAI_API_KEY')}
+    from selection_automation.local_agents import environment
+    env = environment()
     env.update(PYTHONUTF8='1', PYTHONIOENCODING='utf-8')
     proxy = config.get('proxy_url')
     if not proxy and os.name == 'nt' and not env.get('HTTPS_PROXY') and not env.get('https_proxy'):
@@ -267,29 +272,20 @@ def job_environment(config):
 
 
 def prompt(job, target, model, category_path):
-    python = WINDOWS_BUNDLED_PYTHON
+    python = Path(sys.executable).resolve()
     validator = job / 'validate_reviews.py'
     validate_command = (f"& '{python}' '{validator}' --category '{category_path}' "
                         f"--manifest '{job / 'manifest.jsonl'}' --reviews '{job / 'reviews.jsonl'}'")
-    return f"""完成这组真实图片严格同款核验，共{target}对。上下文只读取一次。
-已附联系图，左 A 是 Amazon，右 T 是 TEMU，序号与 {job / 'manifest.jsonl'} 一致。
-另已直接附上 image-inputs.json 列出的双方原图。本组只有一个Amazon基准商品；先独立识别这张Amazon原图的出售主体、驱动/控制结构、管路，再逐一识别TEMU主体。不得把相邻行、另一商品或联系图位置的描述挪到本行。两侧都出现软管或泵头不能证明同款。
-协议与完整字段模板：{job / 'visual-facts-guide.json'}。
-原图路径已写入 manifest 的绝对路径；只按该路径打开，不要自行把路径拼到 runs、category 或其他目录下。
-每条SAME必须逐对核对已经附上的双方原图，事实仅来自本行明确绑定的两图；缩略图不清晰就查看 manifest 指定原图。无法看到原图时不能写SAME，也不能凭标题补造泵头、按钮、颜色或出液部件。
-写 UTF-8 JSONL 到 {job / 'reviews.jsonl'}，每对一条，严格保留 asin、goods_id、vision_revision_key。
-每条包含 review_status（SAME/DIFFERENT/UNKNOWN）、amazon_evidence、temu_evidence、reason、
-reviewer="{job.name}"、model="{model}"、visual_facts（完整 modules、identity、overall_confidence、要求的 feature_comparisons）。
-严格按 visual-facts-guide.json 的对象字段输出。identity.matches 每一项是 {{"feature":"具体部位","amazon":"Amazon侧实际证据","temu":"TEMU侧对应证据"}} 对象；identity.differences 每一项是 {{"field":"具体差异部位","amazon":"Amazon侧实际证据","temu":"TEMU侧对应证据","kind":"IDENTITY|VARIANT|UNRESOLVED","variant_field":"规范变体字段或NONE"}} 对象，不能写字符串列表。identity、modules、feature_comparisons 的键、字段必须齐全且不能增加字段；UNKNOWN模块/特征的双方证据使用空字符串。顶层amazon_evidence、temu_evidence始终填写本行原图实际可见事实的非空摘要；整体UNKNOWN不代表两侧所有外观不可见，不能抹掉已观察的事实。
-每个模块只用 relation、amazon_evidence、temu_evidence、hard_conflict_code 四字段；不得添加confidence。feature_comparisons 只使用指南中列出的全部身份特征ID；普通项只含 relation、amazon、temu；inventory_requirements列出的特征必须额外包含双侧inventory，严格采用指南的complete/groups及region/item_type/count字段，逐件查看原图，不凭标题推断数量。
-不能捏造事实、分数、模块证据或身份特征；不得把通用“同类部件”写成匹配证据。具体差异需有两侧对应事实。颜色、标签、包装等只能按当前品类明确允许的变体标注；不得用变体解释结构差异。
-如果目录中已有 validation_errors.json，先只修复其中明确列出的无效行；保留 reviews.jsonl 里已通过验证的行及其原文，不要从头重看有效行。对错误行只改 schema/字段映射，视觉事实本身不足时重新查看该行原图并补足真实观察，不猜测。
-写完后运行本 job 的严格校验脚本：
-{validate_command}
-使用该绝对 Python 路径通过 exec_command 运行；检查 validation_errors.json，逐条修复后再次运行，直到本组所有可判定行通过。若 MCP/桥接查看图片失败，不要调用 MCP 桥反复尝试：使用 Codex 原生 view_image 或 exec_command 读取 manifest 里的绝对原图路径；Python 操作使用给出的 bundled python。
-只写本组 reviews.jsonl；不改代码、不操作浏览器、不调用付费API、不改其他任务或Excel。
-已有结果保留；仅在新任务无旧 reviews 时从头分析。错误行修复后不得删除本组其他行。完成本组全部待修/待写行后报告有效、无效数量及具体校验结果。父程序验证、导入并自动分配下一组。
-简短报告实际写入数量。Windows运行Python设置UTF8。"""
+    return f"""核验本组 {target} 对商品。只按绑定的 Amazon/TEMU 双方原图和品类规则判断，禁止串图或照搬相邻商品事实。
+联系图左 A 为 Amazon、右 T 为 TEMU；manifest.jsonl 与 image-inputs.json 给出身份、绝对原图路径及对应顺序。实际查看双方原图。
+只读本组文件与规则：{job / 'manifest.jsonl'}、{job / 'visual-facts-guide.json'}。
+同款：主体设计、核心结构和部件布局一致，仅存在品类明确允许的变体。类似款：整体款式接近但具体设计不满足同一基础款。不同款：存在明确双边身份差异。看不清或相互矛盾则 UNKNOWN，不能冒充不同款。
+忽略背景、光线与营销水印；本体图案、结构、套装构成按品类边界判断。文字、向量相似度和同类通用部件均不能证明同款。
+把结果写入 {job / 'reviews.jsonl'}，每对一条合法 UTF-8 JSONL。严格保留 asin、goods_id、vision_revision_key；review_status 为 SAME/SIMILAR/DIFFERENT/UNKNOWN。
+amazon_evidence、temu_evidence 分别简述本图实际可见细节，reason 用一句话说明依据；reviewer="{job.name}"，model="{model}"。visual_facts 完整字段以指南模板为准，只写事实，不自行评分。UNKNOWN 特征证据留空，不能补猜；顶层双方摘要保留已看清的事实。
+identity.matches/differences 是对象数组，feature_comparisons、modules 不增删键；inventory_requirements 指定的双侧inventory独立清点，遮挡或不能核实则不确认完整。
+已有结果只修复 validation_errors.json 指定的无效行，保留有效行。若有命令工具运行：{validate_command}，修正明确错误；没有命令工具则由父程序校验，不能声称已经通过。
+仅处理本组，不改代码、不操作浏览器、不调用其他 API、不改 Excel。结束时只简报写入数量。"""
 
 
 def _absolute_image_rows(rows, root=ROOT):
@@ -372,7 +368,7 @@ def alive_job(row):
         process = psutil.Process(row['pid'])
         return (process.is_running() and process.status() != psutil.STATUS_ZOMBIE
                 and abs(process.create_time() - row['created']) < .01
-                and str(Path(row['folder']) / 'summary.txt') in process.cmdline())
+                and row.get('command_marker',str(Path(row['folder']) / 'summary.txt')) in process.cmdline())
     except (KeyError, TypeError, ValueError, psutil.Error):
         return False
 
@@ -406,7 +402,7 @@ def stop_owned_job(job):
     try:
         process = psutil.Process(job['pid'])
         if (abs(process.create_time() - job['created']) >= .01
-                or str(Path(job['folder']) / 'summary.txt') not in process.cmdline()):
+                or job.get('command_marker',str(Path(job['folder']) / 'summary.txt')) not in process.cmdline()):
             return False
         process.terminate()
         try:
@@ -444,7 +440,11 @@ class Pool:
 
     def launch(self, task, rows):
         import psutil
-        rows = _absolute_image_rows(rows)
+        backends=self.config.get('agent_backends',[])
+        available=[a for a in backends if sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+        if backends and not available:raise RuntimeError('Agent 并发槽位已满')
+        agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())/int(a.get('max_parallel',6))) if available else None
+        rows = _absolute_image_rows(rows[:int(agent.get('max_group_size',12))] if agent else rows)
         digest = _group_digest(rows)
         prior_attempt = _strict_attempt(self.attempts.get(digest, {}))
         attempt = prior_attempt.get('count', 0) + 1
@@ -458,13 +458,19 @@ class Pool:
                 reusable = path.parent
                 break
         reused_from = reusable
+        native_pending=reused_from and (reused_from/'native-session.json').is_file() and read(reused_from/'native-session.json',{}).get('state')!='complete'
+        if native_pending:
+            prior_agent=read(reused_from/'job.json',{}).get('agent_id')
+            if not agent or prior_agent!=agent['id']:raise RuntimeError('原桌面 Agent 任务需要先恢复，不能重复改派')
         job = jobs_dir / f'{digest}-{attempt}-{time.time_ns()}'
         job.mkdir(parents=True, exist_ok=True)
         _write_jsonl(job / 'manifest.jsonl', rows)
+        save(job/'analysis-contract.json',{'category':str(self.category_path),'task_id':task['task_id']})
         _contact_sheets(job, rows, per_contact=len(rows))
         bind_original_images(job, rows)
         if reused_from:
             shutil.copy2(reused_from / 'reviews.jsonl', job / 'reviews.jsonl')
+            if native_pending:shutil.copy2(reused_from/'native-session.json',job/'native-session.json')
             prior_errors = reused_from / 'validation_errors.json'
             if prior_errors.is_file():
                 shutil.copy2(prior_errors, job / 'validation_errors.json')
@@ -474,13 +480,29 @@ class Pool:
         # rows the strict validator marked, rather than re-reviewing valid rows.
         save(job / 'visual-facts-guide.json', pool_facts_guide(self.category))
         write_job_validator(job)
-        model = self.config.get('model', 'gpt-6.1-sol')
+        agent_id = agent['id'] if agent else 'codex'
+        if agent:
+            limit=int(agent.get('max_group_size',12))
+            if len(rows)>limit:
+                raise RuntimeError('Agent 分组必须在创建图片凭据前限制')
+        selected=(agent or {}).get('selected_model') or self.config.get('agent_models',{}).get(agent_id)
+        model=selected or (self.config.get('model','gpt-6.1-sol') if agent_id=='codex' else 'agent-default')
+        if agent:agent={**agent,'selected_model':selected}
         text = prompt(job, len(rows), model, self.category_path)
+        text += '\n如果当前 Agent 没有命令执行工具，写完 reviews.jsonl 后结束，由父进程运行严格校验；不要伪造校验通过。'
         env = job_environment(self.config)
+        if agent_id=='workbuddy':
+            from selection_automation.local_agents import workbuddy_environment
+            env.update(workbuddy_environment(agent['executable']))
+        if agent:
+            from selection_automation.local_agents import analysis_command
+            cli = analysis_command(agent,job,model if model!='agent-default' else None,self.config.get('effort','medium'))
+        else:
+            cli = command(codex_executable(self.config),job,model,self.config.get('effort','medium'))
+        command_marker = str(job/'summary.txt') if agent_id=='codex' else str(job/'contacts/contact-001.jpg') if agent_id=='opencode' else str(job)
         with (job / 'events.jsonl').open('ab') as stdout, (job / 'stderr.log').open('ab') as stderr:
-            child = subprocess.Popen(command(codex_executable(self.config), job, model,
-                                             self.config.get('effort', 'medium')),
-                cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
+            child = subprocess.Popen(cli,
+                cwd=job, env=env, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         child.stdin.write(text.encode('utf-8'))
         child.stdin.close()
@@ -488,13 +510,15 @@ class Pool:
                'created':psutil.Process(child.pid).create_time(), 'started_at':time.time(),
                'state':'running', 'identities':[list(key(value)) for value in rows],
                'digest':digest, 'attempt':attempt, 'schema_revision':POOL_SCHEMA_REVISION,
-               'reused_reviews_from':str(reused_from) if reused_from else None}
+               'reused_reviews_from':str(reused_from) if reused_from else None,
+               'agent_id':agent_id,'model':model,'command_marker':command_marker}
         save(job / 'job.json', row)
         self.jobs[job.name] = row
         self.processes[job.name] = child
         self.attempts[digest] = {'count':attempt, 'updated_at':time.time(),
                                  'schema_revision':POOL_SCHEMA_REVISION}
         save(self.folder / 'attempts.json', self.attempts)
+        return len(rows)
 
     def tick(self):
         self.errors = []
@@ -546,9 +570,13 @@ class Pool:
             available = [row for row in rows if key(row) not in active and key(row) not in seen]
             seen.update(key(row) for row in available)
             group_size = int(self.config.get('group_size', 12))
+            if self.config.get('agent_backends'):
+                group_size=min(group_size,max(int(a.get('max_group_size',12)) for a in self.config['agent_backends']))
             for group in same_amazon_groups(available, group_size):
                 waiting.append((task, group))
         workers = int(self.config.get('workers', 6))
+        if self.config.get('agent_backends'):
+            workers=min(workers,sum(int(a.get('max_parallel',6)) for a in self.config['agent_backends']))
         def ready(rows):
             digest = _group_digest(rows)
             prior = _strict_attempt(self.attempts.get(digest,{}))
@@ -568,6 +596,12 @@ class Pool:
         for task, rows in waiting:
             if len(self.jobs) >= workers:
                 break
+            backends=self.config.get('agent_backends',[])
+            available=[a for a in backends if sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+            if backends and not available:break
+            if available:
+                agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())/int(a.get('max_parallel',6)))
+                rows=rows[:int(agent.get('max_group_size',12))]
             digest = _group_digest(rows)
             prior = _strict_attempt(self.attempts.get(digest, {}))
             self.attempts[digest] = prior
@@ -577,8 +611,8 @@ class Pool:
             if time.time() < prior.get('next_retry_at',0):
                 continue
             try:
-                self.launch(task, rows)
-                newly_dispatched += len(rows)
+                launched=self.launch(task, rows)
+                newly_dispatched += launched if type(launched) is int else len(rows)
             except (OSError, ValueError, RuntimeError) as exc:
                 self.errors.append(str(exc))
         ensure_publisher(self.category_path, root=ROOT)
@@ -590,6 +624,7 @@ class Pool:
                 'external_pending':external_pending, 'retry_exhausted':retry_exhausted,
                 'workers':workers, 'group_size':int(self.config.get('group_size',12)),
                 'model':self.config.get('model','gpt-6.1-sol'), 'effort':self.config.get('effort','medium'),
+                'agents':[{'id':a['id'],'name':a['name'],'running':sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())} for a in self.config.get('agent_backends',[])],
                 'service_tier':'default', 'completed_groups':self.completed_groups,
                 'jobs':list(self.jobs.values()), 'errors':self.errors, 'api_requests_sent':0,
                 'updated_at':time.time()}

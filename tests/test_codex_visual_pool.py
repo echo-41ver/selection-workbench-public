@@ -8,6 +8,54 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import run_codex_visual_pool as pool
+
+
+def test_pool_dispatches_different_agents_and_binds_process_ownership(tmp_path,monkeypatch):
+    import psutil
+    category=tmp_path/'category.json';category.write_text('{}')
+    monkeypatch.setattr(pool,'load_category',lambda _:configured())
+    monkeypatch.setattr(pool,'_contact_sheets',lambda *a,**kw:None)
+    monkeypatch.setattr(pool,'bind_original_images',lambda *a:None)
+    class Child:
+        pid=12345
+        class Stdin:
+            def write(self,value):pass
+            def close(self):pass
+        stdin=Stdin()
+    commands=[]
+    monkeypatch.setattr(pool.subprocess,'Popen',lambda args,**kw:commands.append((args,kw['cwd'])) or Child())
+    monkeypatch.setattr(psutil,'Process',lambda _:SimpleNamespace(create_time=lambda:1.0))
+    monkeypatch.setattr('selection_automation.local_agents.analysis_command',lambda agent,job,*args:[agent['id'],str(job)])
+    agents=[{'id':'codex','name':'Codex CLI'},{'id':'claude','name':'Claude Code'}]
+    worker=pool.Pool(category,{'workers':2,'agent_backends':agents})
+    pair,_=fixture()
+    worker.launch({'task_id':'one'},[pair])
+    worker.launch({'task_id':'two'},[{**pair,'goods_id':'other'}])
+    assert [command[0][0] for command in commands]==['codex','claude']
+    assert {job['agent_id'] for job in worker.jobs.values()}=={'codex','claude'}
+    assert all(str(cwd) in args for args,cwd in commands)
+    assert all(job.get('command_marker') for job in worker.jobs.values())
+
+
+def test_doubao_dispatch_binds_only_one_pair_and_never_exceeds_one_active_job(tmp_path,monkeypatch):
+    import psutil
+    category=tmp_path/'category.json';category.write_text('{}')
+    monkeypatch.setattr(pool,'load_category',lambda _:configured())
+    bound=[]
+    monkeypatch.setattr(pool,'_contact_sheets',lambda *a,**kw:None)
+    monkeypatch.setattr(pool,'bind_original_images',lambda job,rows:bound.append(rows))
+    class Input:
+        def write(self,value):pass
+        def close(self):pass
+    monkeypatch.setattr(pool.subprocess,'Popen',lambda *a,**kw:SimpleNamespace(pid=12345,stdin=Input()))
+    monkeypatch.setattr(psutil,'Process',lambda _:SimpleNamespace(create_time=lambda:1.0))
+    monkeypatch.setattr('selection_automation.local_agents.analysis_command',lambda agent,job,*a:['native',str(job)])
+    worker=pool.Pool(category,{'workers':10,'agent_backends':[{'id':'doubao','name':'豆包','max_parallel':1,'max_group_size':1}]})
+    pair,_=fixture()
+    assert worker.launch({'task_id':'one'},[pair,{**pair,'goods_id':'other'}])==1
+    job=next(iter(worker.jobs.values()))
+    assert len(job['identities'])==len(bound[0])==1
+    with pytest.raises(RuntimeError,match='槽位'):worker.launch({'task_id':'two'},[{**pair,'goods_id':'other'}])
 from test_codex_visual_review import fixture
 from test_set_inventory_identity import configured
 

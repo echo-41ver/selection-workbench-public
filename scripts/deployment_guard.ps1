@@ -11,7 +11,7 @@ function Confirm-CompanyImport {
     if (-not $ConfigPath) { return }
     Add-Type -AssemblyName System.Windows.Forms
     $answer = [Windows.Forms.MessageBox]::Show(
-        "将从以下文件导入公司配置：`r`n$ConfigPath`r`n`r`n将保存到：`r`n$(Join-Path $Root 'runtime\secrets\company.dpapi')`r`n`r`n配置包含代理凭据及 AdsPower API Key、DeepSeek API Key/地址/模型（完整配置包），将由 Windows 按当前用户加密保存。现有配置会备份。是否现在导入？",
+        "将从以下文件导入公司配置：`r`n$ConfigPath`r`n`r`n将保存到：`r`n$(Join-Path $Root 'runtime\secrets\company.dpapi')`r`n`r`n配置包含代理凭据及 AdsPower API Key、D1 API Key、DeepSeek API Key/地址/模型（完整配置包），将由 Windows 按当前用户加密保存。现有配置会备份。是否现在导入？",
         '确认本机导入公司配置', [Windows.Forms.MessageBoxButtons]::YesNo,
         [Windows.Forms.MessageBoxIcon]::Warning, [Windows.Forms.MessageBoxDefaultButton]::Button2)
     if ($answer -ne [Windows.Forms.DialogResult]::Yes) { throw '用户取消配置导入；未读取公司配置。' }
@@ -40,8 +40,8 @@ function Start-ProjectDeployment {
     param([string]$Root, [bool]$ImportCompany)
     $backup = Assert-ProjectTarget $Root (Join-Path $Root ('.deployment-backup\' + (Get-Date -Format 'yyyyMMdd-HHmmss-ffff')))
     New-Item -ItemType Directory -Path $backup -Force | Out-Null
-    $targets = @('.venv','node_modules','runtime\agent-config')
-    $transaction = [pscustomobject]@{ root=$Root; backup=$backup; targets=$targets; company=$ImportCompany; company_existed=$false; deepseek_existed=$false; moved=@() }
+    $targets = @('.venv','node_modules','runtime\agent-config','runtime\tools')
+    $transaction = [pscustomobject]@{ root=$Root; backup=$backup; targets=$targets; company=$ImportCompany; company_existed=$false; deepseek_existed=$false; liquid_d1_existed=$false; moved=@() }
     try {
         foreach ($relative in $targets) {
             $target = Assert-ProjectTarget $Root (Join-Path $Root $relative)
@@ -53,6 +53,11 @@ function Start-ProjectDeployment {
             }
         }
         if ($ImportCompany) {
+            $d1Secret = Join-Path $Root 'runtime\secrets\liquid_d1.dpapi'
+            if (Test-Path -LiteralPath $d1Secret -PathType Leaf) {
+                Copy-Item -LiteralPath $d1Secret -Destination (Join-Path $backup 'previous-liquid_d1.dpapi')
+                $transaction.liquid_d1_existed = $true
+            }
             $modelSecret = Join-Path $Root 'runtime\secrets\deepseek.dpapi'
             if (Test-Path -LiteralPath $modelSecret -PathType Leaf) {
                 Copy-Item -LiteralPath $modelSecret -Destination (Join-Path $backup 'previous-deepseek.dpapi')
@@ -90,6 +95,12 @@ function Restore-ProjectDeployment {
         }
     }
     if ($Transaction.company) {
+        $d1Secret = Assert-ProjectTarget $Transaction.root (Join-Path $Transaction.root 'runtime\secrets\liquid_d1.dpapi')
+        if ($Transaction.liquid_d1_existed) {
+            Copy-Item -LiteralPath (Join-Path $Transaction.backup 'previous-liquid_d1.dpapi') -Destination $d1Secret -Force
+        } elseif (Test-Path -LiteralPath $d1Secret -PathType Leaf) {
+            Move-Item -LiteralPath $d1Secret -Destination (Join-Path $Transaction.backup 'failed-liquid_d1.dpapi')
+        }
         $modelSecret = Assert-ProjectTarget $Transaction.root (Join-Path $Transaction.root 'runtime\secrets\deepseek.dpapi')
         if ($Transaction.deepseek_existed) {
             Copy-Item -LiteralPath (Join-Path $Transaction.backup 'previous-deepseek.dpapi') -Destination $modelSecret -Force

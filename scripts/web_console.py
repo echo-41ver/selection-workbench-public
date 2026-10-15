@@ -1292,19 +1292,32 @@ class Console:
             api_key=supplied.strip() if supplied is not None else ''
             if not api_key:api_key=self.stage3_keys.get((key,provider['base_url']),'')
             if not api_key and self.key==key and self.draft_key and provider['mode']=='multimodal_api':
-                generated=provider_settings({'base_url':self.draft_provider['base_url'],'model':self.draft_provider['model']})
+                generated=provider_settings({'mode':'multimodal_api','base_url':self.draft_provider['base_url'],'model':self.draft_provider['model']})
                 if generated['base_url']==provider['base_url']:api_key=self.draft_key
             if not api_key and provider['mode']=='multimodal_api' and provider['base_url']==DEFAULT_URL:
                 api_key=(self.draft_key if self.key==key and self.draft_provider['base_url']==DEFAULT_URL else None) or self.saved_credential() or ''
+            from selection_automation.stage3_credentials import saved_key, save_key
+            if not api_key:api_key=saved_key(self.root,provider)
             if not api_key and provider['mode'] in {'multimodal_api','liquid_d1'}:
                 raise ConsoleError('KEY_REQUIRED','请填写与第三层服务地址配套的 API key',409)
+            if supplied is not None and provider['mode'] in {'liquid_d1','multimodal_api'}:
+                save_key(self.root,provider,api_key)
             if api_key:self.stage3_keys[(key,provider['base_url'])]=api_key
             folder=base/'stage123'; folder.mkdir(parents=True,exist_ok=True)
             if provider['mode']=='local_agent':
-                from run_codex_visual_pool import codex_executable
-                try: codex_executable({})
-                except (RuntimeError,OSError) as exc:
-                    raise ConsoleError('AGENT_UNAVAILABLE','本机Agent程序不可用，请先安装并登录Codex CLI',409) from exc
+                from selection_automation.local_agents import ready_agents, discover
+                from selection_automation.agent_models import validate_selection
+                installed={a['id'] for a in discover(self.root) if a['installed']}
+                choices={k:v for k,v in provider['agent_models'].items() if k in installed and (not provider['agent_ids'] or k in provider['agent_ids'])}
+                try:validate_selection(self.root,choices)
+                except ValueError as error:raise ConsoleError('INVALID_MODEL',str(error),409) from None
+                agents=ready_agents(self.root,provider['agent_ids'],connect=not configure_only,models=provider['agent_models'])
+                if not configure_only and not agents:
+                    raise ConsoleError('AGENT_UNAVAILABLE','未找到已连接且能够看图的本机 Agent；请在方案中检测并登录',409)
+                if provider['concurrency_mode']=='auto':
+                    from selection_automation.analysis_concurrency import recommended
+                    provider['workers']=min(recommended('local_agent',len(agents) or 1),sum(int(a.get('max_parallel',6)) for a in agents) or 6)
+                    provider_changed=provider!=from_category(category)
             if provider_changed:
                 backup=folder/'category.before-provider.json'
                 if not backup.exists(): selection.save(backup,category)
@@ -1312,7 +1325,7 @@ class Console:
                 selection.save(category_path,category)
                 with self._stage3_cache_lock:self._stage3_cache.pop(key,None)
             if configure_only:
-                return {'ok':True,'provider':provider,'message':'第三层方案和 Key 已配置；尚未启动分析，Key仅保留在当前服务内存'}
+                return {'ok':True,'provider':provider,'message':'第三层方案已保存；API Key 已在本机加密保存，尚未启动分析'}
             (folder/'STOP').unlink(missing_ok=True)
             selection.save(folder/'paid_enabled.json',{'category_key':key,'enabled_at':time.time(),
                 'source':'web-console','controller':'independent','provider':provider['mode']})
@@ -1320,7 +1333,10 @@ class Console:
                 from run_codex_visual_pool import ensure_pool
                 selection.save(folder/'codex_pool_config.json',{
                     **selection.read(folder/'codex_pool_config.json',{}),'enabled':True,
-                    'workers':provider['workers'],'model':provider['model'],'group_size':12})
+                    'workers':provider['workers'],'model':provider['model'],'group_size':12,
+                    'agent_ids':[agent['id'] for agent in agents],
+                    'agent_models':provider['agent_models'],
+                    'agent_backends':agents,'concurrency_mode':provider['concurrency_mode']})
                 ensure_pool(category_path,self.root)
                 self.stage3_key=key;self.stage3_phase='本机Agent并行看图已启动'
                 return {'ok':True,'phase':self.stage3_phase,'provider':provider}
@@ -1584,7 +1600,8 @@ class Console:
                       'market_status':market_state,'market_busy':self.market_busy,
                       'frontend_market':self.frontend_market_snapshot(key) if key and not preparing_new else {},
                       'collection_complete':collection_complete,
-                      'stage3_key_configured':bool(key and (key,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)['base_url']) in self.stage3_keys),
+                      'stage3_key_configured':bool((key,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)['base_url']) in self.stage3_keys or __import__('selection_automation.stage3_credentials',fromlist=['saved_key']).saved_key(self.root,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category))),
+                      'stage3_concurrency':selection.read(self.root/'runs'/key/'stage123/concurrency.json',{}) if key else {},
                       'stage3_provider':__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category),
                       'stage3_control':{'enabled':stage3_enabled,'can_start':stage3_ready,'running':stage3_running,'can_stop':stage3_enabled or stage3_running or bool(codex_control.get('running')),'progress':stage3_progress,
                                         'phase':stage3_phase,'codex_review':codex_control}})
@@ -1645,6 +1662,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/operator': return self.send_json(self.server.console.operator_view())
             if self.path=='/api/history': return self.send_json(self.server.console.history())
             if self.path=='/api/developer': return self.send_json(self.server.console.developer_info())
+            if self.path=='/api/local-agents':
+                from selection_automation.local_agents import discover
+                return self.send_json({'ok':True,'agents':discover(self.server.console.root)})
             if self.path.startswith('/api/developer/'):
                 parts=self.path.removeprefix('/api/developer/').split('/')
                 if len(parts)==1: return self.send_json(self.server.console.developer_info(parts[0]))
@@ -1704,6 +1724,34 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/run': return self.send_json(self.server.console.run_draft(body),202)
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
             if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))
+            if self.path=='/api/local-agents/models':
+                from selection_automation.agent_models import catalogs
+                from selection_automation.local_agents import IDS
+                if set(body)-{'ids'} or not isinstance(body.get('ids',[]),list) or any(i not in IDS for i in body.get('ids',[])):
+                    raise ConsoleError('INVALID_INPUT','Agent 模型选择无效')
+                return self.send_json({'ok':True,'catalogs':catalogs(self.server.console.root,body.get('ids'),refresh=True)})
+            if self.path in ('/api/local-agents/refresh','/api/local-agents/connect','/api/local-agents/login'):
+                from selection_automation.local_agents import discover,check_connection,login,IDS
+                if self.path.endswith('/refresh'):
+                    if set(body)-{'agent_models'}:raise ConsoleError('INVALID_INPUT','检测参数无效')
+                    from selection_automation.stage3_provider import settings
+                    try:models=settings({'mode':'local_agent','agent_models':body.get('agent_models',{})})['agent_models']
+                    except ValueError:raise ConsoleError('INVALID_INPUT','Agent 模型选择无效') from None
+                    return self.send_json({'ok':True,'agents':discover(self.server.console.root,refresh=True,models=models)})
+                if set(body)-{'id','model'} or body.get('id') not in IDS:raise ConsoleError('INVALID_INPUT','Agent 选择无效')
+                if self.path.endswith('/login'):return self.send_json(login(self.server.console.root,body['id']))
+                model=body.get('model') or None
+                if model:
+                    from selection_automation.stage3_provider import settings
+                    from selection_automation.agent_models import validate_selection
+                    try:
+                        chosen=settings({'mode':'local_agent','agent_models':{body['id']:model}})['agent_models'];validate_selection(self.server.console.root,chosen)
+                    except ValueError as error:raise ConsoleError('INVALID_MODEL',str(error),409) from None
+                return self.send_json({'ok':True,'agent':check_connection(self.server.console.root,body['id'],model)})
+            if self.path=='/api/local-agents/enable-doubao':
+                from selection_automation.desktop_agents import enable_doubao
+                if set(body)!={'confirmation'}:raise ConsoleError('INVALID_INPUT','连接确认无效')
+                return self.send_json(enable_doubao(self.server.console.root,body['confirmation']))
             if self.path=='/api/stop-stage3': return self.send_json(self.server.console.stop_stage3(body),202)
             if self.path=='/api/refresh-market': return self.send_json(self.server.console.refresh_market(body),202)
             if self.path=='/api/open-excel':

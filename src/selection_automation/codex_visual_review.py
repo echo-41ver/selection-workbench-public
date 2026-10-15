@@ -70,7 +70,7 @@ def load_reviews(base, expected=None, *, by_revision=False, category=None):
         modified = path.stat().st_mtime
         for row in read_jsonl(path):
             pair = (row.get('asin'), row.get('goods_id'))
-            if row.get('review_source') != SOURCE or row.get('review_status') not in {'SAME', 'DIFFERENT', 'UNKNOWN'}:
+            if row.get('review_source') != SOURCE or row.get('review_status') not in {'SAME','SIMILAR', 'DIFFERENT', 'UNKNOWN'}:
                 raise ValueError('invalid normalized Codex review')
             if expected is None or row.get('vision_revision_key') in expected.get(pair, set()):
                 identity = (*pair,row.get('vision_revision_key')) if by_revision else pair
@@ -146,7 +146,7 @@ def normalize_review(category, row, pair, task_id):
         if row.get(key) != pair.get(key) or not row.get(key):
             raise ValueError(f'Codex review {key} does not match manifest')
     status = row.get('review_status')
-    if status not in {'SAME', 'DIFFERENT', 'UNKNOWN'}:
+    if status not in {'SAME','SIMILAR', 'DIFFERENT', 'UNKNOWN'}:
         raise ValueError('invalid Codex review status')
     if any(not isinstance(row.get(key), str) or not row[key].strip()
            for key in ('amazon_evidence', 'temu_evidence', 'reason')):
@@ -208,15 +208,28 @@ def normalize_review(category, row, pair, task_id):
     elif status == 'SAME':
         value['review_status'] = 'UNKNOWN'
         value['validation_note'] = '缺少完整现协议事实，不能确认同款'
+    if status=='SIMILAR':
+        facts=value.get('visual_facts') or {}
+        identity=facts.get('identity',{});design=identity.get('design_comparison',{})
+        if (identity.get('verdict')!='SIMILAR' or design.get('relation')!='SIMILAR'
+            or not all(concrete(design.get(side,'')) for side in ('amazon','temu'))
+            or value['module_result']['state'].startswith('不同款')
+            or value['module_result'].get('contradictory_modules')):
+            raise ValueError('类似款必须有明确的整体近似款式和双边设计事实')
+        value['module_result']={**value['module_result'],'state':'相似款','reason':row['reason']}
     from .visual_decision import binary_mode
     if binary_mode(category):
         if value.get('visual_facts') is None:
             raise ValueError('二分类需要完整原图事实；分析失败应重试，不能生成商品结论')
         scored = value['module_result']
         value['model_review_status'] = status
-        value['review_status'] = 'SAME' if scored['state'] in CONFIRMED_STATES else 'DIFFERENT'
+        value['review_status'] = ('SAME' if scored['state'] in CONFIRMED_STATES else
+            'SIMILAR' if scored['state']=='相似款' else
+            'DIFFERENT' if scored['state'].startswith('不同款') else 'UNKNOWN')
         value['reason'] = scored['reason']
         value.pop('validation_note', None)
+    if status=='SIMILAR' and 'visual_facts' not in value:
+        raise ValueError('类似款需要完整双边图片事实')
     if pair.get('supersedes_api') is True:
         value['supersedes_api'] = True
         if not supersedes_api(category, value):

@@ -1,6 +1,11 @@
 {
   "adspower_api_key": "REPLACE_WITH_COMPANY_ADSPOWER_API_KEY",
   "adspower_api_url": "http://127.0.0.1:50325",
+  "liquid_d1": {
+    "key": "REPLACE_WITH_COMPANY_D1_API_KEY",
+    "base_url": "https://api.liquid.ai/decisions/v1/systemone",
+    "model": "d1"
+  },
   "proxy": {
     "host": "proxy.proxyshare.com",
     "port": 5959,

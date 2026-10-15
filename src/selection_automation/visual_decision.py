@@ -69,7 +69,15 @@ def final_decision(category, scored):
         result['decision_basis'] = 'VISIBLE_CORE_CORRESPONDENCE'
         result['reason'] = '主图主体款式及必需核心结构有双边对应；无关未展示部位不阻断；' + identity['reason']
         return result
-    result['state'] = '不同款'
-    result['decision_basis'] = 'CURRENT_IMAGE_CORE_NOT_ESTABLISHED'
-    result['reason'] = '当前主图未体现主体款式和核心结构对应，按二分类筛选归为不同款；' + scored['reason']
+    if (identity.get('verdict') == 'SIMILAR' and design.get('relation') == 'SIMILAR'
+            and bilateral(design) and concrete(identity.get('reason', ''))
+            and not scored.get('contradictory_modules')
+            and scored.get('effective_confidence', 0) >= .55):
+        result['state'] = '相似款'
+        result['decision_basis'] = 'VISIBLE_SIMILAR_DESIGN'
+        result['reason'] = identity['reason']
+        return result
+    result['state'] = '待补充证据'
+    result['decision_basis'] = 'INSUFFICIENT_VISIBLE_EVIDENCE'
+    result['reason'] = '当前图片尚不能确认商品关系；' + scored['reason']
     return result

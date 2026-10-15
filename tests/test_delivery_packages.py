@@ -148,6 +148,10 @@ def test_actual_installer_flow_with_only_fake_commands(tmp_path, mode):
     # Invalid plaintext on purpose: cancellation must happen without parsing it.
     (tmp_path / 'company.local.json').write_text('TEST_ONLY_INVALID_JSON_NOT_TO_READ')
     injected = r'''
+function Get-DeploymentPreflight {
+ param($Root)
+ [pscustomobject]@{platform='Windows';source_complete=$true;free_gb=100;configuration_read=$false}
+}
 function Confirm-CompanyImport {
  param($ConfigPath,$Root)
  [IO.File]::WriteAllText((Join-Path $Root 'TEST_ONLY_CONFIRM_CALLED'),'called')

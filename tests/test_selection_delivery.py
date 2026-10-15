@@ -72,6 +72,27 @@ def test_empty_selection_has_no_cartesian_detail(tmp_path):
     book.close()
 
 
+def test_concise_delivery_has_four_labels_and_keeps_details_hidden(tmp_path):
+    from openpyxl.utils import get_column_letter
+    from selection_automation.selection_delivery import conclusion_label
+    assert [conclusion_label(value) for value in
+        ('确认同款','相似款（Agent看图核验）','DIFFERENT','待补充证据')]==['同款','类似款','不同款','未分析']
+    cat,report=setup(tmp_path,n=4)
+    first,second,third=report['products']
+    first['confirmed_pairs'][0]['reason']='简短事实。'*100
+    second.update(confirmed_goods_ids=[],confirmed_pairs=[])
+    second['match'].update(confirmed=0,different=2)
+    delivered=export(tmp_path,cat,report)
+    book=load_workbook(delivered['固定查看副本'])
+    sheet=book['选品结论'];headers=[cell.value for cell in sheet[4]]
+    assert [sheet.cell(row,headers.index('最终关系')+1).value for row in (5,6,7)]==['同款','不同款','未分析']
+    assert len(sheet.cell(5,headers.index('判断依据')+1).value)<=140
+    assert sheet.column_dimensions[get_column_letter(headers.index('综合分析依据')+1)].hidden
+    assert not sheet.column_dimensions[get_column_letter(headers.index('最终关系')+1)].hidden
+    assert book['商品完整字段'].sheet_state=='hidden'
+    book.close()
+
+
 def test_combined_same_and_similar_threshold_and_embedded_picture_order(tmp_path):
     from PIL import Image
     cat,report=setup(tmp_path,n=3)
@@ -124,6 +145,7 @@ def test_four_modes_have_no_stored_key(mode):
 
 
 def test_key_cannot_follow_another_endpoint(monkeypatch):
+    monkeypatch.setattr('selection_automation.stage3_credentials.saved_key',lambda root,provider:'')
     monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_COMPANY_KEY')
     with pytest.raises(ValueError):request_key(settings({'mode':'liquid_d1'}))
     monkeypatch.setenv('SELECTION_STAGE3_API_KEY','TEST_ONLY_CUSTOM_KEY')
@@ -176,6 +198,7 @@ def test_console_dispatches_only_selected_provider_and_never_stops_collection(tm
     monkeypatch.setattr(console,'invoke',lambda *a,**kw:pytest.fail('Collection command invoked'))
     monkeypatch.setattr(console,'launch_stage3_controller',lambda key,path,token:calls.append(('api',key,token)))
     monkeypatch.setattr(agent,'codex_executable',lambda config:'fixture-codex.exe')
+    monkeypatch.setattr('selection_automation.local_agents.ready_agents',lambda *a,**kw:[{'id':'codex','name':'Codex CLI','executable':'fixture-codex.exe','ready':True}])
     monkeypatch.setattr(agent,'ensure_pool',lambda path,root:calls.append(('agent',root)))
     provider=settings({'mode':mode})
     body={'provider':provider}
@@ -184,8 +207,8 @@ def test_console_dispatches_only_selected_provider_and_never_stops_collection(tm
     assert result['ok'] and result['provider']['mode']==mode
     if mode=='local_agent':
         assert calls==[('agent',tmp_path)]
-        config=json.loads((base/'stage123/codex_pool_config.json').read_text())
-        assert config['enabled'] and config['workers']==4
+        config=json.loads((base/'stage123/codex_pool_config.json').read_text(encoding='utf-8'))
+        assert config['enabled'] and 1<=config['workers']<=6 and config['agent_ids']==['codex']
     else:
         assert calls==[('api','fixture','TEST_ONLY_SELECTED_KEY' if 'api_key' in body else '')]
     assert 'TEST_ONLY_SELECTED_KEY' not in (base/'category.json').read_text()

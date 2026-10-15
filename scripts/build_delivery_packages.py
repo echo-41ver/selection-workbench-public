@@ -12,7 +12,7 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED_DOCS = {"docs/DEPLOYMENT_GUIDE.md", "docs/DELIVERY_BASELINE.md", "docs/COLLECTION_INTERFACE.md"}
+ALLOWED_DOCS = {"docs/DEPLOYMENT_GUIDE.md", "docs/DELIVERY_BASELINE.md", "docs/COLLECTION_INTERFACE.md", "docs/deployment-parity.md"}
 PRIVATE_PARTS = {".git", ".githooks", ".venv", "node_modules", "runtime", "runs", "dist", "work", "logs", "__pycache__", ".deployment-backup", ".pytest_cache"}
 ASSET_ROOT = "deployment-assets"
 SECRET_TOKEN = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b")

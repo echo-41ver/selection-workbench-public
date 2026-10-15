@@ -52,13 +52,20 @@ def normalize(value,require_model=False):
         if endpoint!='https://api.deepseek.com' or name!='deepseek-flash':raise ValueError('This release requires the existing official DeepSeek endpoint and deepseek-flash model')
         out['deepseek']={'key':required(model.get('key'),'deepseek.key'),'base_url':endpoint,'model':name}
     elif require_model:raise ValueError('Missing deepseek.key; complete the local packaging form')
+    decision=value.get('liquid_d1')
+    if decision is not None:
+        from .stage3_credentials import D1_URL, validate_key
+        if not isinstance(decision,dict) or decision.get('base_url',D1_URL)!=D1_URL or decision.get('model','d1')!='d1':
+            raise ValueError('Invalid Liquid D1 configuration')
+        out['liquid_d1']={'key':validate_key(decision.get('key')),'base_url':D1_URL,'model':'d1'}
     return out
 
 def import_bundle(root,value,store):
     """All validation precedes writes; rollback both encrypted files on failure."""
     normalized=normalize(value,require_model=value.get('schema_version')==SCHEMA);folder=Path(root)/'runtime/secrets';folder.mkdir(parents=True,exist_ok=True)
-    targets=[('company.dpapi',{k:v for k,v in normalized.items() if k!='deepseek'})]
+    targets=[('company.dpapi',{k:v for k,v in normalized.items() if k not in {'deepseek','liquid_d1'}})]
     if 'deepseek' in normalized:targets.append(('deepseek.dpapi',normalized['deepseek']))
+    if 'liquid_d1' in normalized:targets.append(('liquid_d1.dpapi',normalized['liquid_d1']))
     before={name:(folder/name).read_bytes() if (folder/name).exists() else None for name,_ in targets}
     transaction=folder/('import-backup-'+uuid.uuid4().hex);transaction.mkdir()
     for name,data in before.items():

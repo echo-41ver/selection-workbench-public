@@ -80,10 +80,13 @@ $folder=Join-Path $Fixture 'runtime/secrets'
 [void](New-Item -ItemType Directory -Path $folder -Force)
 [IO.File]::WriteAllText((Join-Path $folder 'company.dpapi'),'TEST_ONLY_OLD_COMPANY')
 [IO.File]::WriteAllText((Join-Path $folder 'deepseek.dpapi'),'TEST_ONLY_OLD_MODEL')
+[IO.File]::WriteAllText((Join-Path $folder 'liquid_d1.dpapi'),'TEST_ONLY_OLD_D1')
 $transaction=Start-ProjectDeployment -Root $Fixture -ImportCompany $true
 [IO.File]::WriteAllText((Join-Path $folder 'company.dpapi'),'TEST_ONLY_NEW_COMPANY')
 [IO.File]::WriteAllText((Join-Path $folder 'deepseek.dpapi'),'TEST_ONLY_NEW_MODEL')
+[IO.File]::WriteAllText((Join-Path $folder 'liquid_d1.dpapi'),'TEST_ONLY_NEW_D1')
 Restore-ProjectDeployment $transaction
+if ([IO.File]::ReadAllText((Join-Path $folder 'liquid_d1.dpapi')) -ne 'TEST_ONLY_OLD_D1') { throw 'D1 rollback failed' }
 if ([IO.File]::ReadAllText((Join-Path $folder 'company.dpapi')) -ne 'TEST_ONLY_OLD_COMPANY') { throw 'company rollback failed' }
 if ([IO.File]::ReadAllText((Join-Path $folder 'deepseek.dpapi')) -ne 'TEST_ONLY_OLD_MODEL') { throw 'model rollback failed' }
 Write-Output 'DUMMY_ROLLBACK_OK'

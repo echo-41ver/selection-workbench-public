@@ -16,7 +16,10 @@ def _provider_revision(stage):
     if not isinstance(provider,dict):return {}
     if provider.get('mode')=='multimodal_api' and provider.get('protocol')=='responses':return {}
     # Throughput and local probability thresholds do not change model evidence.
-    return {'provider':{k:provider[k] for k in ('mode','protocol')}}
+    result={'provider':{k:provider[k] for k in ('mode','protocol')}}
+    if provider.get('mode')=='local_agent' and provider.get('agent_models'):
+        result['provider']['agent_models']=provider['agent_models']
+    return result
 
 def parse_visual_response_compatible(text: str, *, allow_preamble: bool = False):
     """Opt-in framing-only normalization, followed by the unchanged strict decoder."""

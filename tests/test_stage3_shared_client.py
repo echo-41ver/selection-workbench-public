@@ -10,6 +10,36 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import run_category_layer3 as runner
 
 
+def test_completed_slot_refills_while_another_request_is_still_slow(tmp_path,monkeypatch):
+    third=threading.Event();guard=threading.Lock();calls=[]
+    class Transport:
+        def __init__(self,**kw):pass
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+    class Client:
+        def __init__(self,**kw):self.responses=self
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def create(self,**kw):
+            with guard:calls.append(kw);number=len(calls)
+            if number==3:third.set()
+            if number==1:assert third.wait(3),'slow request blocked refill of the completed second slot'
+            return SimpleNamespace(id='response-'+str(number),status='completed',usage=None,output_text='{}')
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY')
+    monkeypatch.setattr(openai,'DefaultHttpxClient',Transport);monkeypatch.setattr(openai,'OpenAI',Client)
+    monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'protocol',lambda cat,n:('fixture',{}))
+    monkeypatch.setattr(runner,'decode',lambda c,d,ids:{i:{'overall_confidence':.9} for i in ids})
+    monkeypatch.setattr(runner,'score',lambda c,f:{'hard_conflicts':[]})
+    cat={'stage3':{'modules':{'one':100},'batch_size':1,'max_concurrency':2}}
+    rows=[{'asin':'A','goods_id':str(i),'amazon_image_path':'a','temu_image_path':str(i),
+           'pair_revision':str(i),'vision_revision_key':str(i),'attempt':1} for i in range(4)]
+    args=SimpleNamespace(results=tmp_path/'results.jsonl',validate_only=False,max_requests=0)
+    runner.consume(args,cat,tmp_path/'blocked.json','offline',iter(rows))
+    assert len(calls)==4 and third.is_set()
+    assert all(row['api_status']=='success' for row in runner.rows(args.results))
+
+
 @pytest.mark.parametrize('width,count,crash',[(4,8,False),(256,4,False),(1,1,True)])
 def test_one_direct_pool_is_shared_and_closed_after_workers(tmp_path,monkeypatch,width,count,crash):
     events=[];calls=[];guard=threading.Lock()

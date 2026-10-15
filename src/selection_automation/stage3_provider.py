@@ -10,15 +10,17 @@ from urllib.parse import urlsplit, urlunsplit
 MODES = {'liquid_d1', 'multimodal_api', 'local_model', 'local_agent'}
 PROTOCOLS = {'responses', 'chat_completions', 'decisions'}
 LABELS = {'liquid_d1': 'Liquid D1 决策 API', 'multimodal_api': '多模态 API',
-          'local_model': '本地模型服务', 'local_agent': '本机 Agent 并行看图'}
+          'local_model': '本地模型服务', 'local_agent': '本地 Agent 多任务分析'}
 
 
 def settings(value=None):
     value = value or {}
-    allowed = {'mode', 'base_url', 'model', 'protocol', 'workers', 'confidence'}
+    allowed = {'mode', 'base_url', 'model', 'protocol', 'workers', 'confidence', 'concurrency_mode', 'agent_ids','agent_models'}
     if not isinstance(value, dict) or set(value) - allowed:
         raise ValueError('第三层配置字段无效')
-    mode = value.get('mode', 'multimodal_api')
+    legacy = (isinstance(value.get('base_url'),str) and bool(value['base_url']) and 'liquid.ai' not in value['base_url']
+              or isinstance(value.get('model'),str) and bool(value['model']) and value['model'] not in {'d1','d1:free'})
+    mode = value.get('mode', 'multimodal_api' if legacy else 'liquid_d1')
     if mode not in MODES:
         raise ValueError('第三层方案无效')
     defaults = {
@@ -64,21 +66,39 @@ def settings(value=None):
         if mode=='multimodal_api' and parsed.hostname=='api.daitu.cc' and model.lower().startswith('gpt-'):
             protocol='responses'
             if not urlsplit(address).path:address+='/v1'
-    workers = value.get('workers', 4 if mode == 'local_agent' else 1 if mode == 'local_model' else 4)
-    if type(workers) is not int or not 1 <= workers <= 16:
-        raise ValueError('分析并发数须为 1–16')
+    from .analysis_concurrency import recommended
+    workers = value.get('workers', recommended(mode))
+    if type(workers) is not int or not 1 <= workers <= 256:
+        raise ValueError('分析并发数须为 1–256')
+    concurrency_mode = value.get('concurrency_mode', 'manual' if 'workers' in value else 'auto')
+    if concurrency_mode not in {'auto', 'manual'}:
+        raise ValueError('并发方式无效')
+    agent_ids = value.get('agent_ids', [])
+    from .local_agents import IDS
+    if not isinstance(agent_ids, list) or len(agent_ids) != len(set(str(x) for x in agent_ids)) or any(not isinstance(x,str) or x not in IDS for x in agent_ids):
+        raise ValueError('本机 Agent 选择无效')
+    agent_models=value.get('agent_models',{})
+    if not isinstance(agent_models,dict) or any(k not in IDS or not isinstance(v,str) or not v.strip() or len(v)>200 or any(ord(c)<32 for c in v) for k,v in agent_models.items()):
+        raise ValueError('本机 Agent 模型选择无效')
+    agent_models={k:v.strip() for k,v in agent_models.items()}
     confidence = value.get('confidence', .90)
     if type(confidence) not in (int, float) or not math.isfinite(confidence) or not .5 <= confidence <= 1:
         raise ValueError('决策确认概率须为 0.5–1')
     return {'mode': mode, 'base_url': address if mode != 'local_agent' else '', 'model': model,
-            'protocol': protocol, 'workers': workers, 'confidence': float(confidence)}
+            'protocol': protocol, 'workers': workers, 'confidence': float(confidence),
+            'concurrency_mode': concurrency_mode, 'agent_ids': agent_ids,'agent_models':agent_models}
 
 
 def from_category(category):
     stage = category.get('stage3', {})
     if isinstance(stage.get('provider'), dict):
         return settings(stage['provider'])
-    return settings({'base_url': stage.get('base_url', ''), 'model': stage.get('model', '')})
+    if stage:
+        # Existing frozen tasks keep their explicitly selected legacy service.
+        mode = 'liquid_d1' if 'liquid.ai' in stage.get('base_url', '') else 'multimodal_api'
+        return settings({'mode': mode, 'base_url': stage.get('base_url', ''), 'model': stage.get('model', ''),
+                         'workers': stage.get('max_concurrency', 4), 'concurrency_mode': 'manual'})
+    return settings()
 
 
 def apply(category, value):
@@ -95,6 +115,11 @@ def apply(category, value):
 
 
 def request_key(provider):
+    from pathlib import Path
+    from .stage3_credentials import saved_key
+    saved = saved_key(Path(__file__).resolve().parents[2], provider)
+    if saved:
+        return saved
     key = os.getenv('SELECTION_STAGE3_API_KEY', '').strip()
     bound = os.getenv('SELECTION_STAGE3_ENDPOINT', '').rstrip('/')
     if key and bound == provider['base_url']:

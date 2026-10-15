@@ -5,7 +5,7 @@ from pathlib import Path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
-from selection_automation.selection_delivery import build_delivery
+from selection_automation.selection_delivery import build_delivery,conclusion_label,short_reason
 from selection_automation.commercial import jsonl
 from selection_workflow.excel_images import cached_thumbnail
 
@@ -16,12 +16,12 @@ def export(root, category, report):
     name=data['category_name'];base=Path(root)/'runs'/category['category_key']
     destination=base/'excel'/f'{name}_选品结果.xlsx'
     note=(f"最终同款与类似款合计严格小于 {data['limit']}；每个商品对一行，同一商品ID只计一次。"
-          '待核验不是零竞争；图片直接嵌入。销量与规格价格带均保留实际采集口径。')
+          '结论仅用同款、类似款、不同款、未分析；完成后自动更新。双边图片直接嵌入，其他已采集字段保留在隐藏列。')
     prefix=['Amazon ASIN','Amazon标题','Amazon图片','TEMU图片','同款+类似款数量','Amazon商品链接','TEMU商品链接']
     summary_headers=prefix+['同款数','类似款数','TEMU商品ID','最终关系','待分析对数','待补证对数',
         'Amazon当前价(USD)','Amazon最低价(USD)','Amazon最高价(USD)','Amazon价格带口径',
         'Amazon评分','Amazon评论数','Amazon销量原文','Amazon销量口径','Amazon榜单排名',
-        '选品建议','结论置信度','综合分析依据','数据缺口','Amazon采集时间','分析时间','数量筛选门槛']
+        '选品建议','结论置信度','综合分析依据','数据缺口','Amazon采集时间','分析时间','数量筛选门槛','判断依据']
     parameter_headers=['当前价(USD)','最低价(USD)','最高价(USD)','价格带口径','评分','评论数',
         '销量原文','销量口径','真实上架时间','上架时间来源','采集时间','采集来源']
     pair_headers=prefix+['TEMU商品ID','TEMU标题']+['Amazon'+h for h in parameter_headers]+['TEMU'+h for h in parameter_headers]+[
@@ -53,7 +53,7 @@ def export(root, category, report):
         return [asin,amazon['title'],'','',total,amazon['url'],temu['url'] if temu else '尚无最终同款或类似款']
     def build(book):
         f=_formats(book)
-        def sheet(title,headers):
+        def sheet(title,headers,visible=None):
             ws=book.add_worksheet(title);ws.hide_gridlines(2)
             ws.merge_range(0,0,0,len(headers)-1,name+'｜'+title,f['title'])
             ws.merge_range(1,0,1,len(headers)-1,note,f['note'])
@@ -61,7 +61,7 @@ def export(root, category, report):
             ws.write_row(3,0,headers,f['header']);ws.freeze_panes(4,1)
             for col,header in enumerate(headers):
                 width=62 if '依据' in header or '证据' in header else 42 if '标题' in header else 28 if '口径' in header or '建议' in header else 24 if header in ('Amazon图片','TEMU图片') else 20
-                ws.set_column(col,col,width)
+                ws.set_column(col,col,width,None,{'hidden':True} if visible and header not in visible else {})
             return ws
         def emit(ws,index,headers,values):
             for col,(header,value) in enumerate(zip(headers,values)):
@@ -75,29 +75,33 @@ def export(root, category, report):
                     with Image.open(path) as image:scale=min(120/image.width,120/image.height)
                     ws.insert_image(index,col,str(path),{'x_scale':scale,'y_scale':scale,'x_offset':4,'y_offset':4,'object_position':1})
                 else:ws.write(index,col,'尚无最终匹配' if side=='temu' and not gid else '图片未取得',f['text'])
-        summary=sheet('选品结论',summary_headers)
+        summary=sheet('选品结论',summary_headers,set(prefix+['TEMU商品ID','最终关系','判断依据']))
         for index,(item,pair) in enumerate(summary_rows,4):
             card,match,advice=item['amazon'],item['match'],item['advice'];price,sales=card['price'],card['sales']
             temu=pair['temu'] if pair else None
+            pending=match.get('pending',0)+match.get('possible',0)
+            final=conclusion_label(pair['relation']) if pair else '不同款' if match.get('different',0)>0 and not pending else '未分析'
+            brief=short_reason(pair['evidence'].get('reason')) if pair else '已分析候选未发现同款或类似款' if final=='不同款' else '等待完成商品核验，结果自动更新'
             emit(summary,index,summary_headers,[*first_values(item['asin'],card,temu,item['same_count']),
-                item['confirmed_count'],item['similar_count'],pair['goods_id'] if pair else '',pair['relation'] if pair else advice['conclusion'],
+                item['confirmed_count'],item['similar_count'],pair['goods_id'] if pair else '',final,
                 match.get('pending',0),match.get('possible',0),price['observed_price'],price['min'],price['max'],price['basis'],
                 card['rating'],card['review_count'],sales['text'] or '未取得',sales['basis'],item['raw'].get('rank'),advice['conclusion'],
-                advice['confidence'],advice['reason'],'；'.join(advice['missing']) or '当前关键字段已取得',card['observed_at'],data['as_of'],f"合计严格小于 {data['limit']}"])
+                advice['confidence'],advice['reason'],'；'.join(advice['missing']) or '当前关键字段已取得',card['observed_at'],data['as_of'],f"合计严格小于 {data['limit']}",brief])
             pictures(summary,index,item['asin'],pair['goods_id'] if pair else None)
         summary.autofilter(3,0,max(3,len(summary_rows)+3),len(summary_headers)-1)
-        detail=sheet('同款商品明细',pair_headers)
+        detail=sheet('同款商品明细',pair_headers,set(prefix+['TEMU商品ID','TEMU标题','最终关系','判断依据','分析模型']))
         for index,item in enumerate(data['pairs'],4):
             evidence,advice=item['evidence'],item['advice']
             emit(detail,index,pair_headers,[*first_values(item['asin'],item['amazon'],item['temu'],item['same_count']),
                 item['goods_id'],item['temu']['title'] if item['temu'] else '未取得',*fields(item['amazon']),*fields(item['temu']),
-                item['relation'],evidence.get('reason','已通过当前版本最终关系判断'),evidence.get('evidence'),evidence.get('model'),
+                conclusion_label(item['relation']),short_reason(evidence.get('reason','已通过当前版本最终关系判断')),evidence.get('evidence'),evidence.get('model'),
                 evidence.get('probability'),evidence.get('score'),advice['conclusion'],advice['reason']])
             pictures(detail,index,item['asin'],item['goods_id'])
         detail.autofilter(3,0,max(3,len(data['pairs'])+3),len(pair_headers)-1)
         # Preserve every collected field once per selected product, never every Cartesian pair.
         extra_headers = ['平台', '商品ID', '采集字段', '已采集内容', '内容分段', '商品来源链接']
         extra = sheet('商品完整字段', extra_headers)
+        extra.hide()
         raw_products = {('Amazon', item['asin']): item['raw'] for item in data['products']}
         raw_products.update({('TEMU', p['goods_id']): p['temu_raw'] for p in data['pairs'] if p['temu_raw'] is not None})
         labels = {'title': '标题', 'specifications': '规格', 'variants': '变体', 'skus': 'SKU规格', 'brand': '品牌',

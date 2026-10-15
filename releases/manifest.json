@@ -1,6 +1,12 @@
 {
-  "source_commit": "21a90b5f69d3b964c9543a810fc96d9a8758beca",
-  "package": "选品工作台-21a90b5-GitHub展示版.zip",
-  "sha256": "b5c92627c80534599e29f02b64e768d49cc2ab87895271db2648575ac066d936",
-  "contains_company_credentials": false
+  "source_commit": "54a6121a4cc0c075f0e91f7f8aaca26fd08efd15",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/deployment-54a6121",
+  "artifacts": [
+    {
+      "name": "selection-workbench-54a6121-public.zip",
+      "bytes": 519724291,
+      "sha256": "9dc6d40e98d1a5c2dd6209a770f6fc29276c1b24dde9f89d51ac3c4c5ab8152b",
+      "contains_company_credentials": false
+    }
+  ]
 }

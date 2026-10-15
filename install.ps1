@@ -266,7 +266,15 @@ if (Test-Path -LiteralPath $wheelhouse -PathType Container) {
     Checked $python @('-m','pip','install','-r',(Join-Path $root 'requirements.lock.txt'),'--extra-index-url','https://download.pytorch.org/whl/cpu')
     Checked $python @('-m','pip','install','--no-deps','-e',"${root}[test]")
 }
-Checked $python @('-c',"import torch, torchvision, PIL, psutil, openpyxl, xlsxwriter; print('Python dependencies loaded')")
+Checked $python @('-c',"import torch, torchvision, PIL, psutil, openpyxl, xlsxwriter, websocket; print('Python dependencies loaded')")
+$bundledTools = Join-Path $assetRoot 'tools'
+if (Test-Path -LiteralPath $bundledTools -PathType Container) {
+    $runtimeTools = Join-Path $root 'runtime\tools'
+    New-Item -ItemType Directory -Force -Path $runtimeTools | Out-Null
+    foreach ($tool in Get-ChildItem -LiteralPath $bundledTools -Directory) {
+        Copy-Item -LiteralPath $tool.FullName -Destination $runtimeTools -Recurse -Force
+    }
+}
 $bundledModules = Join-Path $assetRoot 'node_modules'
 if (Test-Path -LiteralPath (Join-Path $bundledModules 'playwright\package.json') -PathType Leaf) {
     $targetModules = Join-Path $root 'node_modules'
@@ -320,8 +328,10 @@ Checked $python @('scripts/company_setup.py','--prepare-kernel')
 Checked $python @('scripts/generate_agent_config.py')
 Checked $python @('scripts/selection.py','doctor')
 Checked $python @('scripts/verify_deployment.py')
+Checked $python @('scripts/connect_local_agents.py','--vision','--login-if-needed')
+Checked $python @('scripts/verify_deployment.py')
 Write-DeploymentStatus -Root $root -Stage '完成' -Succeeded $true -RolledBack $false
-Write-Output '完整工作流的本机准备检查已通过。双击 start-web.cmd 打开选品工作台；可选 Skill 位于 runtime/agent-config/skills/amazon-temu-automation，MCP 配置位于 runtime/agent-config。'
+Write-Output '项目依赖准备完成；D1 与 Agent 连接状态见上方 analysis_readiness。需要登录时已打开 Codex 登录窗口，完成后在网页重新检测。双击 start-web.cmd 打开选品工作台。'
 } catch {
     $restored = $false
     if ($transaction) {

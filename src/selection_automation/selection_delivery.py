@@ -71,6 +71,20 @@ def recommendation(amazon, matches, match, market):
             'price_spread': spread, 'missing': list(dict.fromkeys(missing))}
 
 
+def conclusion_label(value):
+    text=str(value or '').strip()
+    if text in {'DIFFERENT','NOT_SAME'} or text.startswith('不同款'):return '不同款'
+    if text in {'SIMILAR','相似款','类似款'} or text.startswith(('相似款（','类似款（')):return '类似款'
+    if text in {'SAME','CONFIRMED_SAME','确认同款','同款'} or text.startswith(('确认同款（','同款（')):return '同款'
+    return '未分析'
+
+
+def short_reason(value,limit=140):
+    import re
+    text=re.sub(r'\s+',' ',str(value or '')).strip()
+    return text if len(text)<=limit else text[:limit-1]+'…'
+
+
 def build_delivery(root, category, report):
     root = Path(root)
     base = root / 'runs' / category['category_key']

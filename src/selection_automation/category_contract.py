@@ -80,13 +80,13 @@ def category_contract() -> dict:
             "stage1": {"text_gate": "declarative", "rule_version": None, "attributes": []},
             "stage2": {"candidate_threshold": 60, "threshold_status": "PROVISIONAL_UNCALIBRATED_HIGH_RECALL",
                        "below_threshold_action": "NOT_SELECTED_NOT_MANUAL_REVIEW", "included_in_final_score": False},
-            "stage3": {"provider": "deepseek", "model": "deepseek-flash", "base_url": "https://api.deepseek.com",
+            "stage3": {"provider": {"mode":"liquid_d1", "base_url":"https://api.liquid.ai/decisions/v1/systemone", "model":"d1", "protocol":"decisions", "workers":4, "confidence":0.9, "concurrency_mode":"auto", "agent_ids":[]}, "model": "d1", "base_url": "https://api.liquid.ai/decisions/v1/systemone",
                        "rule_version": None, "prompt_version": None, "schema_version": None,
                        "modules": {}, "module_descriptions": {}, "module_labels": {}, "identity_policy": None,
                        "confirmation_minimums": {}, "identity_hard_conflicts": [], "variant_fields": [],
                        "visual_instructions": None, "same_threshold": 88, "different_score_ceiling": 69,
                        "threshold_status": "PROVISIONAL_PENDING_HUMAN_GROUND_TRUTH_CALIBRATION",
-                       "batch_size": 12, "max_concurrency": 4, "reasoning_effort": "low"},
+                       "batch_size": 1, "max_concurrency": 4, "reasoning_effort": "low"},
         },
     }
 

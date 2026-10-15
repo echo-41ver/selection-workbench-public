@@ -46,14 +46,13 @@ def test_visible_optional_core_conflict_still_excludes():
     assert score(cat, facts)['state'] == '不同款'
 
 
-def test_unestablished_core_is_excluded_with_explicit_basis():
+def test_unestablished_core_stays_unanalyzed_instead_of_being_excluded():
     cat, facts = configured()
     core = next(f['id'] for f in cat['stage3']['identity_policy']['features'] if f['required_visual'])
     facts['feature_comparisons'][core].update(relation='UNKNOWN',amazon='',temu='')
     result = score(cat, facts)
-    assert result['state'] == '不同款'
-    assert result['decision_basis'] == 'CURRENT_IMAGE_CORE_NOT_ESTABLISHED'
-    assert '当前主图未体现' in result['reason']
+    assert result['state'] == '待补充证据'
+    assert result['decision_basis'] == 'INSUFFICIENT_VISIBLE_EVIDENCE'
 
 
 def test_overall_unknown_does_not_veto_explicit_same_core_and_design():
@@ -64,7 +63,7 @@ def test_overall_unknown_does_not_veto_explicit_same_core_and_design():
     assert result['decision_basis'] == 'VISIBLE_CORE_CORRESPONDENCE'
     assert facts['identity']['verdict'] == 'UNKNOWN'
     facts['identity']['design_comparison']['relation'] = 'SIMILAR'
-    assert score(cat, facts)['state'] == '不同款'
+    assert score(cat, facts)['state'] == '待补充证据'
 
 
 def test_import_recomputes_final_status_from_facts():
@@ -84,7 +83,7 @@ def test_missing_set_inventory_cannot_confirm_from_generic_same_text():
     cat=set_category();cat['visual_decision']='visible_core_binary_v1'
     facts=set_facts(cat)
     facts['feature_comparisons']['body_type'].pop('inventory')
-    assert score(cat,facts)['state']=='不同款'
+    assert score(cat,facts)['state']=='待补充证据'
 
 
 @pytest.mark.parametrize('kind,complete', [('unknown', True), ('other', True), ('unknown', False)])
@@ -98,10 +97,10 @@ def test_identified_core_with_matching_visible_counts_does_not_need_type_names(k
     assert score(cat,facts)['state']=='确认同款'
     assert facts==before
     facts['feature_comparisons']['body_type']['inventory']['temu']['groups'][0]['count']=5
-    assert score(cat,facts)['state']=='不同款'
+    assert score(cat,facts)['state']=='待补充证据'
     facts['feature_comparisons']['body_type']['inventory']['temu']['groups'][0]['count']=7
     facts['identity']['design_comparison']['relation']='SIMILAR'
-    assert score(cat,facts)['state']=='不同款'
+    assert score(cat,facts)['state']=='待补充证据'
 
 
 def test_surface_variant_still_requires_its_named_preserved_features():
@@ -111,4 +110,21 @@ def test_surface_variant_still_requires_its_named_preserved_features():
     variant['preserves']=[next(f['id'] for f in cat['stage3']['identity_policy']['features'] if f['required_visual'])]
     assert score(cat,facts)['state']=='同款（存在规格变体）'
     facts['feature_comparisons'][variant['preserves'][0]]['relation']='SIMILAR'
-    assert score(cat,facts)['state']=='不同款'
+    assert score(cat,facts)['state']=='待补充证据'
+
+
+def test_import_accepts_similar_only_with_bilateral_design_and_no_identity_conflict():
+    cat, facts = configured()
+    pair, row = fixture('SIMILAR')
+    facts['identity'].update(verdict='SIMILAR',differences=[])
+    facts['identity']['design_comparison'].update(relation='SIMILAR',
+        amazon='圆弧顶部、右侧双凹槽',temu='近似圆弧顶部、右侧双凹槽但边缘收口较宽')
+    facts['modules']['body']['relation']='SIMILAR'
+    facts['feature_comparisons']['body_type']['relation']='SIMILAR'
+    row['visual_facts']=facts
+    saved=normalize_review(cat,row,pair,'similar-01')
+    assert saved['review_status']=='SIMILAR' and saved['module_result']['state']=='相似款'
+    facts['feature_comparisons']['body_type'].update(relation='DIFFERENT',
+        amazon='单段固定连接',temu='两段铰接连接')
+    with pytest.raises(ValueError,match='类似款必须'):
+        normalize_review(cat,row,pair,'similar-02')

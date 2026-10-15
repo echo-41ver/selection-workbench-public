@@ -81,7 +81,7 @@ def _existing_current_results(category, base: Path, current_keys, payload_by_pai
     for path in sorted(review_dir.glob('*.jsonl')) if review_dir.is_dir() else ():
         for _, row in _jsonl(path) or ():
             pair = (row.get('asin'), row.get('goods_id'))
-            if (row.get('review_source') == SOURCE and row.get('review_status') in {'SAME', 'DIFFERENT', 'UNKNOWN'}
+            if (row.get('review_source') == SOURCE and row.get('review_status') in {'SAME','SIMILAR', 'DIFFERENT', 'UNKNOWN'}
                     and compatible(pair, row.get('vision_revision_key'))):
                 try:
                     bound = {**payload_by_pair[pair], 'vision_revision_key': row['vision_revision_key']}
@@ -111,7 +111,7 @@ def _unfinished_allocations(base: Path):
                 received = set()
                 for _, row in _jsonl(output) or ():
                     key = (row.get('asin'), row.get('goods_id'), row.get('vision_revision_key'))
-                    if key in expected and row.get('review_status') in {'SAME', 'DIFFERENT', 'UNKNOWN'}:
+                    if key in expected and row.get('review_status') in {'SAME','SIMILAR', 'DIFFERENT', 'UNKNOWN'}:
                         received.add(key)
                 if received != expected:
                     reserved.update(expected - received)
@@ -156,14 +156,13 @@ def _facts_guide(category):
     else:
         required = facts
     return {
-        'purpose': '只填写观察到的事实，不输出模块分数；本地规则会从完整 visual_facts 计算六模块分数与总分。',
+        'purpose': '根据原图判断同款、类似款、不同款或未分析；只记录事实与简短理由，不生成分数。',
         'recommended_model': 'gpt-6.1-sol',
         'reasoning_effort': 'medium',
         'category_key': category['category_key'],
         'product_scope': policy.get('product_scope'),
         'visual_instructions': category.get('plain_stage3') or stage.get('visual_instructions'),
         'modules': list(modules),
-        'module_weights': modules,
         'relation_values': ['SAME', 'VARIANT', 'SIMILAR', 'DIFFERENT', 'UNKNOWN'],
         'hard_conflict_codes': ['NONE', *stage.get('identity_hard_conflicts', [])],
         'feature_comparison_ids': visual_features,
@@ -172,10 +171,10 @@ def _facts_guide(category):
         'rules': [
             '确认整台商品是否为同一基础款；不要只因同属一类、用途相同或零件相似判为同款。',
             '不同零件或配件本身不自动代表整机不同；必须指出对应的主体结构或身份硬冲突，并保留两侧证据。',
-            '局部外观/颜色/标识只按品类规则处理；不能用允许变体掩盖泵体、接口、连接、出液部件或供电结构差异。',
+            '局部外观/颜色/标识只按品类规则处理；不能用允许变体掩盖主体、接口、连接方式或核心部件布局差异。',
             '未知模块填 relation=UNKNOWN 且双方证据为空字符串；不要用 0 分或猜测事实代替 UNKNOWN。',
             '必须填齐所有 modules 和 feature_comparisons。hard_conflict_code 无明确冲突填 NONE。',
-            '不要添加 score、total_score 或任何主观分数；评分由本地规则按 category.stage3.modules 计算。',
+            '不要添加 score、total_score 或任何主观分数。',
         ],
     }
 

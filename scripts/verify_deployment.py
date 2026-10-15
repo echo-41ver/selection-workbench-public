@@ -21,7 +21,7 @@ def inspect(root: Path = ROOT) -> dict:
     if sys.version_info[:2] != (3, 12):
         missing.append("需要 Python 3.12；请重新运行 deploy.cmd")
 
-    dependencies = ("torch", "torchvision", "openai", "psutil", "xlsxwriter", "openpyxl", "PIL", "geekbi_temu_mcp")
+    dependencies = ("torch", "torchvision", "openai", "psutil", "xlsxwriter", "openpyxl", "PIL", "geekbi_temu_mcp", "websocket")
     absent = [name for name in dependencies if importlib.util.find_spec(name) is None]
     if absent:
         missing.append("Python 依赖缺失：" + ", ".join(absent))
@@ -86,7 +86,17 @@ def inspect(root: Path = ROOT) -> dict:
         compatibility=inspect_environment(root,adspower_path)
         missing.extend(compatibility['missing'])
         atomic_write(root/'runtime/deployment-compatibility.json',json.dumps(compatibility,ensure_ascii=False,indent=2))
-    result={"ready":not missing,"missing":missing,"network_preflight":network_preflight}
+    from selection_automation.stage3_provider import settings
+    from selection_automation.stage3_credentials import saved_key
+    d1_ready=bool(saved_key(root,settings()))
+    try:agent_connection=json.loads((root/'runtime/agent-config/connection.json').read_text(encoding='utf-8'))
+    except (OSError,ValueError):agent_connection={}
+    codex_ready=any(row.get('id')=='codex' and row.get('ready') for row in agent_connection.get('agents',[]))
+    analysis={'default_provider':'liquid_d1','d1_key_configured':d1_ready,
+              'codex_connected':codex_ready,'workbench_mcp_connected':bool(agent_connection.get('mcp_ready') and agent_connection.get('codex_mcp',{}).get('registered')),
+              'agents':agent_connection.get('agents',[])}
+    result={"ready":not missing,"missing":missing,"network_preflight":network_preflight,
+            'analysis_readiness':analysis,'parity_ready':not missing and d1_ready and codex_ready and analysis['workbench_mcp_connected']}
     if compatibility is not None: result['compatibility']=compatibility
     return result
 

@@ -1,0 +1,163 @@
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from selection_automation import desktop_agents as desktop
+from selection_automation import local_agents
+from selection_automation import native_agent_transport as native
+from selection_automation.stage3_provider import settings
+
+
+def test_three_desktop_agents_are_selectable_and_have_independent_limits():
+    assert {'workbuddy','acciowork','doubao'}<=set(local_agents.IDS)
+    assert settings({'mode':'local_agent','agent_ids':['workbuddy','acciowork','doubao']})['agent_ids']==['workbuddy','acciowork','doubao']
+
+
+def test_installed_desktop_executable_is_never_invoked_as_a_generic_cli(tmp_path,monkeypatch):
+    app=tmp_path/'Doubao.exe';app.touch()
+    monkeypatch.setattr(desktop,'installations',lambda agent:app)
+    monkeypatch.setattr(desktop,'doubao_endpoint',lambda root:(_ for _ in ()).throw(RuntimeError('not enabled')))
+    result=desktop.probe(tmp_path,'doubao')
+    assert result['installed'] and result['requires_enable'] and not result['ready']
+    assert result['max_parallel']==1 and result['max_group_size']==1
+    command=desktop.command(tmp_path,result,tmp_path/'job with spaces')
+    assert str(app) not in command and 'run_desktop_agent.py' in command[1]
+
+
+@pytest.mark.parametrize('value',['http://example.com:4097','http://localhost.evil:4097','http://'+'user:secret'+'@127.0.0.1:4097','http://127.0.0.1:4097/?token=value'])
+def test_local_pairing_password_never_goes_to_a_remote_or_credential_url(value):
+    with pytest.raises(ValueError):desktop.local_url(value)
+
+
+def test_accio_pairs_only_with_a_verified_application_owned_listener(tmp_path,monkeypatch):
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:tmp_path))
+    file=tmp_path/'.accio/accounts/test/.accio/runtime/gateway-cli.json';file.parent.mkdir(parents=True)
+    file.write_text(json.dumps({'schemaVersion':1,'url':'http://localhost:4097','pid':123,
+                               'authMode':'basic','username':'TEST_ONLY_USER','password':'TEST_ONLY_LOCAL_PAIRING'}))
+    monkeypatch.setattr(desktop,'owned_listener',lambda *a:False)
+    with pytest.raises(RuntimeError):desktop.accio_gateway()
+    monkeypatch.setattr(desktop,'owned_listener',lambda port,agent,pid:port==4097 and agent=='acciowork' and pid==123)
+    cfg=desktop.accio_gateway()
+    assert desktop.gateway_headers(cfg)['Authorization'].startswith('Basic ')
+    assert cfg['pid']==123
+
+
+def test_a_lost_native_response_is_observed_without_resending_paid_work(tmp_path,monkeypatch):
+    import websocket
+    job=tmp_path/'job';job.mkdir()
+    (job/'transport-result.json').write_text(json.dumps({'type':'vision_probe','path':str(job/'vision-probe.txt')}))
+    native.save(job/'native-session.json',{'agent':'acciowork','conversation_id':'owned-conversation',
+        'agent_id':'owned-agent','result_job':str(job),'state':'send_intended'})
+    cfg={'url':'http://localhost:4097','authMode':'none'}
+    monkeypatch.setattr(native,'accio_gateway',lambda:cfg)
+    monkeypatch.setattr(native,'gateway_request',lambda *a,**kw:pytest.fail('A resumed request must not create a new conversation'))
+    sent=[];responses=iter([
+        {'type':'event','method':'finished','payload':{'conversationId':'other','role':'assistant','content':'999999'}},
+        {'type':'event','method':'finished','payload':{'conversationId':'owned-conversation','role':'assistant','content':'123456'}}])
+    connection=SimpleNamespace(send=lambda text:sent.append(json.loads(text)),recv=lambda:json.dumps(next(responses)),close=lambda:None)
+    monkeypatch.setattr(websocket,'create_connection',lambda *a,**kw:connection)
+    native.accio_run(tmp_path,job,'ignored on resume',timeout=2)
+    assert [row['method'] for row in sent]==['observeConversation']
+    assert (job/'vision-probe.txt').read_text()=='123456'
+
+
+def test_desktop_response_with_other_product_ids_cannot_overwrite_job_results(tmp_path):
+    expected={'asin':'A','goods_id':'T','vision_revision_key':'revision'}
+    (tmp_path/'manifest.jsonl').write_text(json.dumps(expected)+'\n')
+    output=tmp_path/'reviews.jsonl';output.write_text('TEST_ONLY_PREVIOUS_RESULT')
+    other={**expected,'goods_id':'another','visual_facts':{}}
+    assert not native.write_response(tmp_path,json.dumps(other))
+    assert output.read_text()=='TEST_ONLY_PREVIOUS_RESULT'
+
+
+def test_doubao_receives_the_actual_contract_without_local_file_tools(tmp_path):
+    manifest='{"asin":"ACTUAL_ASIN","goods_id":"ACTUAL_GOODS","vision_revision_key":"REVISION"}\n'
+    (tmp_path/'manifest.jsonl').write_text(manifest)
+    (tmp_path/'visual-facts-guide.json').write_text('{"feature_comparison_ids":["actual_feature"]}')
+    (tmp_path/'image-inputs.json').write_text('{"images":[{"path":"original.jpg"}]}')
+    request=native.doubao_request(tmp_path,'Analyze the images')
+    assert manifest in request and 'actual_feature' in request and 'original.jpg' in request
+    assert 'JSONL' in request
+
+
+def test_doubao_parses_model_jsonl_but_rejects_incomplete_identities(tmp_path):
+    row={'asin':'A','goods_id':'T','vision_revision_key':'R','visual_facts':{}}
+    (tmp_path/'manifest.jsonl').write_text(json.dumps(row)+'\n')
+    assert native.write_response(tmp_path,'```jsonl\n'+json.dumps(row)+'\n```')
+    assert native.result_exists(tmp_path)
+
+
+def test_desktop_rendered_code_block_has_no_markdown_fence(tmp_path):
+    row={'asin':'A','goods_id':'T','vision_revision_key':'R','visual_facts':{}}
+    (tmp_path/'manifest.jsonl').write_text(json.dumps(row)+'\n')
+    assert native.write_response(tmp_path,'jsonl\n'+json.dumps(row)+'\n}\nWritten one row.')
+    assert json.loads((tmp_path/'reviews.jsonl').read_text())==row
+
+
+def test_native_file_is_not_complete_just_because_ids_exist(tmp_path,monkeypatch):
+    row={'asin':'A','goods_id':'T','vision_revision_key':'R','visual_facts':{}}
+    for name in ('manifest.jsonl','reviews.jsonl'):(tmp_path/name).write_text(json.dumps(row)+'\n')
+    native.save(tmp_path/'analysis-contract.json',{'category':'category.json','task_id':'owned'})
+    monkeypatch.setattr('selection_automation.category_config.load_category',lambda path:{})
+    monkeypatch.setattr('selection_automation.codex_visual_review.checked_facts',lambda *a:(_ for _ in ()).throw(ValueError('facts still being written')))
+    assert not native.result_exists(tmp_path)
+
+
+def test_workbuddy_uses_native_structured_output_with_only_its_image_tool(tmp_path,monkeypatch):
+    import subprocess
+    row={'asin':'A','goods_id':'T','vision_revision_key':'R','visual_facts':{}}
+    (tmp_path/'manifest.jsonl').write_text(json.dumps(row)+'\n')
+    (tmp_path/'visual-facts-guide.json').write_text('{"facts_output_template":{}}')
+    monkeypatch.setattr(desktop,'workbuddy_cli',lambda:tmp_path/'codebuddy.exe')
+    monkeypatch.setattr(local_agents,'command_prefix',lambda *a:['codebuddy.exe'])
+    monkeypatch.setattr(local_agents,'environment',lambda:{})
+    monkeypatch.setattr(local_agents,'workbuddy_environment',lambda *a:{})
+    monkeypatch.setattr(native,'doubao_attachments',lambda job:['original.jpg'])
+    def run(command,**kwargs):
+        assert '--strict-mcp-config' in command and '--json-schema' in command
+        assert set(command[command.index('--tools')+1].split(','))=={'Read','StructuredOutput'}
+        assert 'original.jpg' in kwargs['input']
+        return SimpleNamespace(returncode=0,stdout=json.dumps({'structured_output':{'reviews':[row]}}))
+    monkeypatch.setattr(subprocess,'run',run)
+    native.workbuddy_run(tmp_path,tmp_path,'unused')
+    assert json.loads((tmp_path/'reviews.jsonl').read_text())==row
+
+
+def test_workbuddy_schema_requires_canonical_identity_arrays_and_inventory_counts():
+    guide={'facts_output_template':{'identity':{'matches':[],'differences':[]},
+        'feature_comparisons':{'pieces':{'inventory':{'amazon':{'complete':False,'groups':[]}}}}},
+        'identity_array_item_shapes':{'matches':{'example':{'feature':'','amazon':'','temu':''}},
+            'differences':{'example':{'field':'','amazon':'','temu':'','kind':'','variant_field':''}}}}
+    schema=native.facts_schema(guide)['properties']
+    matches=schema['identity']['properties']['matches']
+    assert matches['type']=='array' and matches['items']['required']==['feature','amazon','temu']
+    groups=schema['feature_comparisons']['properties']['pieces']['properties']['inventory']['properties']['amazon']['properties']['groups']
+    assert groups['items']['properties']['count']['type']=='integer'
+
+
+def test_doubao_attachments_keep_original_bytes_when_cache_extension_is_img(tmp_path):
+    from PIL import Image
+    contacts=tmp_path/'contacts';contacts.mkdir()
+    Image.new('RGB',(8,8),'white').save(contacts/'contact-001.jpg')
+    original=tmp_path/'original.img';Image.new('RGB',(8,8),'black').save(original,format='PNG')
+    (tmp_path/'image-inputs.json').write_text(json.dumps({'images':[{'path':str(original)}]}))
+    attachments=native.doubao_attachments(tmp_path)
+    assert len(attachments)==2 and Path(attachments[1]).suffix=='.png'
+    assert Path(attachments[1]).read_bytes()==original.read_bytes()
+
+
+def test_doubao_control_cannot_be_enabled_by_ordinary_detection(tmp_path,monkeypatch):
+    monkeypatch.setattr(desktop,'installations',lambda agent:pytest.fail('Confirmation must precede app/process access'))
+    with pytest.raises(ValueError):desktop.enable_doubao(tmp_path,'')
+    with pytest.raises(ValueError):desktop.enable_doubao(tmp_path,'yes')
+
+
+def test_doubao_port_owned_by_other_app_is_not_claimed(tmp_path,monkeypatch):
+    import psutil
+    app=tmp_path/'Doubao.exe';app.touch()
+    monkeypatch.setattr(desktop,'installations',lambda agent:app)
+    monkeypatch.setattr(psutil,'net_connections',lambda **kw:[SimpleNamespace(status=psutil.CONN_LISTEN,laddr=SimpleNamespace(port=9225))])
+    monkeypatch.setattr(desktop,'owned_listener',lambda *a:False)
+    with pytest.raises(RuntimeError,match='9225'):desktop.enable_doubao(tmp_path,'restart-doubao-and-enable-loopback-control')

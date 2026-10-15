@@ -561,7 +561,8 @@ def export(category_path, kind):
     if binary:
         for pair, review in codex_reviews.items():
             try:
-                codex_scores[pair] = score(cat, checked_facts(cat, review['visual_facts'], review['goods_id']))
+                checked_facts(cat, review['visual_facts'], review['goods_id'])
+                codex_scores[pair] = review.get('module_result') or score(cat,review['visual_facts'])
             except (KeyError, TypeError, ValueError):
                 invalid_codex.add(pair)
     valid_codex = {pair: row for pair, row in codex_reviews.items() if pair not in invalid_codex}
@@ -587,7 +588,7 @@ def export(category_path, kind):
                     values += [scored['modules'][k]['score'] if scored['modules'][k]['score'] is not None else '无法判断' for k in modules]+[scored['total_score'] if scored['total_score'] is not None else '未汇总（证据不全）',scored['state'],review_explanation(cat,result['visual_facts'],scored),evidence,result.get('model'),result.get('usage',{}).get('total_tokens')]
                 elif (r['asin'],r['goods_id']) in codex_reviews and status == 'CANDIDATE':
                     review = codex_reviews[(r['asin'],r['goods_id'])]
-                    state = {'SAME': '确认同款（Codex看图复核）', 'DIFFERENT': '不同款（Codex看图复核）',
+                    state = {'SAME': '确认同款（Codex看图复核）','SIMILAR':'相似款（Agent看图核验）', 'DIFFERENT': '不同款（Codex看图复核）',
                              'UNKNOWN': '待补充证据（Codex看图复核）'}[review['review_status']]
                     evidence = f"Amazon：{review['amazon_evidence']}；TEMU：{review['temu_evidence']}"
                     reason = '；'.join(filter(None, [review['reason'], review.get('validation_note')]))

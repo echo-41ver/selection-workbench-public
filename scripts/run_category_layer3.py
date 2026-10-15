@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse
 from contextlib import contextmanager, nullcontext, ExitStack
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from collections import defaultdict
 from itertools import chain, islice
 import json
@@ -263,6 +263,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
             return
         ids = [f'C{i:02}' for i in range(len(batch))]
         started = time.monotonic()
+        completed = 0
         sent = False
         received = False
         usage = {}
@@ -328,6 +329,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     'model': stage.get('model', 'deepseek-flash'), 'response_id': response.id, 'effort': effort,
                     'usage': usage if i == 0 else {}, 'elapsed_seconds': round(time.monotonic()-started, 3),
                     **({'response_format_compatibility': {'version': 'lossless-envelope-v2-syntax-only', 'repairs': format_repairs}} if format_repairs else {})})
+                completed += 1
         except Exception as exc:
             from selection_workflow.api_image_input import ImageInputError
             if isinstance(exc,IncompleteVisualResponse):
@@ -386,6 +388,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 fatal_stop.set()
         if not billing_uncertain:
             settle_intent()
+        return completed
     size = 1 if provider['protocol']=='decisions' else max(1, min(12, stage.get('batch_size', 12)))
     def batches():
         # At most one partial batch per Amazon image, instead of N*M pending rows.
@@ -402,22 +405,45 @@ def consume(args, cat, fatal_file, key_identity, pending):
     # per pass; do not mutate client settings while worker calls are active.
     # ExitStack outlives the executor, including exceptional worker exits.
     client=None;client_setup_error=None
+    from selection_automation.analysis_concurrency import ThroughputTuner
+    from selection_automation.merge_temu_snapshots import atomic_write
+    auto = provider.get('concurrency_mode')=='auto' and provider['mode']=='liquid_d1'
+    capacity = 16 if auto else width
+    tuning_path = args.results.with_name('concurrency.json')
+    fingerprint = {k:provider[k] for k in ('mode','base_url','model','protocol')}
+    try:prior_tuning=json.loads(tuning_path.read_text(encoding='utf-8'))
+    except (OSError,ValueError):prior_tuning={}
+    tuner=ThroughputTuner(4 if auto else width,capacity,prior_tuning if prior_tuning.get('provider')==fingerprint else None)
+    if auto:width=tuner.width
     with ExitStack() as resources:
         try:
             api_timeout=Timeout(timeout_seconds,connect=30,pool=30)
             transport=resources.enter_context(DefaultHttpxClient(trust_env=False,timeout=api_timeout,
-                limits=Limits(max_connections=width,max_keepalive_connections=min(width,256))))
+                limits=Limits(max_connections=capacity,max_keepalive_connections=min(capacity,256))))
             client=resources.enter_context(VisualClient(provider,transport,key,api_timeout))
         except Exception as exc:
             # Preserve local NO_CHARGE bookkeeping, without a sent intent.
             client_setup_error=exc
-        with ThreadPoolExecutor(max_workers=width) as pool:
-            # Bounded scheduler: only one wave is submitted, allowing rate-limit backoff.
-            while wave := list(islice(batch_stream, width)):
-                for future in as_completed([pool.submit(call, b, initial_effort) for b in wave]):
-                    future.result()
-                if stop.is_set():
-                    break
+        with ThreadPoolExecutor(max_workers=capacity) as pool:
+            # Refill each completed slot immediately. A slow request must not
+            # hold every other worker at a wave barrier.
+            inflight={}; exhausted=False
+            observed=failures=0; window_started=time.monotonic()
+            while inflight or not exhausted:
+                while not exhausted and not stop.is_set() and authorized() and len(inflight)<width:
+                    batch=next(batch_stream,None)
+                    if batch is None:exhausted=True;break
+                    inflight[pool.submit(call,batch,initial_effort)]=len(batch)
+                if not inflight:break
+                done,_=wait(inflight,return_when=FIRST_COMPLETED)
+                for future in done:
+                    count=inflight.pop(future); successful=future.result() or 0
+                    observed+=successful;failures+=max(0,count-successful)
+                if auto and (observed+failures>=max(8,width*2) or failures):
+                    width=tuner.observe(observed,failures,time.monotonic()-window_started,not exhausted)
+                    atomic_write(tuning_path,json.dumps({**tuner.snapshot(),'provider':fingerprint,'updated_at':time.time()}))
+                    observed=failures=0;window_started=time.monotonic()
+                if stop.is_set() and not inflight:break
     after = billing_hold(intent_log, args.results)
     if after['fail_closed'] or fatal_stop.is_set():
         raise SystemExit('未结算视觉请求：请求被拒绝或传输结果不明，费用待核对，已阻止付费重发；请按交付说明核对供应商用量，部分结果仍可导出')
