@@ -266,7 +266,7 @@ if (Test-Path -LiteralPath $wheelhouse -PathType Container) {
     Checked $python @('-m','pip','install','-r',(Join-Path $root 'requirements.lock.txt'),'--extra-index-url','https://download.pytorch.org/whl/cpu')
     Checked $python @('-m','pip','install','--no-deps','-e',"${root}[test]")
 }
-Checked $python @('-c','import torch, torchvision, PIL, psutil, openpyxl, xlsxwriter; print("Python dependencies loaded")')
+Checked $python @('-c',"import torch, torchvision, PIL, psutil, openpyxl, xlsxwriter; print('Python dependencies loaded')")
 $bundledModules = Join-Path $assetRoot 'node_modules'
 if (Test-Path -LiteralPath (Join-Path $bundledModules 'playwright\package.json') -PathType Leaf) {
     $targetModules = Join-Path $root 'node_modules'

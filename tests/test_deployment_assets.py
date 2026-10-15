@@ -98,6 +98,29 @@ function Checked {
             assert (target / 'runtime/models/torch/hub/checkpoints/resnet50-11ad3fa6.pth').read_bytes() == contents['models/resnet50-11ad3fa6.pth']
 
 
+def test_real_python_import_check_works_under_windows_powershell(tmp_path):
+    harness = r'''
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($env:INSTALL_FILE,[ref]$tokens,[ref]$errors)
+if ($errors) { throw ($errors | Out-String) }
+foreach ($statement in $ast.EndBlock.Statements) {
+ if ($statement -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $statement.Name -eq 'Checked') { . ([scriptblock]::Create($statement.Extent.Text)) }
+}
+$python=$env:TEST_PYTHON
+$checks=@($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.PipelineAst] -and $node.Extent.Text.StartsWith('Checked $python') -and $node.Extent.Text.Contains('Python dependencies loaded')},$true))
+if ($checks.Count -ne 1) { throw 'Expected the real Python dependency check' }
+. ([scriptblock]::Create($checks[0].Extent.Text))
+'''
+    script = tmp_path / 'real-python-check.ps1'
+    script.write_text(harness, encoding='utf-8-sig')
+    result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
+                            env={**os.environ, 'INSTALL_FILE': str(ROOT / 'install.ps1'), 'TEST_PYTHON': sys.executable},
+                            capture_output=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert b'Python dependencies loaded' in result.stdout
+
+
 def test_python_install_target_with_spaces_remains_one_argument(tmp_path):
     harness = r'''
 $ErrorActionPreference='Stop'
