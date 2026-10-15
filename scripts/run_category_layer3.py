@@ -65,6 +65,24 @@ def safe_exception_causes(exc):
     return names
 
 
+def safe_provider_error(exc,key=''):
+    """Keep useful provider rejection fields without headers or credentials."""
+    body=getattr(exc,'body',None)
+    if not isinstance(body,dict):return {}
+    error=body.get('error',body)
+    if isinstance(error,str):error={'message':error}
+    if not isinstance(error,dict):return {}
+    result={}
+    for field in ('code','type','message','param'):
+        value=error.get(field)
+        if not isinstance(value,str):continue
+        if key:value=value.replace(key,'[REDACTED]')
+        value=re.sub(r'data:image/[^\s"\']+','[IMAGE_OMITTED]',value)
+        value=re.sub(r'(?i)Bearer\s+\S+','Bearer [REDACTED]',value)
+        result[field]=value[:400]
+    return result
+
+
 def request_timeout_seconds(stage):
     value=stage.get('request_timeout_seconds',600)
     if type(value) is not int or not 30<=value<=1800:
@@ -233,10 +251,13 @@ def consume(args, cat, fatal_file, key_identity, pending):
             raise SystemExit('未结算视觉请求对应商品对已隔离，费用待核对；本轮无可运行候选，API请求数为0')
         return
     if not authorized():return
+    from selection_automation.stage3_provider import from_category, request_key, VisualClient
+    provider=from_category(cat)
+    provider_identity={k:provider[k] for k in ('mode','base_url','model','protocol')}
     if fatal_file.exists():
         blocked=json.loads(fatal_file.read_text(encoding='utf-8'))
-        if blocked.get('key_identity')==key_identity:
-            raise SystemExit('API鉴权或余额阻断，等待更新key或清除 provider_blocked.json 后恢复')
+        if blocked.get('key_identity')==key_identity and (not blocked.get('provider') or blocked['provider']==provider_identity):
+            raise SystemExit('API鉴权、余额或请求参数被拒绝，已暂停；请修正当前方案后继续')
         fatal_file.unlink()
     pending = chain([first], pending)
     from selection_automation.stage3_provider import from_category, request_key, VisualClient
@@ -357,9 +378,10 @@ def consume(args, cat, fatal_file, key_identity, pending):
             if getattr(exc,'model_usage',None):usage=exc.model_usage
             status = getattr(exc, 'status_code', None)
             cause_types = safe_exception_causes(exc)
+            provider_error=safe_provider_error(exc,key)
             append(args.results.with_name('exception_diagnostics.jsonl'),
                    {'request_id':request_id,'time':time.time(),'cause_types':cause_types,
-                    'status_code':status,'response_received':received})
+                    'status_code':status,'response_received':received,'provider_error':provider_error})
             if received:
                 # Preserve received facts for local review even when decoding,
                 # truncation or a stopped split leaves no successful pair row.
@@ -368,6 +390,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                         'vision_revision_keys':[row['vision_revision_key'] for row in batch],
                         'cause_types':cause_types,'output_text':response.output_text})
             reason = f'{type(exc).__name__}: HTTP {status}' if status else type(exc).__name__
+            if provider_error.get('message'):reason+='；'+provider_error['message']
             if isinstance(exc, ImageInputError):
                 reason = str(exc)
                 if not sent and len(batch) > 1:
@@ -388,11 +411,11 @@ def consume(args, cat, fatal_file, key_identity, pending):
                            else '；传输结果不明，费用未知，请核对供应商用量')
             if not received:
                 append(ledger, {'request_id': request_id, 'time': time.time(), 'pairs': len(batch), 'status': 'failed' if sent else 'local_error', 'reason': reason, 'cause_types':cause_types, 'effort': effort, 'billing_state': billing_state})
-            if status in (401, 402, 403):
+            if status in (400,401,402,403,404,405,413,415,422):
                 stop.set()
                 fatal_stop.set()
                 with lock:
-                    fatal_file.write_text(json.dumps({'status':status,'key_identity':key_identity}),encoding='utf-8')
+                    fatal_file.write_text(json.dumps({'status':status,'key_identity':key_identity,'provider':provider_identity,'provider_error':provider_error},ensure_ascii=False),encoding='utf-8')
             if received and isinstance(exc, (ValueError, KeyError, TypeError)) and len(batch) > 1:
                 middle = len(batch)//2
                 call(batch[:middle], effort); call(batch[middle:], effort)

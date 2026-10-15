@@ -253,6 +253,19 @@ def test_valid_candidates_are_imported_and_only_invalid_facts_remain_pending(tmp
     assert [r['goods_id'] for r in pool.pending_rows(configured(),task)]==['second']
 
 
+def test_malformed_json_does_not_discard_another_valid_candidate(tmp_path):
+    pair,row=fixture();other={**pair,'goods_id':'second'}
+    task={'task_id':'partial','rows':[pair,other],'output':tmp_path/'normalized.jsonl','raw_reviews':tmp_path/'raw.jsonl'}
+    job=tmp_path/'job';job.mkdir()
+    pool._write_jsonl(job/'manifest.jsonl',[pair,other])
+    original='{"reason":"unterminated}\n'+json.dumps(row)+'\n'
+    (job/'reviews.jsonl').write_text(original,encoding='utf-8')
+    imported,errors=pool.import_job(configured(),task,job)
+    assert imported==1 and 'invalid review JSON' in errors[0]
+    assert [r['goods_id'] for r in pool.pending_rows(configured(),task)]==['second']
+    assert (job/'reviews.jsonl').read_text(encoding='utf-8')==original
+
+
 def test_launch_copies_failed_reviews_into_new_job_without_overwriting_old(tmp_path, monkeypatch):
     category_path = tmp_path/'category.json'
     category_path.write_text('{}', encoding='utf-8')
@@ -343,6 +356,50 @@ def test_uncertain_native_transport_does_not_count_as_model_failure(tmp_path,mon
     monkeypatch.setattr(pool,'import_job',lambda *args:(0,[]))
     worker.tick()
     assert worker.sample_failed==worker.sample_success==0
+
+
+def test_repeated_native_observation_is_bounded_without_resending(tmp_path,monkeypatch):
+    worker=stub_pool(tmp_path,monkeypatch);worker.config.update(workers=0,max_observation_failures=2)
+    pair,_=fixture();folder=tmp_path/'observed';folder.mkdir()
+    pool.save(folder/'native-session.json',{'state':'send_intended','agent':'acciowork','result_job':str(folder),'observation_failures':1})
+    job={'task_id':'observed','folder':str(folder),'identities':[list(pool.key(pair))],
+         'digest':'observed','state':'running','observation_only':True,'started_at':worker.started_at+1}
+    worker.jobs={'observed':job};worker.processes={'observed':SimpleNamespace(poll=lambda:1)}
+    monkeypatch.setattr(pool,'tasks',lambda _:iter([{'task_id':'observed','rows':[pair]}]))
+    monkeypatch.setattr(pool,'import_job',lambda *args:(0,[]))
+    worker.tick()
+    assert pool.read(folder/'job.json',{})['hold_reason']=='NATIVE_OBSERVATION_EXHAUSTED'
+    assert pool.read(folder/'native-session.json',{})['observation_failures']==2
+    assert worker.sample_failed==0
+
+
+def test_unsent_verification_failure_blocks_agent_without_spending_retry_budget(tmp_path,monkeypatch):
+    from selection_automation.stage3_runtime import read_control
+    worker=stub_pool(tmp_path,monkeypatch);worker.config.update(workers=0,agent_backends=[{'id':'doubao','name':'豆包'}])
+    pair,_=fixture();folder=tmp_path/'unsent';folder.mkdir()
+    pool.save(folder/'transport-error.json',{'action_required':True,'code':'HUMAN_VERIFICATION_REQUIRED','message':'豆包出现验证码','model_turn_started':False})
+    job={'task_id':'unsent','folder':str(folder),'identities':[list(pool.key(pair))],
+         'digest':'unsent','agent_id':'doubao','state':'running','started_at':worker.started_at+1}
+    worker.jobs={'unsent':job};worker.processes={'unsent':SimpleNamespace(poll=lambda:1)}
+    worker.attempts['unsent']={'count':3,'schema_revision':pool.POOL_SCHEMA_REVISION}
+    monkeypatch.setattr(pool,'tasks',lambda _:iter([{'task_id':'unsent','rows':[pair]}]))
+    monkeypatch.setattr(pool,'import_job',lambda *args:(0,[]))
+    state=worker.tick();control=read_control(worker.base/'stage123')
+    assert worker.attempts['unsent']['count']==2
+    assert worker.sample_failed==0 and state['action_required']
+    assert 'doubao' in control['paused_agents']
+    assert control['agent_blocks']['doubao']['code']=='HUMAN_VERIFICATION_REQUIRED'
+
+
+def test_unconfirmed_native_send_is_held_without_occupying_observer_slots(tmp_path,monkeypatch):
+    worker=stub_pool(tmp_path,monkeypatch);pair,_=fixture();folder=worker.folder/'jobs/uncertain';folder.mkdir(parents=True)
+    pool.save(folder/'job.json',{'state':'retry','agent_id':'doubao','identities':[list(pool.key(pair))]})
+    pool.save(folder/'native-session.json',{'agent':'doubao','state':'send_intended','sent_at':1,'result_job':str(folder)})
+    pool._write_jsonl(folder/'manifest.jsonl',[pair]);(folder/'reviews.jsonl').touch()
+    monkeypatch.setattr(pool,'tasks',lambda _:iter([{'task_id':'one','rows':[pair]}]))
+    state=worker.tick()
+    assert not worker.jobs and state['held_pending']==1
+    assert '发送状态待确认' in state['phase']
 
 
 def test_finished_first_batch_automatically_prepares_and_starts_next(tmp_path,monkeypatch):

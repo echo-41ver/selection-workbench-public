@@ -1442,7 +1442,10 @@ class Console:
             if agent not in {'codex','claude','gemini','opencode','workbuddy','acciowork','doubao'}:raise ConsoleError('INVALID_INPUT','Agent 无效')
             paused=set(value.get('paused_agents',[]))
             if action=='pause_agent':paused.add(agent)
-            else:paused.discard(agent)
+            else:
+                paused.discard(agent)
+                from selection_automation.stage3_runtime import clear_agent_block
+                clear_agent_block(folder,agent)
             value=update_control(folder,paused_agents=sorted(paused))
         else:
             value=update_control(folder,paused=action=='pause',switch_error=None)

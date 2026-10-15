@@ -327,6 +327,8 @@ function stage3Button(data){
  $('stage3-phase').textContent=refreshing?'最近核验快照；新增输入核对中，当前待处理尚未确认':p.counting?(p.message||state.phase||'正在核对已处理候选，请等待进度读取完成'):state.phase||'等待手动启动';
  if(state.codex_review?.running)$('stage3-phase').textContent=state.codex_review.pool?.phase||state.codex_review.phase||'本机 Agent 正在分析';
  if(runtime.switch_pending)$('stage3-phase').textContent='正在保存已发送的结果，随后自动切换；已完成商品不重跑。';else if(runtime.switch_error)$('stage3-phase').textContent=runtime.switch_error;else if(runtime.paused)$('stage3-phase').textContent='已暂停派发新组；已发送结果继续保存。可更改上方方案后点击“保存断点并切换方案”。';
+ const blockedAgentNotices=Object.entries(runtime.agent_blocks||{}).filter(([id])=>(data?.stage3_provider?.agent_ids||[]).includes(id)).map(([,b])=>b.message||'Agent 需要人工处理');
+ if(data?.stage3_provider?.mode==='local_agent'&&blockedAgentNotices.length)$('stage3-phase').textContent=blockedAgentNotices.join('；');
  const reviewed=p.api_completed!=null?Number(p.completed||0):Number(p.completed||0)+Number(p.codex_completed||0),remaining=p.pending_after_codex??p.pending??0;
  $('stage3-count').textContent=`已进入第三层 ${(p.total||0).toLocaleString()} 对 · 已处理 ${reviewed.toLocaleString()} 对 · ${refreshing?'快照待处理':'待处理'} ${Number(remaining).toLocaleString()} 对${p.failed?` · 失败 ${p.failed} 对`:''}${p.billing_unknown_pairs?` · ${p.billing_unknown_pairs.toLocaleString()} 对费用待核对，继续时不会重发`:''}${p.billing_hold_fail_closed?' · 费用记录无法对应，已暂停付费请求':''}`;
  if(p.counting&&!Number.isInteger(p.total)){$('stage3-count').textContent=(p.message||'正在核对候选')+'；完整候选、已处理和待处理数量核对后显示';}

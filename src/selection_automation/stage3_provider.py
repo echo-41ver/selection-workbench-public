@@ -209,9 +209,16 @@ class VisualClient:
                 elif block['type'] == 'input_image':
                     blocks.append({'type': 'image_url', 'image_url': {'url': block['image_url']}})
             format_ = {k: v for k, v in request['text']['format'].items() if k != 'type'}
+            instructions=request['instructions']
+            output_format={'type':'json_schema','json_schema':format_}
+            if urlsplit(self.provider['base_url']).hostname=='api.deepseek.com':
+                # Chat supports json_object; Responses supports json_schema.
+                # The existing local decoder still checks every fact field.
+                output_format={'type':'json_object'}
+                instructions+='\n只输出一个JSON对象，必须符合以下JSON Schema：\n'+json.dumps(format_['schema'],ensure_ascii=False,separators=(',',':'))
             response = self.openai.chat.completions.create(model=request['model'],
-                messages=[{'role': 'system', 'content': request['instructions']}, {'role': 'user', 'content': blocks}],
-                response_format={'type': 'json_schema', 'json_schema': format_},
+                messages=[{'role': 'system', 'content': instructions}, {'role': 'user', 'content': blocks}],
+                response_format=output_format,
                 max_tokens=request['max_output_tokens'])
             choice = response.choices[0]
             return SimpleNamespace(id=response.id, usage=response.usage,

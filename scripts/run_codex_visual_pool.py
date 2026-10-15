@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -324,7 +325,18 @@ def import_job(category, task, job):
     good, errors, validation_errors = {}, [], []
     identity_error=False;seen=set()
     job_info=read(job/'job.json',{})
-    for line, row in enumerate(read_jsonl(job / 'reviews.jsonl', allow_incomplete_tail=True), 1):
+    review_path=job/'reviews.jsonl'
+    source=review_path.read_text(encoding='utf-8') if review_path.exists() else ''
+    for line, raw_line in enumerate(source.splitlines(),1):
+        if not raw_line.strip():continue
+        try:
+            row=json.loads(raw_line)
+            if not isinstance(row,dict):raise ValueError('review must be a JSON object')
+        except (ValueError,TypeError) as exc:
+            detail='invalid review JSON: '+str(exc)
+            errors.append(detail)
+            validation_errors.append({'line':line,'error':detail})
+            continue
         try:
             if job_info.get('model') and job_info['model']!='agent-default':
                 from selection_automation.model_labels import model_label
@@ -464,7 +476,8 @@ class Pool:
         backends=self.config.get('agent_backends',[])
         from selection_automation.stage3_runtime import read_control
         paused=read_control(self.base/'stage123').get('paused_agents',[])
-        available=[a for a in backends if (a['id'] not in paused or task.get('required_agent')==a['id']) and sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+        blocks=read_control(self.base/'stage123').get('agent_blocks',{})
+        available=[a for a in backends if a['id'] not in blocks and (a['id'] not in paused or task.get('required_agent')==a['id']) and sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
         if task.get('required_agent'):available=[a for a in available if a['id']==task['required_agent']]
         if backends and not available:raise RuntimeError('Agent 并发槽位已满')
         agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())/int(a.get('max_parallel',6))) if available else None
@@ -582,6 +595,25 @@ class Pool:
                 count, errors = 0, [str(exc)]
             state = {**job, 'state':'complete' if count == len(job['identities']) else 'retry',
                      'imported':count, 'errors':errors, 'finished_at':time.time()}
+            native=read(Path(job['folder'])/'native-session.json',{})
+            transport=read(Path(job['folder'])/'transport-error.json',{})
+            if native and native.get('state')!='complete' and job.get('observation_only') and state['state']=='retry':
+                original=Path(native.get('result_job',job['folder']))
+                receipt=read(original/'native-session.json',{})
+                failures=receipt.get('observation_failures',0)+1
+                save(original/'native-session.json',{**receipt,'observation_failures':failures})
+                if failures>=int(self.config.get('max_observation_failures',3)):
+                    state['hold_reason']='NATIVE_OBSERVATION_EXHAUSTED'
+                    errors.append('原 Agent 任务连续观察未完成，本组已隔离且不重发；其他组继续')
+            native_agent=job.get('agent_id') in {'doubao','acciowork','workbuddy'}
+            not_sent=bool(native_agent and transport.get('model_turn_started') is False and not native.get('sent_at') and count==0)
+            if transport.get('send_uncertain'):
+                state['hold_reason']='SEND_STATUS_UNKNOWN'
+                errors.append('Agent 调用超时，发送结果未知；本组隔离且不重复调用')
+            if transport.get('action_required'):
+                from selection_automation.stage3_runtime import block_agent
+                block_agent(self.base/'stage123',job['agent_id'],transport.get('code','ACTION_REQUIRED'),transport.get('message','本机 Agent 需要人工处理'))
+                errors.append(transport.get('message','本机 Agent 需要人工处理'))
             if state['state'] == 'retry':
                 log_path = Path(job['folder']) / 'stderr.log'
                 tail = log_path.read_text(encoding='utf-8',errors='replace')[-4096:] if log_path.exists() else ''
@@ -591,7 +623,11 @@ class Pool:
                 prior = _strict_attempt(self.attempts.get(job['digest'],{}))
                 self.attempts[job['digest']] = prior
                 prior['next_retry_at'] = time.time() + (30 if network_failure else 15)
-                if network_failure:
+                if not_sent:
+                    prior['count']=max(0,prior.get('count',1)-1)
+                    prior['next_retry_at']=time.time()+60
+                    errors.append('本组尚未发送，保留候选且不消耗模型重试次数')
+                elif network_failure:
                     # Transport recovery is independent of malformed visual-fact retries.
                     prior['count'] = max(0, prior.get('count',1)-1)
                     errors.append('Codex连接暂时中断，冷却后自动重试')
@@ -599,9 +635,8 @@ class Pool:
                     errors.append(f"看图组只写入{count}/{len(job['identities'])}条，将补齐缺失行")
                 save(self.folder/'attempts.json',self.attempts)
             save(Path(job['folder']) / 'job.json', state)
-            native=read(Path(job['folder'])/'native-session.json',{})
             transport_pending=bool(native and native.get('state')!='complete')
-            if job.get('started_at',0)>=self.started_at and not job.get('observation_only') and not transport_pending:
+            if job.get('started_at',0)>=self.started_at and not job.get('observation_only') and not transport_pending and not not_sent:
                 self.sample_success+=count
                 self.sample_failed+=len(job['identities'])-count
             self.errors.extend(errors)
@@ -639,11 +674,20 @@ class Pool:
             prior=read(path,{})
             if prior.get('state')!='retry':continue
             native=read(path.parent/'native-session.json',{})
-            if not native or native.get('state')=='complete':continue
-            if read(Path(native.get('result_job',path.parent))/'native-session.json',{}).get('state')=='complete':continue
+            if not prior.get('hold_reason'):
+                if not native or native.get('state')=='complete':continue
+                if read(Path(native.get('result_job',path.parent))/'native-session.json',{}).get('state')=='complete':continue
             identities={tuple(value) for value in prior.get('identities',[])}
             if not identities or identities & (reserved|active):continue
             reserved.update(identities)
+            if prior.get('hold_reason'):
+                held_pending+=len(identities-completed-active)
+                continue
+            # An intended send without a confirmed conversation cannot be
+            # safely resent, and endlessly observing it must not occupy a slot.
+            if native.get('agent')=='doubao' and native.get('sent_at') and not re.search(r'/chat/\d+',native.get('url','')):
+                held_pending+=len(identities-completed-active)
+                continue
             if not identities<=source_by_key.keys():held_pending+=len(identities-completed-active);continue
             group=list(read_jsonl(path.parent/'manifest.jsonl'))
             resume=grouped_task(group,prior.get('agent_id'));resume['required_model']=prior.get('model')
@@ -656,9 +700,10 @@ class Pool:
         from selection_automation.stage3_runtime import read_control
         control=read_control(self.base/'stage123')
         paused=control.get('paused_agents',[])
+        blocks=control.get('agent_blocks',{})
         if control.get('paused') or control.get('switch_pending') or not self.config.get('enabled',True):workers=0
         if self.config.get('agent_backends'):
-            workers=min(workers,sum(int(a.get('max_parallel',6)) for a in self.config['agent_backends'] if a['id'] not in paused))
+            workers=min(workers,sum(int(a.get('max_parallel',6)) for a in self.config['agent_backends'] if a['id'] not in paused and a['id'] not in blocks))
         if workers and self.config.get('concurrency_mode')=='auto':
             from selection_automation.analysis_concurrency import ThroughputTuner
             tuning_key=json.dumps([self.config.get('agent_models',{}),sorted(paused),group_size,workers],sort_keys=True)
@@ -694,7 +739,7 @@ class Pool:
             if workers==0:break
             if active_load>=workers and not task.get('required_agent'):continue
             backends=self.config.get('agent_backends',[])
-            available=[a for a in backends if (a['id'] not in paused or task.get('required_agent')==a['id']) and sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+            available=[a for a in backends if a['id'] not in blocks and (a['id'] not in paused or task.get('required_agent')==a['id']) and sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
             if task.get('required_agent'):
                 available=[a for a in available if a['id']==task['required_agent']]
                 if not available:continue
@@ -716,8 +761,11 @@ class Pool:
             except (OSError, ValueError, RuntimeError) as exc:
                 self.errors.append(str(exc))
         ensure_publisher(self.category_path, root=ROOT)
-        return {'phase':('已暂停派发，正在保存已发送的结果' if workers==0 and self.jobs else '已暂停，结果和断点已保存' if workers==0 else '并行看图并自动接续下一组' if self.jobs else
+        latest_result=max((p.stat().st_mtime for p in (self.base/'stage123/codex_reviews').glob('*.jsonl')),default=0)
+        blocked_messages=[b.get('message','Agent 需要人工处理') for aid,b in blocks.items() if aid in {a['id'] for a in self.config.get('agent_backends',[])}]
+        return {'phase':('；'.join(blocked_messages) if blocked_messages and workers==0 else '已暂停派发，正在保存已发送的结果' if workers==0 and self.jobs else '已暂停，结果和断点已保存' if workers==0 else '正在回收已发送的结果' if self.jobs and all(j.get('observation_only') for j in self.jobs.values()) else '并行看图并自动接续下一组' if self.jobs else
                          '有任务需重试或人工处理，已保存结果保留' if self.errors or retry_exhausted else
+                         f'有{held_pending}对发送状态待确认，已隔离且不重发；其他结果保留' if held_pending else
                          '等待已有任务或冷却后自动补齐，结果保留' if waiting or external_pending else
                          '当前候选已分析，持续检测新增候选并汇总Excel'),
                 'running':len(self.jobs), 'pending':sum(len(rows) for _, rows in waiting)-newly_dispatched,
@@ -727,6 +775,8 @@ class Pool:
                 'agents':[{'id':a['id'],'name':a['name'],'paused':a['id'] in paused,'running':sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())} for a in self.config.get('agent_backends',[])],
                 'service_tier':'default', 'completed_groups':self.completed_groups,
                 'jobs':list(self.jobs.values()), 'errors':self.errors, 'api_requests_sent':0,
+                'last_result_at':latest_result or None,'seconds_since_result':round(time.time()-latest_result) if latest_result else None,
+                'action_required':bool(blocked_messages),'agent_blocks':blocks,
                 'updated_at':time.time()}
 
 

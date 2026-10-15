@@ -10,6 +10,19 @@ from selection_automation import native_agent_transport as native
 from selection_automation.stage3_provider import settings
 
 
+def test_doubao_verification_gate_is_reported_before_clicking_or_sending():
+    from selection_automation.agent_blockers import AgentActionRequired
+    from selection_automation.agent_models import select_doubao_model
+    class Captcha:
+        def evaluate(self,expression):
+            assert 'vc_captcha_wrapper' in expression
+            return True
+        def call(self,*args):raise AssertionError('Verification gate must never be clicked')
+    with pytest.raises(AgentActionRequired) as caught:select_doubao_model(Captcha(),'豆包 专家')
+    assert caught.value.code=='HUMAN_VERIFICATION_REQUIRED'
+    assert caught.value.agent_id=='doubao'
+
+
 def test_three_desktop_agents_are_selectable_and_have_independent_limits():
     assert {'workbuddy','acciowork','doubao'}<=set(local_agents.IDS)
     assert settings({'mode':'local_agent','agent_ids':['workbuddy','acciowork','doubao']})['agent_ids']==['workbuddy','acciowork','doubao']

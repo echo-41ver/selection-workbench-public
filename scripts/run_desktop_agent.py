@@ -16,10 +16,17 @@ if __name__=='__main__':
         {'workbuddy':workbuddy_run,'acciowork':accio_run,'doubao':doubao_run}[args.agent](ROOT,job,prompt,model=args.model)
         print('Completed owned desktop-agent job.')
     except Exception as exc:
+        import subprocess
+        from selection_automation.agent_blockers import AgentActionRequired
+        from selection_automation.native_agent_transport import read
         from selection_automation.merge_temu_snapshots import atomic_write
         import json
-        safe=str(exc)[:240] if type(exc) is RuntimeError and str(exc).startswith(('AccioWork','豆包','原豆包','不能把已有')) else type(exc).__name__
-        atomic_write(job/'transport-error.json',json.dumps({'type':type(exc).__name__,'message':safe},ensure_ascii=False))
+        safe=str(exc)[:240] if isinstance(exc,AgentActionRequired) or type(exc) is RuntimeError and str(exc).startswith(('AccioWork','豆包','原豆包','不能把已有')) else type(exc).__name__
+        receipt=read(job/'native-session.json',{})
+        error={'type':type(exc).__name__,'message':safe,'model_turn_started':True if args.agent=='workbuddy' else bool(receipt.get('sent_at'))}
+        if args.agent=='workbuddy' and isinstance(exc,subprocess.TimeoutExpired):error['send_uncertain']=True
+        if isinstance(exc,AgentActionRequired):error.update(action_required=True,code=exc.code,agent_id=exc.agent_id)
+        atomic_write(job/'transport-error.json',json.dumps(error,ensure_ascii=False))
         # No gateway password, account token, headers or full remote payload.
         print('Desktop Agent job failed: '+type(exc).__name__,file=sys.stderr)
         raise SystemExit(1)

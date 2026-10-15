@@ -502,6 +502,7 @@ def workbuddy_run(root,job,prompt,timeout=900,model=None):
 
 
 def doubao_run(root,job,prompt,timeout=900,model=None):
+    from .agent_blockers import require_doubao_ready
     from .process_lock import ProcessLock
     import os
     import hashlib
@@ -546,6 +547,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
         composer_held=not bool(state)
         try:
             if not state:
+                require_doubao_ready(cdp)
                 created=cdp.evaluate(r"""(()=>{const visible=e=>e.getClientRects().length&&!e.disabled;
                   const nodes=[...document.querySelectorAll('button,[role="button"],a')].filter(visible);
                   const e=nodes.find(e=>/^(新对话|新建对话|开启新对话|新建会话|New chat)(\s*(Ctrl|⌘|\+).*)?$/i.test((e.getAttribute('aria-label')||e.getAttribute('title')||e.textContent||'').trim()));
@@ -567,6 +569,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 # File upload completion is an observable composer state.
                 started=time.monotonic()
                 while time.monotonic()-started<30:
+                    require_doubao_ready(cdp)
                     ready=cdp.evaluate("""(()=>{const box=document.querySelector('[data-testid=chat_input]');if(!box)return false;
                     return !box.querySelector('[aria-busy=true],[data-testid*=uploading]')&&box.querySelectorAll('[data-testid=attachment-image-card] img[alt=image]').length>="""+str(len(attachments))+""";})()""")
                     if ready and time.monotonic()-started>1:break
@@ -578,6 +581,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 wrote=cdp.evaluate("""(()=>{const e=[...document.querySelectorAll('textarea,[contenteditable=true]')].find(e=>e.getClientRects().length);
                   if(!e)return false;e.focus();return true;})()""")
                 if not wrote:raise RuntimeError('豆包任务输入框不可用')
+                require_doubao_ready(cdp)
                 cdp.call('Input.insertText',{'text':request})
                 deadline=time.monotonic()+60
                 while time.monotonic()<deadline:
@@ -590,6 +594,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 if not sent:raise RuntimeError('豆包发送状态待确认，保留任务且不重复发送')
                 deadline=time.monotonic()+45
                 while time.monotonic()<deadline:
+                    require_doubao_ready(cdp)
                     url=cdp.evaluate('location.href')
                     owned=cdp.evaluate("[...document.querySelectorAll('[data-testid=send_message]')].some(e=>e.innerText.includes("+json.dumps(marker)+"))")
                     if owned and re.search(r'/chat/\d+',url):break
@@ -604,6 +609,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
             last_answer=None;stable_since=time.monotonic()
             while time.monotonic()<deadline:
                 if result_exists(original):copy_result(original,job);finish_native_response(job,state);return
+                require_doubao_ready(cdp)
                 current=cdp.evaluate('location.href')
                 marker=state.get('marker') or str(original)
                 owned=cdp.evaluate("[...document.querySelectorAll('[data-testid=send_message]')].some(e=>e.innerText.includes("+json.dumps(marker)+"))")

@@ -154,10 +154,13 @@ def _escape(cdp):
 
 
 def doubao_menu(cdp):
+    from .agent_blockers import require_doubao_ready
+    require_doubao_ready(cdp)
     current=cdp.evaluate("document.querySelector('[data-testid=chat_input_action_model]')?.innerText")
     _click(cdp,'[data-testid=chat_input_action_model]')
     deadline=time.monotonic()+3
     while time.monotonic()<deadline:
+        require_doubao_ready(cdp)
         rows=cdp.evaluate("[...document.querySelectorAll('[role=menuitem],[role=option],[role=menuitemradio]')].filter(e=>e.getClientRects().length).map(e=>e.innerText.trim())")
         if rows:return [_model(' '.join(name.split()),' '.join(name.split())) for name in rows if name.strip()],' '.join((current or '').split())
         time.sleep(.1)
@@ -165,6 +168,8 @@ def doubao_menu(cdp):
 
 
 def select_doubao_model(cdp,model):
+    from .agent_blockers import require_doubao_ready
+    require_doubao_ready(cdp)
     current=cdp.evaluate("document.querySelector('[data-testid=chat_input_action_model]')?.innerText")
     if ' '.join((current or '').split())==model:return
     try:
@@ -216,7 +221,9 @@ def catalog(root,agent_id,refresh=False,agent=None):
         if not models:raise RuntimeError('该 Agent 未提供模型列表，请检查登录、权限或客户端版本')
         result.update(models=models,default=default,source=source,status='ready',message='已从本机 Agent 读取')
     except (OSError,ValueError,RuntimeError,subprocess.TimeoutExpired,queue.Empty) as error:
-        result['message']=str(error) if type(error) is RuntimeError else '模型读取失败，请检查客户端与网络'
+        from .agent_blockers import AgentActionRequired
+        result['message']=str(error) if type(error) is RuntimeError or isinstance(error,AgentActionRequired) else '模型读取失败，请检查客户端与网络'
+        if isinstance(error,AgentActionRequired):result.update(status='action_required',action_required=True,code=error.code)
     if result['status']=='ready':
         with _lock:_cache[key]=time.monotonic(),dict(result)
         from .merge_temu_snapshots import atomic_write
