@@ -53,6 +53,55 @@ def test_compact_desktop_response_expands_twelve_bound_candidates_without_losing
     assert (tmp_path/'reviews.jsonl').read_bytes()==before
 
 
+def test_finished_invalid_reply_settles_original_instead_of_observing_forever(tmp_path):
+    original=tmp_path/'original';job=tmp_path/'recovery';original.mkdir();job.mkdir()
+    native.save(original/'native-session.json',{'state':'send_intended','model':'TEST_MODEL'})
+    state={'state':'send_intended','result_job':str(original),'model':'TEST_MODEL'}
+    with pytest.raises(RuntimeError,match='有限补跑'):
+        native.receive_finished_response(job,state,'This finished reply contains no candidate output.')
+    assert native.read(job/'native-session.json')['response_status']=='invalid'
+    assert native.read(original/'native-session.json')['state']=='complete'
+    assert not native.result_exists(original)
+
+
+def test_compact_recovery_uses_original_codec_and_accepts_numeric_text_without_changing_facts(tmp_path,monkeypatch):
+    from test_vision_group_compact import responses
+    cat,_,raw=responses(2)
+    original=tmp_path/'original';job=tmp_path/'recovery';original.mkdir();job.mkdir()
+    native.save(original/'compact-output.json',{'version':1})
+    native.save(job/'native-session.json',{'result_job':str(original)})
+    native.save(job/'analysis-contract.json',{'category':'TEST_ONLY_CATEGORY.json'})
+    rows=[{'asin':'TEST_A','goods_id':f'TEST_T{i}','vision_revision_key':f'TEST_HASH_{i}'} for i in range(2)]
+    (job/'manifest.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows),'utf-8')
+    monkeypatch.setattr('selection_automation.category_config.load_category',lambda path:cat)
+    raw['candidates'][1]['c']='0.95'
+    # Missing final candidate brace and an extra list terminator are punctuation
+    # failures seen in finished desktop replies. All facts stay model-authored.
+    text=json.dumps(raw,ensure_ascii=False)
+    malformed=text[:-3]+']}'
+    assert native.write_response(job,malformed)
+    actual=[json.loads(line) for line in (job/'reviews.jsonl').read_text('utf-8').splitlines()]
+    assert len(actual)==2 and actual[1]['visual_facts']['overall_confidence']==.95
+    assert actual[1]['visual_facts']['identity']==raw['candidates'][1]['v']
+    assert (job/'desktop-response.txt').read_text('utf-8')==malformed
+    raw['candidates'][1]['c']='probably 0.95'
+    assert not native.write_response(job,json.dumps(raw))
+
+
+def test_legacy_response_rebinds_only_revision_metadata_for_unique_exact_product_ids(tmp_path):
+    row={'asin':'TEST_A','goods_id':'TEST_T','vision_revision_key':'MODEL_TYPO','visual_facts':{'TEST_ONLY':True}}
+    bound={**row,'vision_revision_key':'LOCAL_IMAGE_HASH'}
+    (tmp_path/'manifest.jsonl').write_text(json.dumps(bound)+'\n','utf-8')
+    assert native.write_response(tmp_path,json.dumps(row))
+    assert native.read(tmp_path/'reviews.jsonl')['vision_revision_key']=='LOCAL_IMAGE_HASH'
+    assert not native.write_response(tmp_path,json.dumps([{**row,'goods_id':'OTHER_PRODUCT'}]))
+
+
+@pytest.mark.parametrize('text',['{"a": [1,}, "b":2}','{"a":"unfinished','{"a": [1, 2,]}'])
+def test_desktop_punctuation_recovery_does_not_rewrite_invalid_internal_content(text):
+    with pytest.raises(ValueError):json.loads(native.repair_terminal_delimiters(text))
+
+
 def test_installed_desktop_executable_is_never_invoked_as_a_generic_cli(tmp_path,monkeypatch):
     app=tmp_path/'Doubao.exe';app.touch()
     monkeypatch.setattr(desktop,'installations',lambda agent:app)

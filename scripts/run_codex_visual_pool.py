@@ -322,6 +322,7 @@ def import_job(category, task, job):
     expected = list(read_jsonl(job / 'manifest.jsonl'))
     bound = {key(row): row for row in expected}
     good, errors, validation_errors = {}, [], []
+    identity_error=False;seen=set()
     job_info=read(job/'job.json',{})
     for line, row in enumerate(read_jsonl(job / 'reviews.jsonl', allow_incomplete_tail=True), 1):
         try:
@@ -330,7 +331,12 @@ def import_job(category, task, job):
                 row={**row,'model':model_label(job_info['model'],ROOT,job_info.get('agent_id'))}
             identity = key(row)
             if identity not in bound:
+                identity_error=True
                 raise ValueError('review absent from group manifest')
+            if identity in seen:
+                identity_error=True
+                raise ValueError('duplicate review in group')
+            seen.add(identity)
             # Expose the normalizer's actual nested reason instead of its broad
             # backwards-compatible pump wrapper when a strict fact field fails.
             if category['stage3'].get('codex_require_module_facts'):
@@ -350,10 +356,9 @@ def import_job(category, task, job):
             validation_errors.append({'line':line,'asin':row.get('asin'),'goods_id':row.get('goods_id'),
                                       'vision_revision_key':row.get('vision_revision_key'),'error':detail})
     save(job / 'validation_errors.json', validation_errors)
-    complete_group = bool(expected) and len(good) == len(expected) and not errors
-    if complete_group:
-        # Keep group membership stable across schema retries; partial valid rows
-        # remain in reviews.jsonl and are not needlessly re-reviewed.
+    if good and not identity_error:
+        # Each candidate has its own bound images and complete strict facts.
+        # Import valid candidates now so only invalid candidates are requeued.
         for member in task.get('members',[task]):
             assigned={tuple(value) for value in member.get('assigned_identities',[])} or {key(row) for row in member['rows']}
             values=[row for identity,row in good.items() if identity in assigned]
@@ -365,7 +370,7 @@ def import_job(category, task, job):
             if not values:continue
             raw=Path(member['raw_reviews']);prior={key(row):row for row in read_jsonl(raw,allow_incomplete_tail=True)}
             prior.update(values);save_rows(raw,list(prior.values()))
-    return (len(good) if complete_group else 0), errors
+    return (len(good) if not identity_error else 0), errors
 
 
 def write_job_validator(job):
@@ -477,7 +482,10 @@ class Pool:
                 reusable = path.parent
                 break
         reused_from = reusable
-        native_pending=reused_from and (reused_from/'native-session.json').is_file() and read(reused_from/'native-session.json',{}).get('state')!='complete'
+        native_receipt=read(reused_from/'native-session.json',{}) if reused_from else {}
+        native_original=Path(native_receipt.get('result_job',reused_from)) if native_receipt else None
+        native_pending=bool(native_receipt and native_receipt.get('state')!='complete'
+            and read(native_original/'native-session.json',{}).get('state')!='complete')
         if native_pending:
             prior_agent=read(reused_from/'job.json',{}).get('agent_id')
             if not agent or prior_agent!=agent['id']:raise RuntimeError('原桌面 Agent 任务需要先恢复，不能重复改派')
@@ -495,6 +503,7 @@ class Pool:
             shutil.copy2(reused_from / 'reviews.jsonl', job / 'reviews.jsonl')
             if native_pending:shutil.copy2(reused_from/'native-session.json',job/'native-session.json')
             if native_pending and (reused_from/'compact-output.json').is_file():shutil.copy2(reused_from/'compact-output.json',job/'compact-output.json')
+            elif native_pending and (native_original/'compact-output.json').is_file():shutil.copy2(native_original/'compact-output.json',job/'compact-output.json')
             prior_errors = reused_from / 'validation_errors.json'
             if prior_errors.is_file():
                 shutil.copy2(prior_errors, job / 'validation_errors.json')
@@ -584,8 +593,8 @@ class Pool:
                 save(self.folder/'attempts.json',self.attempts)
             save(Path(job['folder']) / 'job.json', state)
             if job.get('started_at',0)>=self.started_at and not job.get('observation_only'):
-                self.sample_success+=count if state['state']=='complete' else 0
-                self.sample_failed+=len(job['identities']) if state['state']!='complete' else 0
+                self.sample_success+=count
+                self.sample_failed+=len(job['identities'])-count
             self.errors.extend(errors)
             self.completed_groups += state['state'] == 'complete'
             self.jobs.pop(name)
@@ -622,6 +631,7 @@ class Pool:
             if prior.get('state')!='retry':continue
             native=read(path.parent/'native-session.json',{})
             if not native or native.get('state')=='complete':continue
+            if read(Path(native.get('result_job',path.parent))/'native-session.json',{}).get('state')=='complete':continue
             identities={tuple(value) for value in prior.get('identities',[])}
             if not identities or identities & (reserved|active):continue
             reserved.update(identities)

@@ -1,11 +1,11 @@
 {
-  "source_commit": "de96d0e20abfe4398d3bbc03c33648f7f71bd5c5",
-  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/deployment-de96d0e",
+  "source_commit": "382b4c971b0752241012b8eb756d3f2e56a37f44",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/deployment-382b4c9",
   "artifacts": [
     {
-      "name": "selection-workbench-de96d0e-public.zip",
-      "bytes": 519750162,
-      "sha256": "1faf677e87d881b1cad0d62426950e248f245715c1c795acd590a511a8e6ccc2",
+      "name": "selection-workbench-382b4c9-public.zip",
+      "bytes": 519752652,
+      "sha256": "f342a7af3ad516e9047b3b3c57e738457b1a7d731ae81a8ae58feb4f3da853c9",
       "contains_company_credentials": false
     }
   ]

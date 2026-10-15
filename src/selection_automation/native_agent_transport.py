@@ -68,7 +68,9 @@ def write_response(job,text):
         found=re.fullmatch(r'\s*(\d{6})\s*',text)
         if found:atomic_write(Path(probe['path']),found[1]);return True
         return False
-    if (job/'compact-output.json').is_file():
+    atomic_write(job/'desktop-response.txt',text)
+    original=Path(read(job/'native-session.json',{}).get('result_job',job))
+    if (job/'compact-output.json').is_file() or (original/'compact-output.json').is_file():
         try:
             from .vision import parse_visual_response_compatible,decode
             from .category_config import load_category
@@ -76,7 +78,16 @@ def write_response(job,text):
             category=load_category(Path(contract['category']))
             manifest=[json.loads(line) for line in (job/'manifest.jsonl').read_text('utf-8-sig').splitlines() if line.strip()]
             labels=[f'C{index:02}' for index in range(len(manifest))]
-            raw,_=parse_visual_response_compatible(text,allow_preamble=True)
+            try:raw,_=parse_visual_response_compatible(text,allow_preamble=True)
+            except ValueError:
+                repaired=repair_terminal_delimiters(text)
+                raw,_=parse_visual_response_compatible(repaired,allow_preamble=True)
+            for item in raw.get('candidates',[]):
+                if isinstance(item,dict) and isinstance(item.get('c'),str):
+                    value=item['c']
+                    if not re.fullmatch(r'(?:0(?:\.\d+)?|1(?:\.0+)?)',value.strip()):
+                        raise ValueError('invalid numeric confidence string')
+                    item['c']=float(value)
             facts=decode(category,raw,labels)
             context=read(job/'job.json',{})
             rows=[]
@@ -89,7 +100,9 @@ def write_response(job,text):
                     'model':context.get('model') or '豆包（未记录模型）'})
             atomic_write(job/'reviews.jsonl',''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows))
             return True
-        except (OSError,ValueError,KeyError,TypeError):return False
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            save(job/'native-response-error.json',{'error':str(exc),'received_at':time.time()})
+            return False
     blocks=re.findall(r'```(?:jsonl?|ndjson)?\s*\n([\s\S]*?)```',text)
     # Rendered desktop code blocks omit backticks and can include a language
     # label or a prose footer. Decode complete JSON values without editing facts.
@@ -108,13 +121,63 @@ def write_response(job,text):
             try:value=json.loads(candidate);rows=value if isinstance(value,list) else value.get('reviews',[value])
             except ValueError:rows=[json.loads(line) for line in candidate.splitlines() if line.strip()]
             if not rows or any(not isinstance(row,dict) or not {'asin','goods_id','vision_revision_key','visual_facts'}<=row.keys() for row in rows):continue
-            expected={tuple(row[k] for k in ('asin','goods_id','vision_revision_key')) for row in
-                      (json.loads(line) for line in (job/'manifest.jsonl').read_text(encoding='utf-8').splitlines() if line.strip())}
+            bound=[json.loads(line) for line in (job/'manifest.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]
+            expected={tuple(row[k] for k in ('asin','goods_id','vision_revision_key')) for row in bound}
+            # Image revisions belong to the local manifest, never to model
+            # transcription. Rebind only an exact, unique set of product IDs.
+            by_product={(row['asin'],row['goods_id']):row for row in bound}
+            products=[(row['asin'],row['goods_id']) for row in rows]
+            if len(by_product)==len(bound)==len(rows)==len(set(products)) and set(products)==set(by_product):
+                rows=[{**row,'vision_revision_key':by_product[(row['asin'],row['goods_id'])]['vision_revision_key']} for row in rows]
             if {tuple(row[k] for k in ('asin','goods_id','vision_revision_key')) for row in rows}!=expected:continue
             atomic_write(job/'reviews.jsonl',''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows))
             return True
         except (ValueError,KeyError,TypeError,OSError):pass
+    save(job/'native-response-error.json',{'error':'返回内容缺少完整、唯一的候选身份或合法JSON','received_at':time.time()})
     return False
+
+
+def repair_terminal_delimiters(text):
+    """Repair closing punctuation only; never add values, fields or candidates."""
+    source=text.strip()
+    if not source.startswith('{'):raise ValueError('visual response does not start with an object')
+    stack=[];quoted=False;escaped=False;last_value=-1
+    for index,char in enumerate(source):
+        if quoted:
+            if escaped:escaped=False
+            elif char=='\\':escaped=True
+            elif char=='"':quoted=False
+            last_value=index
+        elif char=='"':quoted=True;last_value=index
+        elif char in '{[':stack.append(char);last_value=index
+        elif char in '}]':
+            if stack and {'[':']','{':'}'}[stack[-1]]==char:stack.pop()
+            elif any(c not in '}] \r\n\t' for c in source[index:]):
+                raise ValueError('malformed JSON before terminal punctuation')
+        elif not char.isspace():last_value=index
+    if quoted:raise ValueError('unterminated JSON string')
+    # Recompute nesting before the terminal run. All earlier punctuation must
+    # already be valid; only the final sequence of } and ] can be replaced.
+    prefix=source[:last_value+1];stack=[];quoted=False;escaped=False
+    for char in prefix:
+        if quoted:
+            if escaped:escaped=False
+            elif char=='\\':escaped=True
+            elif char=='"':quoted=False
+        elif char=='"':quoted=True
+        elif char in '{[':stack.append(char)
+        elif char in '}]':
+            if not stack or {'[':']','{':'}'}[stack.pop()]!=char:raise ValueError('malformed internal JSON punctuation')
+    return prefix+''.join({'[':']','{':'}'}[char] for char in reversed(stack))
+
+
+def receive_finished_response(job,state,text):
+    accepted=write_response(job,text)
+    state.update(response_status='parsed' if accepted else 'invalid',received_at=time.time())
+    finish_native_response(job,state)
+    if not accepted:
+        error=read(Path(job)/'native-response-error.json',{}).get('error','输出格式无效')
+        raise RuntimeError('Agent 已经回复但本组结果未通过校验，将进入有限补跑：'+error)
 
 
 def payload_rows(value):
@@ -185,7 +248,7 @@ def accio_run(root,job,prompt,timeout=900,model=None):
             if cid and str(cid)!=state['conversation_id']:continue
             if message.get('method')=='finished' and payload.get('role') in ('assistant','agent'):
                 text=payload.get('content') or payload.get('message') or ''
-                if write_response(job,text):finish_native_response(job,state);return
+                receive_finished_response(job,state,text);return
                 # The native agent can finish its final file write just after
                 # its text event; continue observing the owned job directory.
         raise RuntimeError('AccioWork 任务超时；已保留任务标识，重试只观察原任务，不重发')
@@ -522,6 +585,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 cdp.close();target=observer;cdp=CDP(target['webSocketDebuggerUrl'])
                 state.update(target_id=target['id'],owned_target=True);save(receipt,state)
             original=Path(state.get('result_job',job));deadline=time.monotonic()+timeout
+            last_answer=None;stable_since=time.monotonic()
             while time.monotonic()<deadline:
                 if result_exists(original):copy_result(original,job);finish_native_response(job,state);return
                 current=cdp.evaluate('location.href')
@@ -533,10 +597,15 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                     if owned:state.update(url=current,bound_url=True);save(receipt,state)
                     else:raise RuntimeError('豆包已切换到其他聊天；本任务暂停且不重发')
                 if not owned:time.sleep(.5);continue
-                answer=cdp.evaluate("""(()=>{const busy=[...document.querySelectorAll('button,[role="button"]')].some(e=>e.getClientRects().length&&/停止|Stop generating/i.test(e.getAttribute('aria-label')||e.textContent||''));if(busy)return null;
+                answer=cdp.evaluate("""(()=>{const busy=[...document.querySelectorAll('[data-testid=chat_input_local_break_button],button,[role="button"]')].some(e=>e.getClientRects().length&&(e.getAttribute('data-testid')==='chat_input_local_break_button'||/停止|Stop generating/i.test(e.getAttribute('aria-label')||e.textContent||'')));if(busy)return null;
                   const nodes=[...document.querySelectorAll('[data-testid=receive_message] [data-testid=message_text_content],[data-message-role="assistant"],[data-role="assistant"],[data-testid*="assistant-message"]')].filter(e=>e.getClientRects().length&&e.getAttribute('data-streaming')!=='true');
                   if(!nodes.length)return null;const last=nodes.at(-1),blocks=[...last.querySelectorAll('pre')].map(e=>e.querySelector('code')?.innerText||e.innerText);return blocks.length?blocks.join(String.fromCharCode(10)):last.innerText;})()""")
-                if answer and write_response(job,answer):finish_native_response(job,state);return
+                if answer!=last_answer:last_answer=answer;stable_since=time.monotonic()
+                if answer and time.monotonic()-stable_since>=3:
+                    terminal=cdp.evaluate("Boolean(document.querySelector('[data-testid=receive_message] [data-testid=message_action_regenerate]'))")
+                    if terminal:
+                        receive_finished_response(job,state,answer);return
+                    if write_response(job,answer):finish_native_response(job,state);return
                 time.sleep(1)
             raise RuntimeError('豆包任务超时；已保留原任务，不自动重复发送')
         finally:

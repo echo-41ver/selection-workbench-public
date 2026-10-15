@@ -84,6 +84,16 @@ def test_observing_an_existing_native_turn_does_not_spend_another_model_retry(tm
     assert job['observation_only'] and job['attempt']==1
     assert worker.attempts[digest]['count']==1
     assert pool.read(Path(job['folder'])/'native-session.json')['conversation_id']=='TEST_ORIGINAL_TURN'
+    # A stale clone must not reserve a conversation after the original reply
+    # was received. A genuine output retry is a new attempt, not observation.
+    stale=Path(job['folder'])
+    pool.save(stale/'job.json',{**job,'state':'retry'})
+    pool.save(old/'native-session.json',{'agent':'doubao','model':'TEST_MODEL','state':'complete'})
+    worker.jobs.clear()
+    worker.launch({'task_id':'repair'},[pair])
+    fresh=next(iter(worker.jobs.values()))
+    assert not fresh['observation_only'] and fresh['attempt']==2
+    assert not (Path(fresh['folder'])/'native-session.json').exists()
 
 
 def test_inventory_guide_template_matches_the_strict_decoder():
@@ -224,6 +234,23 @@ def test_import_writes_specific_strict_fact_validation_errors(tmp_path, monkeypa
     diagnostics = json.loads((job/'validation_errors.json').read_text(encoding='utf-8'))
     assert imported == 0 and errors == ['invalid bilateral identity evidence']
     assert diagnostics[0]['line'] == 1 and diagnostics[0]['error'] == errors[0]
+
+
+def test_valid_candidates_are_imported_and_only_invalid_facts_remain_pending(tmp_path,monkeypatch):
+    pair,row=fixture();other={**pair,'goods_id':'second'}
+    task={'task_id':'partial','rows':[pair,other],'output':tmp_path/'normalized.jsonl','raw_reviews':tmp_path/'raw.jsonl'}
+    job=tmp_path/'job';job.mkdir()
+    pool._write_jsonl(job/'manifest.jsonl',[pair,other])
+    pool._write_jsonl(job/'reviews.jsonl',[row,{**row,'goods_id':'second','reason':'TEST_BAD_FACTS'}])
+    original=pool.normalize_review
+    def normalize(cat,review,*args):
+        if review.get('reason')=='TEST_BAD_FACTS':raise ValueError('invalid bilateral facts')
+        return original(cat,review,*args)
+    monkeypatch.setattr(pool,'normalize_review',normalize)
+    imported,errors=pool.import_job(configured(),task,job)
+    assert imported==1 and errors==['invalid bilateral facts']
+    assert {r['goods_id'] for r in pool.read_jsonl(task['output'])}=={pair['goods_id']}
+    assert [r['goods_id'] for r in pool.pending_rows(configured(),task)]==['second']
 
 
 def test_launch_copies_failed_reviews_into_new_job_without_overwriting_old(tmp_path, monkeypatch):
