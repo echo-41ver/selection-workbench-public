@@ -50,6 +50,8 @@ def prepare(root: Path, python: Path) -> dict:
         run([str(python), "-m", "pip", "download", "--only-binary=:all:", "--requirement", str(requirements),
              "--dest", str(wheelhouse), "--extra-index-url", "https://download.pytorch.org/whl/cpu",
              "--platform", "win_amd64", "--python-version", "3.12", "--implementation", "cp", "--abi", "cp312"], cwd=root)
+        run([str(python), "-m", "pip", "download", "--only-binary=:all:", "--dest", str(wheelhouse),
+             "pip==25.0.1", "--platform", "win_amd64", "--python-version", "3.12", "--implementation", "cp", "--abi", "cp312"], cwd=root)
         run([str(python), "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheelhouse), GEEKBI], cwd=root)
 
     for name in ("playwright", "playwright-core"):
