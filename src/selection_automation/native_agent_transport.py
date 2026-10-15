@@ -104,8 +104,10 @@ def accio_run(root,job,prompt,timeout=900,model=None):
         if not usable:raise RuntimeError('AccioWork 没有可调用的本地 Agent')
         chosen=next((row for row in usable if any(word in str(row.get('name','')).lower() for word in ('accio','assistant','助手'))),usable[0])
         agent_id=chosen.get('id',chosen.get('_id'))
-        response=gateway_request(cfg,'/conversation',{'name':'选品工作台 · '+job.name[-24:],
-            'type':'direct','agentId':agent_id,'path':str(job),'metadata':{'selection_workbench':True}})
+        conversation_data={'name':'选品工作台 · '+job.name[-24:],
+            'type':'dm','from':'desktop','agentId':agent_id,'path':str(job),'metadata':{'selection_workbench':True}}
+        if model:conversation_data['sessionModel']=model
+        response=gateway_request(cfg,'/conversation',conversation_data)
         conversation=response.get('data',response)
         conversation_id=conversation.get('id',conversation.get('_id'))
         if not conversation_id:raise RuntimeError('AccioWork 未返回新任务标识')
@@ -203,13 +205,38 @@ def doubao_request(job,prompt):
     job=Path(job)
     if read(job/'transport-result.json',{}).get('type')=='vision_probe':
         return prompt+'\n若无法写文件，只回复图片中的六位数字。'
-    # The desktop chat cannot read local JSON paths or run the validator. Send
-    # the exact job contract inline; attach the contact sheet and bound originals.
-    sections=[prompt,'\n本次使用桌面聊天：无需访问文件路径或执行命令。以下为完整任务数据。附件顺序：对照图，然后为原图清单中的图片；对照图左为 Amazon，右为 TEMU。只依据附件实际可见内容填写事实。父程序保存回复并做严格校验。']
-    for name in ('manifest.jsonl','visual-facts-guide.json','image-inputs.json','validation_errors.json','reviews.jsonl'):
+    # Desktop chat needs the rules and bound facts, not three copies of the
+    # scraped page (fields, gate_text and raw_record). Keep every distinct
+    # structured specification and the complete category/output contract.
+    compact=lambda value:json.dumps(value,ensure_ascii=False,separators=(',',':'))
+    rows=[]
+    for line in (job/'manifest.jsonl').read_text(encoding='utf-8-sig').splitlines():
+        if not line.strip():continue
+        source=json.loads(line)
+        row={key:source[key] for key in ('asin','goods_id','vision_revision_key','amazon_title','temu_title') if key in source}
+        for side in ('amazon','temu'):
+            facts=source.get(side+'_product_facts') or {}
+            fields={};seen=set()
+            for key,value in facts.get('fields',{}).items():
+                if value in (None,'',[],{}):continue
+                signature=json.dumps(value,ensure_ascii=False,sort_keys=True)
+                if signature in seen or (key=='title' and value==row.get(side+'_title')):continue
+                seen.add(signature);fields[key]=value
+            if fields:row[side+'_specifications']=fields
+        rows.append(row)
+    context=read(job/'job.json',{})
+    sections=[
+        '判断附件中每对 Amazon/TEMU 商品是同款、类似款、不同款，证据不足用 UNKNOWN。只依据实际原图和本品类规则；不得用同类、用途相同、通用零件或营销文字证明同款。忽略背景、水印和道具。',
+        '附件顺序：对照图（左 Amazon、右 TEMU），然后依 image-inputs.json 顺序的双边原图。无需访问本地文件或执行命令。',
+        '只回复 JSONL，每对一条。保留 asin、goods_id、vision_revision_key；填写 review_status=SAME/SIMILAR/DIFFERENT/UNKNOWN、amazon_evidence、temu_evidence、一句话 reason 和完整 visual_facts。不得猜测或省略指南要求的字段，不打分。',
+        'reviewer='+compact(job.name)+'，model='+compact(context.get('model','agent-default'))+'。父程序保存并校验；已有有效结果须保留，只修正明确的无效行。',
+        '\nmanifest.jsonl:\n'+''.join(compact(row)+'\n' for row in rows)]
+    for name in ('visual-facts-guide.json','image-inputs.json','validation_errors.json','reviews.jsonl'):
         file=job/name
-        if file.is_file() and file.stat().st_size:sections.append('\n'+name+':\n'+file.read_text(encoding='utf-8-sig'))
-    sections.append('\n最后仅回复完整 JSONL 代码块，每对一条，包含原始身份字段、双方证据摘要、reason、reviewer、model、visual_facts。禁止省略字段或写省略号。')
+        if not file.is_file() or not file.stat().st_size:continue
+        content=file.read_text(encoding='utf-8-sig')
+        if name!='reviews.jsonl':content=compact(json.loads(content))
+        if content not in ('[]','{}'):sections.append('\n'+name+':\n'+content)
     return '\n'.join(sections)
 
 

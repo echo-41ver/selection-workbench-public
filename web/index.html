@@ -148,6 +148,7 @@ function renderAgentStatus(node,id){
  const agent=stage3DetectedAgents.find(a=>a.id===id),catalog=stage3AgentCatalogs[id];
  const modelChanged=agent&&stage3AgentModels[id]&&(agent.selected_model||'')!==stage3AgentModels[id];
  node.textContent=!id?'只会使用你选择的 Agent。':catalog&&catalog.status!=='ready'?catalog.message:modelChanged?'已选择模型，启动时会自动验证连接。':agent?.status||'等待识别';
+ if(agent)node.textContent+=` · 每组最多 ${agent.max_group_size||12} 对${id==='doubao'?'，单窗口同时处理 1 组':''}`;
 }
 function renderAgentControls(){
  if(!$('stage3-agent'))return;
@@ -323,7 +324,7 @@ function codexReviewPanel(data){
  const state=data?.stage3_control||{},p=state.progress||{},c=state.codex_review||{};
  const box=$('codex-review-controls');if(!box)return;box.hidden=data?.scope?.execution_mode==='collection'||!c.available&&!Number(p.codex_completed);
  if(box.hidden)return;
- const phase=c.phase||(p.pending_after_codex===0?'Codex看图复核已完成':'Codex看图复核结果已保存');
+ const phase=data?.stage3_provider?.mode==='local_agent'&&c.pool?.running?'本机 Agent 正在分析，分组状态见下方':c.phase||(p.pending_after_codex===0?'Codex看图复核已完成':'Codex看图复核结果已保存');
  $('codex-review-phase').textContent=[phase,c.counting?'首次读取复核状态中':c.refreshing?'复核快照刷新中':'',c.refresh_error?'状态读取失败：'+c.refresh_error:''].filter(Boolean).join(' · ');
  const count=value=>Number(value||0).toLocaleString();
  const counted=Number.isFinite(p.codex_completed);
@@ -333,7 +334,10 @@ function codexReviewPanel(data){
  if(poolLine.hidden){poolLine.textContent='';}
  else if(pool.running){
   const groups=count(pool.running_groups),pending=count(pool.pending_pairs),done=count(pool.completed_groups);
-  poolLine.textContent=`持续看图队列运行中 · ${count(pool.workers)} 路 ${pool.model||'Codex'} ${pool.effort||'high'} · 每组 ${count(pool.group_size||12)} 对 · 当前处理 ${groups} 组 · 已分配待处理 ${pending} 对 · 已完成 ${done} 组 · 队列空闲时自动接续下一组`;
+  const local=data?.stage3_provider?.mode==='local_agent';
+  const agents=(pool.agents||[]).map(a=>`${a.name||a.id} ${count(a.running)} 组运行中`).join('、');
+  const engine=local?(agents||'所选本机 Agent'):`${pool.model||'Codex'} ${pool.effort||'high'}`;
+  poolLine.textContent=`持续看图队列运行中 · ${count(pool.workers)} 路 · ${engine} · 同一 Amazon 分组，每组最多 ${count(pool.group_size||12)} 对${local?'（豆包每组 1 对）':''} · 当前处理 ${groups} 组 · 已分配待处理 ${pending} 对 · 已完成 ${done} 组 · 队列空闲时自动接续下一组`;
  }else{poolLine.textContent='持续看图队列已配置，但当前没有通过进程身份校验的运行进程。';}
  const publisherLine=$('codex-review-publisher'),publisher=c.publisher||{};
  if(publisher.phase||publisher.error){publisherLine.hidden=false;publisherLine.textContent=`Excel发布：${publisher.phase||'状态未知'}${publisher.error?' · '+publisher.error:''}`;}

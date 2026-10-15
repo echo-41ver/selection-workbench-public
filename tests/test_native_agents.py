@@ -63,6 +63,25 @@ def test_a_lost_native_response_is_observed_without_resending_paid_work(tmp_path
     assert (job/'vision-probe.txt').read_text()=='123456'
 
 
+def test_accio_new_jobs_belong_to_desktop_and_keep_the_selected_model(tmp_path,monkeypatch):
+    import websocket
+    native.save(tmp_path/'transport-result.json',{'type':'vision_probe','path':str(tmp_path/'vision-probe.txt')})
+    monkeypatch.setattr(native,'accio_gateway',lambda:{'url':'http://localhost:4097','authMode':'none'})
+    created=[];sent=[]
+    def gateway(config,path,body=None):
+        if path=='/agent':return {'data':[{'id':'owned-agent','name':'Accio assistant'}]}
+        assert path=='/conversation';created.append(body);return {'data':{'id':'owned-conversation'}}
+    monkeypatch.setattr(native,'gateway_request',gateway)
+    monkeypatch.setattr(native,'input_images',lambda job:[])
+    connection=SimpleNamespace(send=lambda text:sent.append(json.loads(text)),close=lambda:None,
+        recv=lambda:json.dumps({'method':'finished','payload':{'role':'assistant','conversationId':'owned-conversation','content':'123456'}}))
+    monkeypatch.setattr(websocket,'create_connection',lambda *a,**kw:connection)
+    native.accio_run(tmp_path,tmp_path,'probe',timeout=2,model='actual-native-model')
+    assert created[0]['from']=='desktop' and created[0]['type']=='dm'
+    assert created[0]['sessionModel']==sent[0]['params']['model']=='actual-native-model'
+    assert [message['method'] for message in sent]==['sendQuery']
+
+
 def test_desktop_response_with_other_product_ids_cannot_overwrite_job_results(tmp_path):
     expected={'asin':'A','goods_id':'T','vision_revision_key':'revision'}
     (tmp_path/'manifest.jsonl').write_text(json.dumps(expected)+'\n')
@@ -80,6 +99,25 @@ def test_doubao_receives_the_actual_contract_without_local_file_tools(tmp_path):
     request=native.doubao_request(tmp_path,'Analyze the images')
     assert manifest in request and 'actual_feature' in request and 'original.jpg' in request
     assert 'JSONL' in request
+
+
+def test_doubao_keeps_all_distinct_specs_and_rules_without_repeated_scrape_payload(tmp_path):
+    specs=[{'label':'Layout','value':'ISO 105 keys'},{'label':'Connection','value':'Bluetooth'}]
+    row={'asin':'A','goods_id':'T','vision_revision_key':'R','amazon_title':'Keyboard',
+        'amazon_product_facts':{'fields':{'title':'Keyboard','specifications':specs,'sku':specs,
+            'material':'Aluminium','size':None},'gate_text':'UNRELATED_RAW_TEXT'*2000,
+            'raw_record':{'session_metadata':'RAW_SESSION_DATA'*2000}}}
+    (tmp_path/'manifest.jsonl').write_text(json.dumps(row)+'\n')
+    guide={'product_scope':'Only standalone keyboards','visual_instructions':'Keep ISO/ANSI layout differences',
+        'identity_array_item_shapes':{'differences':{'kind_values':['IDENTITY','VARIANT','UNRESOLVED']}}}
+    native.save(tmp_path/'visual-facts-guide.json',guide)
+    request=native.doubao_request(tmp_path,'LOCAL_FILE_AND_SHELL_INSTRUCTIONS')
+    assert 'UNRELATED_RAW_TEXT' not in request and 'RAW_SESSION_DATA' not in request
+    assert 'LOCAL_FILE_AND_SHELL_INSTRUCTIONS' not in request
+    assert request.count('ISO 105 keys')==1 and 'Bluetooth' in request and 'Aluminium' in request
+    assert json.dumps(guide,ensure_ascii=False,separators=(',',':')) in request
+    assert '"asin":"A","goods_id":"T","vision_revision_key":"R"' in request
+    assert len(request)<2000
 
 
 def test_doubao_parses_model_jsonl_but_rejects_incomplete_identities(tmp_path):

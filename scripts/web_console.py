@@ -147,7 +147,9 @@ def codex_review_control(base):
         group_size = max(1, int(pool.get('group_size') or 12))
         model = str(pool.get('model') or 'Codex')
         effort = str(pool.get('effort') or 'high')
-        phase = (f"{pool.get('phase') or 'Codex持续并行看图'} · {workers}路并行 · 每组{group_size}对 · {model} {effort} · 连续接续候选")
+        agents=pool.get('agents') or []
+        engine='、'.join(str(agent.get('name') or agent.get('id')) for agent in agents) if agents else f'{model} {effort}'
+        phase = (f"{pool.get('phase') or '持续并行看图'} · {workers}路并行 · 每组最多{group_size}对 · {engine} · 连续接续候选")
     else:
         phase = ('Codex看图复核已完成' if complete else
                  'Codex看图复核进行中' if importer_running else 'Codex看图复核已暂停，已导入结果保留')
@@ -166,6 +168,7 @@ def codex_review_control(base):
                           'running_groups':pool.get('running'),
                           'pending_pairs':pool.get('pending'),
                           'completed_groups':pool.get('completed_groups'),
+                          'agents':pool.get('agents',[]),
                           'phase':pool.get('phase'), 'errors':pool.get('errors', []),
                           'updated_at':pool.get('updated_at')}
     return result
