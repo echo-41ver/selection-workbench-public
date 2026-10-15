@@ -64,6 +64,31 @@ def test_finished_invalid_reply_settles_original_instead_of_observing_forever(tm
     assert not native.result_exists(original)
 
 
+def test_failed_owned_observer_is_closed_without_closing_desktop_composer(monkeypatch):
+    closed=[];monkeypatch.setattr(native,'close_doubao_target',lambda root,identifier:closed.append(identifier))
+    native.release_doubao_observer('root',{'id':'OWNED'},{'state':'send_intended','target_id':'OWNED','owned_target':True})
+    native.release_doubao_observer('root',{'id':'MAIN'},{'state':'send_intended','target_id':'MAIN','owned_target':False})
+    native.release_doubao_observer('root',{'id':'OTHER'},{'target_id':'OWNED','owned_target':True})
+    assert closed==['OWNED']
+
+
+def test_observer_setup_timeout_cleans_created_view_before_worker_receives_it(tmp_path,monkeypatch):
+    import io
+    monkeypatch.setattr(native,'doubao_endpoint',lambda root:'http://127.0.0.1:9225')
+    class Opener:
+        def open(self,*args,**kwargs):return io.BytesIO(b'{"webSocketDebuggerUrl":"ws://127.0.0.1/browser"}')
+    class Browser:
+        def __init__(self,url):pass
+        def call(self,*args):return {'targetId':'OWNED_CREATED_VIEW'}
+        def close(self):pass
+    monkeypatch.setattr(native,'build_opener',lambda *args:Opener())
+    monkeypatch.setattr(native,'CDP',Browser)
+    monkeypatch.setattr(native,'wait_doubao_target',lambda *args:(_ for _ in ()).throw(TimeoutError('TEST_ONLY_SOCKET_TIMEOUT')))
+    closed=[];monkeypatch.setattr(native,'close_doubao_target',lambda root,identifier:closed.append(identifier))
+    with pytest.raises(TimeoutError):native.new_doubao_target(tmp_path,tmp_path/'job','chrome://doubao-chat/chat/12345')
+    assert closed==['OWNED_CREATED_VIEW']
+
+
 def test_compact_recovery_uses_original_codec_and_accepts_numeric_text_without_changing_facts(tmp_path,monkeypatch):
     from test_vision_group_compact import responses
     cat,_,raw=responses(2)

@@ -308,6 +308,16 @@ def new_doubao_target(root,job,url='doubao://doubao-chat/chat'):
     try:identifier=browser.call('Target.createTarget',{'url':url,'background':True})['targetId']
     finally:browser.close()
     save(Path(root)/'runtime/agent-config/doubao-targets'/f'{identifier}.json',{'job':str(job),'created_at':time.time()})
+    try:return wait_doubao_target(root,identifier,url)
+    except BaseException:
+        # A WebSocket timeout can escape before the worker receives a target.
+        # Release the created view here as well as on normal polling expiry.
+        try:close_doubao_target(root,identifier)
+        except Exception:pass
+        raise
+
+
+def wait_doubao_target(root,identifier,url):
     deadline=time.monotonic()+60;target=None
     while time.monotonic()<deadline:
         target=next((item for item in doubao_targets(root) if item['id']==identifier),None)
@@ -318,7 +328,6 @@ def new_doubao_target(root,job,url='doubao://doubao-chat/chat'):
             except (RuntimeError,TimeoutError):pass
             finally:page.close()
         time.sleep(.3)
-    close_doubao_target(root,identifier)
     raise RuntimeError('豆包独立观察页尚未就绪；原会话已保留，恢复观察不会重复发送')
 
 
@@ -332,6 +341,13 @@ def close_doubao_target(root,identifier):
         finally:browser.close()
         save(receipt,{**read(receipt,{}),'closed_at':time.time()})
     except (OSError,RuntimeError,TimeoutError):pass
+
+
+def release_doubao_observer(root,target,state):
+    # Closing an owned view does not cancel its saved remote conversation.
+    # Failed observers must not accumulate heavy, unresponsive WebUI pages.
+    if state.get('owned_target') and state.get('target_id')==target['id']:
+        close_doubao_target(root,target['id'])
 
 
 def doubao_request(job,prompt):
@@ -611,4 +627,4 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
         finally:
             if composer_held:composer.__exit__()
             cdp.close()
-            if not state or state.get('state')=='complete':close_doubao_target(root,target['id'])
+            release_doubao_observer(root,target,state)

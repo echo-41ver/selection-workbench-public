@@ -315,6 +315,36 @@ def stub_pool(tmp_path, monkeypatch):
     return worker
 
 
+def test_saved_reply_import_retries_in_place_without_new_model_attempt(tmp_path,monkeypatch):
+    worker=stub_pool(tmp_path,monkeypatch);worker.config['workers']=0
+    pair,_=fixture();folder=tmp_path/'saved';folder.mkdir()
+    task={'task_id':'saved','rows':[pair]}
+    job={'task_id':'saved','folder':str(folder),'identities':[list(pool.key(pair))],
+         'digest':'saved','state':'running','started_at':worker.started_at+1}
+    worker.jobs={'saved':job};worker.processes={'saved':SimpleNamespace(poll=lambda:1)}
+    monkeypatch.setattr(pool,'tasks',lambda _:iter([task]))
+    monkeypatch.setattr(pool,'import_job',lambda *args:(_ for _ in ()).throw(PermissionError('TEST_ONLY_LOCK')))
+    worker.tick()
+    assert worker.jobs['saved']['import_pending'] and not worker.attempts
+    assert worker.sample_failed==worker.sample_success==0
+    monkeypatch.setattr(pool,'import_job',lambda *args:(1,[]))
+    worker.tick()
+    assert not worker.jobs and worker.sample_success==1 and not worker.attempts
+
+
+def test_uncertain_native_transport_does_not_count_as_model_failure(tmp_path,monkeypatch):
+    worker=stub_pool(tmp_path,monkeypatch);worker.config['workers']=0
+    pair,_=fixture();folder=tmp_path/'observed';folder.mkdir()
+    pool.save(folder/'native-session.json',{'state':'send_intended','agent':'doubao','result_job':str(folder)})
+    job={'task_id':'observed','folder':str(folder),'identities':[list(pool.key(pair))],
+         'digest':'observed','state':'running','started_at':worker.started_at+1}
+    worker.jobs={'observed':job};worker.processes={'observed':SimpleNamespace(poll=lambda:1)}
+    monkeypatch.setattr(pool,'tasks',lambda _:iter([{'task_id':'observed','rows':[pair]}]))
+    monkeypatch.setattr(pool,'import_job',lambda *args:(0,[]))
+    worker.tick()
+    assert worker.sample_failed==worker.sample_success==0
+
+
 def test_finished_first_batch_automatically_prepares_and_starts_next(tmp_path,monkeypatch):
     worker=stub_pool(tmp_path,monkeypatch)
     queue=[];preparations=[]

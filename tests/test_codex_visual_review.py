@@ -77,6 +77,21 @@ def test_different_keeps_separate_source_no_api_metadata(tmp_path):
     assert load_reviews(tmp_path, {('A', 'T'): {'other_revision'}}) == {}
 
 
+def test_review_import_retries_transient_windows_reader_locks(tmp_path,monkeypatch):
+    from selection_automation import merge_temu_snapshots as atomic
+    original=atomic.os.replace;attempts=[]
+    def replace(source,target):
+        attempts.append(target)
+        if len(attempts)<3:raise PermissionError('TEST_ONLY_WINDOWS_READER_LOCK')
+        return original(source,target)
+    monkeypatch.setattr(atomic.os,'replace',replace)
+    monkeypatch.setattr(atomic.time,'sleep',lambda seconds:None)
+    pair,row=fixture();destination=tmp_path/'reviews.jsonl'
+    result=import_reviews(configured(),[pair],[row],destination,'lock-retry')
+    assert result['imported']==1 and len(attempts)==3
+    assert json.loads(destination.read_text('utf-8'))['review_status']=='DIFFERENT'
+
+
 def test_binary_completion_excludes_legacy_text_without_complete_visual_facts(tmp_path):
     category = configured()
     pair, row = fixture()
@@ -336,7 +351,9 @@ def test_simple_excel_uses_api_success_unless_complete_recheck_authorized(tmp_pa
     output=exporter.export(tmp_path/'category.json','layer123')
     book=load_workbook(output['固定查看副本']);sheet=book['选品结论']
     headers=[c.value for c in sheet[4]]
-    assert sheet.cell(5,headers.index('最终关系')+1).value==('同款' if with_api and not replace_api else '不同款')
+    assert sheet.cell(5,headers.index('Amazon ASIN')+1).value=='A'
+    assert sheet.cell(5,headers.index('同款数')+1).value==int(with_api and not replace_api)
+    assert sheet.cell(5,headers.index('不同款数')+1).value==int(not with_api or replace_api)
     if with_api and not replace_api:
         detail=book['同款商品明细'];cols=[c.value for c in detail[4]]
         assert detail.cell(5,cols.index('分析模型')+1).value=='existing-api'

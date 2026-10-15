@@ -571,7 +571,14 @@ class Pool:
                     continue
             try:
                 count, errors = import_job(self.category, task, Path(job['folder'])) if task else (0, ['task missing'])
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+            except OSError as exc:
+                # The reply is already saved. Retry this import in place, never
+                # launch or charge another model turn for a Windows file lock.
+                job['import_pending']=True
+                save(Path(job['folder'])/'job.json',job)
+                self.errors.append('结果已保存，本地文件暂时占用，正在重试入库：'+type(exc).__name__)
+                continue
+            except (ValueError, KeyError, TypeError) as exc:
                 count, errors = 0, [str(exc)]
             state = {**job, 'state':'complete' if count == len(job['identities']) else 'retry',
                      'imported':count, 'errors':errors, 'finished_at':time.time()}
@@ -592,7 +599,9 @@ class Pool:
                     errors.append(f"看图组只写入{count}/{len(job['identities'])}条，将补齐缺失行")
                 save(self.folder/'attempts.json',self.attempts)
             save(Path(job['folder']) / 'job.json', state)
-            if job.get('started_at',0)>=self.started_at and not job.get('observation_only'):
+            native=read(Path(job['folder'])/'native-session.json',{})
+            transport_pending=bool(native and native.get('state')!='complete')
+            if job.get('started_at',0)>=self.started_at and not job.get('observation_only') and not transport_pending:
                 self.sample_success+=count
                 self.sample_failed+=len(job['identities'])-count
             self.errors.extend(errors)

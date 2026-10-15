@@ -2,7 +2,6 @@
 from __future__ import annotations
 from copy import deepcopy
 import json
-import os
 from pathlib import Path
 import re
 import time
@@ -266,13 +265,7 @@ def import_reviews(category, manifest, rows, destination, task_id):
         if content(prior.get(key)) != content(value):
             prior[key] = {**value, 'classified_at': observed}
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f'.{destination.name}.{os.getpid()}.tmp')
-    try:
-        with temporary.open('w', encoding='utf-8', newline='\n') as stream:
-            for row in prior.values():
-                stream.write(json.dumps(row, ensure_ascii=False) + '\n')
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+    from .merge_temu_snapshots import atomic_write
+    atomic_write(destination,''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in prior.values()))
     return {'imported': len(normalized), 'total_task_reviews': len(prior), 'destination': str(destination),
             'source': SOURCE, 'api_requests_sent': 0, 'changed': True}
