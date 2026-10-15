@@ -14,6 +14,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_DOCS = {"docs/DEPLOYMENT_GUIDE.md", "docs/DELIVERY_BASELINE.md", "docs/COLLECTION_INTERFACE.md"}
 PRIVATE_PARTS = {".git", ".githooks", ".venv", "node_modules", "runtime", "runs", "dist", "work", "logs", "__pycache__", ".deployment-backup", ".pytest_cache"}
+ASSET_ROOT = "deployment-assets"
 SECRET_TOKEN = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b")
 AUTH_URL = re.compile(r"https?://[^\s/:\"']+:[^\s/@\"']+@[^\s\"'<>]+")
 SECRET_FIELDS = {"password", "proxy_password", "api_key", "adspower_api_key", "deepseek_api_key", "access_token", "client_secret"}
@@ -21,7 +22,8 @@ SECRET_FIELDS = {"password", "proxy_password", "api_key", "adspower_api_key", "d
 
 def included(name: str) -> bool:
     path = PurePosixPath(name)
-    if path.is_absolute() or ".." in path.parts or any(p.lower() in PRIVATE_PARTS for p in path.parts):
+    is_bundled_asset = path.parts and path.parts[0].lower() == ASSET_ROOT.lower()
+    if path.is_absolute() or ".." in path.parts or (not is_bundled_asset and any(p.lower() in PRIVATE_PARTS for p in path.parts)):
         return False
     if any(p.lower().startswith(".env") for p in path.parts):
         return False
@@ -86,6 +88,21 @@ def committed_files(root: Path, ref="HEAD"):
     return commit, files
 
 
+def bundled_assets(root: Path) -> dict[str, bytes]:
+    """Add generated, non-secret installers assets to both delivery archives."""
+    source = root / ASSET_ROOT
+    if not source.is_dir():
+        return {}
+    result = {}
+    for path in source.rglob('*'):
+        if path.is_file():
+            relative = path.relative_to(source).as_posix()
+            if relative.lower().endswith(('.credential.xml', '.dpapi')):
+                raise RuntimeError(f'部署资产禁止包含配置或密钥文件: {relative}')
+            result[f'{ASSET_ROOT}/{relative}'] = path.read_bytes()
+    return result
+
+
 def write_zip(path: Path, files: dict[str, bytes]):
     temporary = path.with_suffix(".zip.tmp")
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -104,9 +121,11 @@ def audit_history_paths(root: Path):
 
 def build(root: Path, dist: Path, ref="HEAD"):
     commit, files = committed_files(root, ref)
+    assets = bundled_assets(root)
+    files.update(assets)
     required = {"deploy.cmd", "install.ps1", "start-web.cmd", "web/index.html",
                 "scripts/verify_deployment.py", "scripts/package_company_config.ps1",
-                "scripts/deployment_guard.ps1", "config/company.example.json"}
+                "scripts/deployment_guard.ps1", "scripts/prepare_deployment_assets.py", "config/company.example.json"}
     missing = sorted(required - files.keys())
     if missing:
         raise RuntimeError("部署源缺少文件: " + ", ".join(missing))
@@ -118,6 +137,7 @@ def build(root: Path, dist: Path, ref="HEAD"):
     names = {"public": f"选品工作台-{commit[:7]}-GitHub展示版.zip",
              "internal": f"选品工作台-{commit[:7]}-内部运行版.zip"}
     report = {"commit": commit, "built_at_utc": now, "contains_company_credentials": False,
+              "bundled_assets": {"present": bool(assets), "files": len(assets), "bytes": sum(map(len, assets.values()))},
               "baseline": "11194c8", "matching_policy": "category-identity-policy-v2-effects",
               "matching_source_commit": "01e86d8",
               "disabled_experiments": ["four-stage-verification", "quadrants-overlap-v1", "default-reference-examples", "luna-production-switch"],

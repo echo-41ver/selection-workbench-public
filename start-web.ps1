@@ -12,6 +12,7 @@ $appAliases = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
 $env:PATH = [Environment]::GetEnvironmentVariable('PATH','Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH','User') + ';' + $appAliases + ';' + $env:PATH
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
+$env:TORCH_HOME = Join-Path $root 'runtime\models\torch'
 $python = Join-Path $root '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Python 环境缺失；请先运行 deploy.cmd' }
 & $python (Join-Path $root 'scripts\ensure_node_runtime.py')

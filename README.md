@@ -19,7 +19,7 @@ Windows 本地自动化项目：采集 Amazon Best Sellers 商品与 TEMU 搜索
 
 ## 工程与验证
 
-Python 3.12、Node.js 20+、PowerShell 7、Playwright、SQLite、ResNet50、OpenAI 兼容视觉 API。依赖版本保存在 requirements.lock.txt 与 package-lock.json。
+Python 3.12.10、Node.js 24.19.0、PowerShell 7.6.5、Playwright、SQLite、ResNet50、OpenAI 兼容视觉 API。Python 和 Node 依赖精确锁定；Windows x64 依赖可由 scripts/prepare_deployment_assets.py 构建为安装包随附资产。
 
 离线测试：python -m pytest -q；Node 测试：node --test tests/*.test.mjs。安装准备检查：install.ps1 -PreflightOnly。
 

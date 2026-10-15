@@ -57,7 +57,7 @@ function Ensure-WinGet {
     if (-not $winget) { throw 'WinGet 自动准备后仍找不到可执行文件，安装已停止。' }
     return $winget
 }
-function Install-Package([string]$Id) {
+function Install-Package([string]$Id, [string]$Version) {
     if ($Id -notin @('Python.Python.3.12','OpenJS.NodeJS.LTS','Microsoft.PowerShell','Microsoft.VCRedist.2015+.x64','ClashVergeRev.ClashVergeRev')) { throw '安装包不在允许清单。' }
     $winget = Ensure-WinGet
     if (-not $script:WinGetSourcePrepared) {
@@ -65,13 +65,55 @@ function Install-Package([string]$Id) {
         Checked $winget @('source','update','--name','winget','--disable-interactivity')
         $script:WinGetSourcePrepared = $true
     }
-    Checked $winget @('install','--id',$Id,'--exact','--source','winget','--silent','--accept-package-agreements','--accept-source-agreements','--disable-interactivity')
+    $arguments = @('install','--id',$Id,'--exact','--source','winget','--silent','--accept-package-agreements','--accept-source-agreements','--disable-interactivity')
+    if ($Version) { $arguments += @('--version',$Version) }
+    Checked $winget $arguments
     Refresh-Path
 }
-function Has-Python312 {
-    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { return $false }
-    & py -3.12 -c 'import sys; sys.exit(sys.version_info[:2] != (3,12))' 2>$null
-    return $LASTEXITCODE -eq 0
+function Install-FixedRuntime([ValidateSet('python','node','powershell')][string]$Runtime) {
+    $downloads = Join-Path $root 'runtime\downloads'
+    New-Item -ItemType Directory -Force -Path $downloads | Out-Null
+    switch ($Runtime) {
+        'python' {
+            $url = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe'
+            $installer = Join-Path $downloads 'python-3.12.10-amd64.exe'
+            Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+            $signature = Get-AuthenticodeSignature -LiteralPath $installer
+            if ($signature.Status -ne 'Valid') { throw 'Python 3.12.10 官方安装器签名无效。' }
+            $target = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312'
+            $process = Start-Process -FilePath $installer -ArgumentList @('/quiet','InstallAllUsers=0',"TargetDir=$target",'PrependPath=0','Include_launcher=1','Include_pip=1','Include_test=0','SimpleInstall=1') -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -notin @(0,3010)) { throw "Python 安装失败：$($process.ExitCode)" }
+        }
+        'node' {
+            $installer = Join-Path $downloads 'node-v24.19.0-x64.msi'
+            Invoke-WebRequest -Uri 'https://nodejs.org/dist/v24.19.0/node-v24.19.0-x64.msi' -OutFile $installer -UseBasicParsing
+            $signature = Get-AuthenticodeSignature -LiteralPath $installer
+            if ($signature.Status -ne 'Valid') { throw 'Node.js 24.19.0 官方安装器签名无效。' }
+            $process = Start-Process -FilePath 'msiexec.exe' -Verb RunAs -ArgumentList @('/i',('"' + $installer + '"'),'/qn','/norestart') -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -notin @(0,3010)) { throw "Node.js 安装失败：$($process.ExitCode)" }
+        }
+        'powershell' {
+            $installer = Join-Path $downloads 'PowerShell-7.6.5-win-x64.msi'
+            Invoke-WebRequest -Uri 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.5/PowerShell-7.6.5-win-x64.msi' -OutFile $installer -UseBasicParsing
+            $signature = Get-AuthenticodeSignature -LiteralPath $installer
+            if ($signature.Status -ne 'Valid') { throw 'PowerShell 7.6.5 官方安装器签名无效。' }
+            $process = Start-Process -FilePath 'msiexec.exe' -Verb RunAs -ArgumentList @('/i',('"' + $installer + '"'),'/qn','/norestart') -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -notin @(0,3010)) { throw "PowerShell 安装失败：$($process.ExitCode)" }
+        }
+    }
+    Refresh-Path
+}
+function Find-Python312 {
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { return $null }
+    foreach ($line in @(& py -0p 2>$null)) {
+        if ($line -match '([A-Za-z]:\\[^\r\n]*\\python\.exe)\s*$') {
+            $candidate = $Matches[1]
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+            & $candidate -c 'import sys; sys.exit(sys.version_info[:3] != (3,12,10))' 2>$null
+            if ($LASTEXITCODE -eq 0) { return $candidate }
+        }
+    }
+    return $null
 }
 function Find-NodeToolchain {
     $candidates = @()
@@ -88,7 +130,7 @@ function Find-NodeToolchain {
         if (-not ((Test-Path -LiteralPath $node -PathType Leaf) -and (Test-Path -LiteralPath $npm -PathType Leaf) -and (Test-Path -LiteralPath $npx -PathType Leaf))) { continue }
         try {
             $nodeVersion = & $node --version 2>$null
-            if ($LASTEXITCODE -eq 0 -and ([version]$nodeVersion.TrimStart('v')).Major -ge 20) {
+            if ($LASTEXITCODE -eq 0 -and $nodeVersion.Trim() -eq 'v24.19.0') {
                 return [pscustomobject]@{ Directory = $directory; Node = $node; Npm = $npm; Npx = $npx }
             }
         } catch { continue }
@@ -124,7 +166,7 @@ function Has-SystemPowerShell7 {
     foreach ($candidate in @($candidates | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
         $version = Get-PowerShellVersion $candidate
-        if ($version -and $version.Major -eq 7) { return $true }
+        if ($version -and $version.ToString() -eq '7.6.5') { return $true }
     }
     return $false
 }
@@ -182,26 +224,71 @@ try {
 Refresh-Path
 if (-not $SkipProxyClient) { $stage = '检测本机网络与准备代理客户端'; Ensure-NetworkClient }
 $stage = '准备系统工具'
-if (-not (Has-Python312)) { Install-Package 'Python.Python.3.12' }
-if (-not (Has-Node20)) { Install-Package 'OpenJS.NodeJS.LTS' }
-if (-not (Has-SystemPowerShell7)) { Install-Package 'Microsoft.PowerShell' }
+if (-not (Find-Python312)) { Install-FixedRuntime 'python' }
+if (-not (Has-Node20)) { Install-FixedRuntime 'node' }
+if (-not (Has-SystemPowerShell7)) { Install-FixedRuntime 'powershell' }
 if (-not (Has-VCRuntime)) { Install-Package 'Microsoft.VCRedist.2015+.x64' }
-if (-not (Has-Python312) -or -not (Has-Node20) -or -not (Has-SystemPowerShell7) -or -not (Has-VCRuntime)) { throw 'Python 3.12、Node 20+、PowerShell 7 或 VC++ 运行库安装后仍不可用，请按安装器提示处理后重试 deploy.cmd。' }
+if (-not (Find-Python312) -or -not (Has-Node20) -or -not (Has-SystemPowerShell7) -or -not (Has-VCRuntime)) { throw '固定版本 Python 3.12.10、Node.js 24.19.0、PowerShell 7.6.5 或 VC++ 运行库安装后仍不可用，请按安装器提示处理后重试 deploy.cmd。' }
 $toolchain = Find-NodeToolchain
 $env:PATH = $toolchain.Directory + ';' + $env:PATH
 $stage = '备份项目环境'
 $transaction = Start-ProjectDeployment -Root $root -ImportCompany ([bool]$CompanyConfig)
 $stage = '安装项目依赖'
 $python = Join-Path $root '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $python)) { Checked 'py' @('-3.12','-m','venv',(Join-Path $root '.venv')) }
-Checked $python @('-m','pip','install','--upgrade','pip')
-Checked $python @('-m','pip','install','-r',(Join-Path $root 'requirements.lock.txt'),'--extra-index-url','https://download.pytorch.org/whl/cpu')
-Checked $python @('-m','pip','install','--no-deps','-e',"${root}[test]")
+if (-not (Test-Path -LiteralPath $python)) { Checked (Find-Python312) @('-m','venv',(Join-Path $root '.venv')) }
+$assetRoot = Join-Path $root 'runtime\deployment-assets'
+$wheelhouse = Join-Path $assetRoot 'wheelhouse'
+$env:TORCH_HOME = Join-Path $root 'runtime\models\torch'
+if (Test-Path -LiteralPath (Join-Path $assetRoot 'manifest.json') -PathType Leaf) {
+    $assetManifest = Get-Content -LiteralPath (Join-Path $assetRoot 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($entry in $assetManifest.files.PSObject.Properties) {
+        $assetPath = Join-Path $assetRoot ($entry.Name.Replace('/', '\'))
+        if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "部署依赖资产缺失：$($entry.Name)" }
+        if ((Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value.sha256) { throw "部署依赖资产校验失败：$($entry.Name)" }
+    }
+}
+if (Test-Path -LiteralPath $wheelhouse -PathType Container) {
+    $requirements = Get-Content -LiteralPath (Join-Path $root 'requirements.lock.txt') -Raw -Encoding UTF8
+    $githubRequirement = 'geekbi-temu-research-mcp @ https://github.com/geekbi/geekbi-temu-research-mcp/archive/d3536f77db76b70ae9c6e69bf499f47ad972850e.zip'
+    if (-not $requirements.Contains($githubRequirement)) { throw '离线依赖清单中的极鲸云客户端版本不符合部署源。' }
+    $offlineRequirements = $requirements.Replace($githubRequirement, 'geekbi-temu-research-mcp==0.1.0')
+    $offlineLock = Join-Path $env:TEMP ('selection-workbench-requirements-' + [guid]::NewGuid().ToString('N') + '.txt')
+    try {
+        [IO.File]::WriteAllText($offlineLock, $offlineRequirements, [Text.UTF8Encoding]::new($false))
+        Checked $python @('-m','pip','install','--no-index','--find-links',$wheelhouse,'--upgrade','pip==25.0.1')
+        Checked $python @('-m','pip','install','--no-index','--find-links',$wheelhouse,'-r',$offlineLock)
+        Checked $python @('-m','pip','install','--no-index','--find-links',$wheelhouse,'--no-build-isolation','--no-deps','-e',"${root}[test]")
+    } finally {
+        if (Test-Path -LiteralPath $offlineLock -PathType Leaf) { Remove-Item -LiteralPath $offlineLock }
+    }
+} else {
+    Checked $python @('-m','pip','install','--upgrade','pip==25.0.1')
+    Checked $python @('-m','pip','install','-r',(Join-Path $root 'requirements.lock.txt'),'--extra-index-url','https://download.pytorch.org/whl/cpu')
+    Checked $python @('-m','pip','install','--no-deps','-e',"${root}[test]")
+}
 Checked $python @('-c','import torch, torchvision, PIL, psutil, openpyxl, xlsxwriter; print("Python dependencies loaded")')
-Checked $toolchain.Npm @('ci')
+$bundledModules = Join-Path $assetRoot 'node_modules'
+if (Test-Path -LiteralPath (Join-Path $bundledModules 'playwright\package.json') -PathType Leaf) {
+    $targetModules = Join-Path $root 'node_modules'
+    New-Item -ItemType Directory -Force -Path $targetModules | Out-Null
+    foreach ($module in @('playwright','playwright-core')) {
+        $sourceModule = Join-Path $bundledModules $module
+        if (-not (Test-Path -LiteralPath (Join-Path $sourceModule 'package.json') -PathType Leaf)) { throw "随包 Node 模块缺失：$module" }
+        Copy-Item -LiteralPath $sourceModule -Destination $targetModules -Recurse -Force
+    }
+} else {
+    Checked $toolchain.Npm @('ci')
+}
 Checked $toolchain.Npx @('playwright','install','chromium')
 Checked $python @((Join-Path $root 'scripts\ensure_node_runtime.py'))
-if (-not $SkipModelDownload) { Checked $python @('-c','from torchvision.models import resnet50, ResNet50_Weights; resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)') }
+$modelAsset = Join-Path $assetRoot 'models\resnet50-11ad3fa6.pth'
+if (Test-Path -LiteralPath $modelAsset -PathType Leaf) {
+    $modelCache = Join-Path $env:TORCH_HOME 'hub\checkpoints'
+    New-Item -ItemType Directory -Force -Path $modelCache | Out-Null
+    Copy-Item -LiteralPath $modelAsset -Destination (Join-Path $modelCache 'resnet50-11ad3fa6.pth') -Force
+} elseif (-not $SkipModelDownload) {
+    Checked $python @('-c','from torchvision.models import resnet50, ResNet50_Weights; resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)')
+}
 $stage = '准备 AdsPower'
 if (-not $SkipAdsPower) {
     $detectAdsPower = @('scripts/company_setup.py', '--find-adspower')
