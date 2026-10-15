@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import company_setup
 import verify_deployment
 from selection_automation import secrets
+from selection_automation import adspower_kernel, network_readiness
 
 
 def test_fresh_checkout_does_not_claim_workflow_ready(tmp_path):
@@ -24,6 +25,8 @@ def test_company_key_is_checked_before_workflow_is_ready(tmp_path, monkeypatch):
     monkeypatch.setattr(company_setup, "find_adspower_executable", lambda company: "AdsPower.exe")
     checked = []
     monkeypatch.setattr(company_setup, "ensure_adspower_api", lambda company: checked.append(True))
+    monkeypatch.setattr(network_readiness, "select_transport", lambda company: ({}, {"status": "READY", "message": "fixture route"}))
+    monkeypatch.setattr(adspower_kernel, "inventory", lambda *args: {"installed": True})
     company = {"adspower_api_key": "REPLACE_WITH_COMPANY_ADSPOWER_API_KEY",
                "proxy": {"host": "proxy.example", "port": 1234, "username": "user_session-one", "password": "secret"}}
     monkeypatch.setattr(secrets, "load", lambda path: company)
@@ -32,5 +35,7 @@ def test_company_key_is_checked_before_workflow_is_ready(tmp_path, monkeypatch):
     assert not checked
     company["adspower_api_key"] = "fixture-key"
     valid = verify_deployment.inspect(tmp_path)
-    assert valid == {"ready": True, "missing": []}
+    assert valid["ready"] is True
+    assert valid["missing"] == []
+    assert valid["network_preflight"] == {"status": "READY", "message": "fixture route", "route_applied": False}
     assert checked == [True]

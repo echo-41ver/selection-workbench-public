@@ -9,7 +9,8 @@ def fixture():
     return {'schema_version':SCHEMA,'adspower_api_key':'TEST_ONLY_ADSPOWER','proxy':{'host':'proxy.example','port':5959,'username':'TEST_ONLY_USER_session-fixture','password':'TEST_ONLY_PASSWORD'},'deepseek':{'key':'TEST_ONLY_DEEPSEEK','base_url':'https://api.deepseek.com','model':'deepseek-flash'},'unrelated_secret':'MUST_NOT_EXPORT','proxy_extra':{'token':'MUST_NOT_EXPORT'}}
 def test_whitelist_complete_schema_and_process_only_settings():
     value=normalize(fixture(),require_model=True)
-    assert set(value)=={'schema_version','adspower_api_key','adspower_api_url','proxy','preproxy_candidates','deepseek'}
+    assert set(value)=={'schema_version','adspower_api_key','adspower_api_url','proxy_architecture','proxy','preproxy_candidates','deepseek'}
+    assert value['proxy_architecture']=='LOCAL_CHAIN_PROXYSHARE'
     assert 'MUST_NOT_EXPORT' not in json.dumps(value)
     env={'UNRELATED':'unchanged'};apply_model_settings(value['deepseek'],env)
     assert env['DEEPSEEK_API_KEY']=='TEST_ONLY_DEEPSEEK' and env['OPENAI_BASE_URL']=='https://api.deepseek.com' and env['OPENAI_VISION_MODEL']=='deepseek-flash' and env['UNRELATED']=='unchanged'

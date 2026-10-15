@@ -81,7 +81,7 @@ function Install-FixedRuntime([ValidateSet('python','node','powershell')][string
             $signature = Get-AuthenticodeSignature -LiteralPath $installer
             if ($signature.Status -ne 'Valid') { throw 'Python 3.12.10 官方安装器签名无效。' }
             $target = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312'
-            $process = Start-Process -FilePath $installer -ArgumentList @('/quiet','InstallAllUsers=0',"TargetDir=$target",'PrependPath=0','Include_launcher=1','Include_pip=1','Include_test=0','SimpleInstall=1') -WindowStyle Hidden -Wait -PassThru
+            $process = Start-Process -FilePath $installer -ArgumentList @('/quiet','InstallAllUsers=0',('TargetDir="{0}"' -f $target),'PrependPath=0','Include_launcher=1','Include_pip=1','Include_test=0','SimpleInstall=1') -WindowStyle Hidden -Wait -PassThru
             if ($process.ExitCode -notin @(0,3010)) { throw "Python 安装失败：$($process.ExitCode)" }
         }
         'node' {
@@ -236,7 +236,7 @@ $transaction = Start-ProjectDeployment -Root $root -ImportCompany ([bool]$Compan
 $stage = '安装项目依赖'
 $python = Join-Path $root '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $python)) { Checked (Find-Python312) @('-m','venv',(Join-Path $root '.venv')) }
-$assetRoot = Join-Path $root 'runtime\deployment-assets'
+$assetRoot = Join-Path $root 'deployment-assets'
 $wheelhouse = Join-Path $assetRoot 'wheelhouse'
 $env:TORCH_HOME = Join-Path $root 'runtime\models\torch'
 if (Test-Path -LiteralPath (Join-Path $assetRoot 'manifest.json') -PathType Leaf) {

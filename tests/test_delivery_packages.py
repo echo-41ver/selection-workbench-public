@@ -153,7 +153,7 @@ function Confirm-CompanyImport {
  [IO.File]::WriteAllText((Join-Path $Root 'TEST_ONLY_CONFIRM_CALLED'),'called')
  if ($env:TEST_MODE -eq 'cancel') { throw 'TEST_ONLY_CANCELLED' }
 }
-function Has-Python312 { return $true }
+function Find-Python312 { return 'TEST_ONLY_PYTHON' }
 function Has-Node20 { return $true }
 function Has-SystemPowerShell7 { return $true }
 function Has-VCRuntime { return $true }
@@ -162,7 +162,7 @@ function Find-NodeToolchain { return [pscustomobject]@{Directory=$env:TEMP;Npm='
 function Get-CimInstance { return @() }
 function Checked {
  param([string]$Exe,[string[]]$Arguments)
- if ($Exe -eq 'py') {
+ if ($Exe -eq 'TEST_ONLY_PYTHON') {
   $directory=Join-Path $root '.venv\Scripts'
   New-Item -ItemType Directory -Path $directory -Force | Out-Null
   [IO.File]::WriteAllText((Join-Path $directory 'python.exe'),'TEST_ONLY_NEW_ENV')
