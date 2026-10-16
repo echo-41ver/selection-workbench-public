@@ -398,10 +398,13 @@ def alive_job(row):
     import psutil
     try:
         process = psutil.Process(row['pid'])
-        return (process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        owned=(process.is_running() and process.status() != psutil.STATUS_ZOMBIE
                 and abs(process.create_time() - row['created']) < .01
                 and row.get('command_marker',str(Path(row['folder']) / 'summary.txt')) in process.cmdline())
-    except (KeyError, TypeError, ValueError, psutil.Error):
+        if not owned:return False
+        from restart_web import native_process_active
+        return native_process_active(row['pid'])
+    except (KeyError, TypeError, ValueError, OSError, psutil.Error):
         return False
 
 
@@ -436,6 +439,18 @@ def stop_owned_job(job):
         if (abs(process.create_time() - job['created']) >= .01
                 or job.get('command_marker',str(Path(job['folder']) / 'summary.txt')) not in process.cmdline()):
             return False
+        # Windows venv launchers have a second Python process. Stop only the
+        # descendants executing this exact native job, never the desktop app.
+        if job.get('agent_id') in {'doubao','acciowork','workbuddy'}:
+            children=[]
+            for child in process.children(recursive=True):
+                args=child.cmdline()
+                if (str(Path(job['folder'])) in args
+                        and any(Path(arg).name=='run_desktop_agent.py' for arg in args)):
+                    children.append(child)
+            for child in reversed(children):child.terminate()
+            _,remaining=psutil.wait_procs(children,timeout=5)
+            for child in remaining:child.kill()
         process.terminate()
         try:
             process.wait(timeout=10)
@@ -470,6 +485,48 @@ class Pool:
             self.completed_groups += row.get('state') == 'complete'
             if row.get('state') == 'running':
                 self.jobs[path.parent.name] = row
+
+    def recover_native_reader(self,job):
+        """Recover an unresponsive observer in place; never submit a model turn."""
+        from selection_automation.stage3_runtime import read_control
+        control=read_control(self.base/'stage123');agent=job.get('agent_id')
+        if (control.get('paused') or control.get('switch_pending')
+                or agent in control.get('paused_agents',[]) or agent in control.get('agent_blocks',{})
+                or not self.config.get('enabled',True)):
+            return
+        folder=Path(job['folder']);receipt=read(folder/'native-session.json',{})
+        progress=read(folder/'native-progress.json',{});now=time.time()
+        # A live heartbeat is distinct from real model progress. Legacy Doubao
+        # readers with no heartbeat are upgraded only after they become silent.
+        heartbeat=max(progress.get('last_poll_at',0),job.get('last_recovery_at',0),job.get('started_at',now))
+        last_progress=max(progress.get('last_progress_at',0),job.get('last_recovery_at',0),job.get('started_at',now))
+        stale=now-last_progress>=int(self.config.get('native_stall_seconds',900))
+        silent=agent=='doubao' and now-heartbeat>=int(self.config.get('native_heartbeat_seconds',120))
+        if not (stale or silent):return
+        job['health']='读取无进展，正在检测原会话'
+        confirmed=(agent=='doubao' and re.search(r'/chat/\d+$',receipt.get('url','')) and receipt.get('marker')
+                   or agent=='acciowork' and receipt.get('conversation_id') and receipt.get('agent_id'))
+        if not confirmed or receipt.get('state')=='complete':
+            job['health']='发送状态待确认，保留原组且不重发';return
+        if job.get('automatic_observation_restarts',0)>=int(self.config.get('max_observation_failures',3)):
+            job['health']='原会话读取恢复已达次数限制，保留结果且不重发';return
+        backend=next((a for a in self.config.get('agent_backends',[]) if a['id']==agent),None)
+        if not backend:return
+        from selection_automation.local_agents import analysis_command
+        cli=analysis_command(backend,folder,job.get('model'),self.config.get('effort','medium'))+['--observe-only']
+        if not stop_owned_job(job):
+            job['health']='读取进程身份不匹配，保留原组且不重发';return
+        import psutil
+        # Persist before starting, so a failed spawn cannot reset the bound.
+        job.update(automatic_observation_restarts=job.get('automatic_observation_restarts',0)+1,
+                   last_recovery_at=now,observation_only=True,health='已自动恢复原会话读取，未重新发送')
+        save(folder/'job.json',job)
+        with (folder/'events.jsonl').open('ab') as stdout,(folder/'stderr.log').open('ab') as stderr:
+            child=subprocess.Popen(cli,cwd=folder,env=job_environment(self.config),stdin=subprocess.DEVNULL,
+                stdout=stdout,stderr=stderr,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+        job.update(pid=child.pid,created=psutil.Process(child.pid).create_time())
+        self.processes[folder.name]=child;save(folder/'job.json',job)
+        self.errors.append('检测到原会话读取卡住，已自动恢复读取；没有重复发送模型请求')
 
     def launch(self, task, rows):
         import psutil
@@ -550,6 +607,7 @@ class Pool:
             cli = analysis_command(agent,job,model if model!='agent-default' else None,self.config.get('effort','medium'))
         else:
             cli = command(codex_executable(self.config),job,model,self.config.get('effort','medium'))
+        if native_pending:cli+=['--observe-only']
         command_marker = str(job/'summary.txt') if agent_id=='codex' else str(job/'contacts/contact-001.jpg') if agent_id=='opencode' else str(job)
         with (job / 'events.jsonl').open('ab') as stdout, (job / 'stderr.log').open('ab') as stderr:
             child = subprocess.Popen(cli,
@@ -579,12 +637,16 @@ class Pool:
         for name, job in list(self.jobs.items()):
             process = self.processes.get(name)
             alive = process.poll() is None if process is not None else alive_job(job)
+            if alive and process is not None and job.get('pid'):
+                alive=alive_job(job)
             task = current.get(job.get('task_id'))
             if job.get('member_tasks'):
                 members=[{**current[task_id],'assigned_identities':identities} for task_id,identities in job['member_tasks'].items() if task_id in current]
                 task={'task_id':job['task_id'],'members':members} if len(members)==len(job['member_tasks']) else None
             if alive:
-                if job.get('agent_id') in {'acciowork','doubao','workbuddy'}:continue
+                if job.get('agent_id') in {'acciowork','doubao','workbuddy'} and not job_reviews_ready(self.category,job):
+                    self.recover_native_reader(job)
+                    continue
                 if not task or not job_reviews_ready(self.category, job) or not stop_owned_job(job):
                     continue
             try:
@@ -768,7 +830,8 @@ class Pool:
         ensure_publisher(self.category_path, root=ROOT)
         latest_result=max((p.stat().st_mtime for p in (self.base/'stage123/codex_reviews').glob('*.jsonl')),default=0)
         blocked_messages=[b.get('message','Agent 需要人工处理') for aid,b in blocks.items() if aid in {a['id'] for a in self.config.get('agent_backends',[])}]
-        return {'phase':('；'.join(blocked_messages) if blocked_messages and workers==0 else '已暂停派发，正在保存已发送的结果' if workers==0 and self.jobs else '已暂停，结果和断点已保存' if workers==0 else '正在回收已发送的结果' if self.jobs and all(j.get('observation_only') for j in self.jobs.values()) else '并行看图并自动接续下一组' if self.jobs else
+        health=[j.get('health') for j in self.jobs.values() if j.get('health')]
+        return {'phase':('；'.join(blocked_messages) if blocked_messages and workers==0 else '已暂停派发，正在保存已发送的结果' if workers==0 and self.jobs else '已暂停，结果和断点已保存' if workers==0 else '；'.join(dict.fromkeys(health)) if health else '正在回收已发送的结果' if self.jobs and all(j.get('observation_only') for j in self.jobs.values()) else '并行看图并自动接续下一组' if self.jobs else
                          '有任务需重试或人工处理，已保存结果保留' if self.errors or retry_exhausted else
                          f'有{held_pending}对发送状态待确认，已隔离且不重发；其他结果保留' if held_pending else
                          '等待已有任务或冷却后自动补齐，结果保留' if waiting or external_pending else
@@ -781,6 +844,7 @@ class Pool:
                 'service_tier':'default', 'completed_groups':self.completed_groups,
                 'jobs':list(self.jobs.values()), 'errors':self.errors, 'api_requests_sent':0,
                 'last_result_at':latest_result or None,'seconds_since_result':round(time.time()-latest_result) if latest_result else None,
+                'automatic_observation_restarts':sum(j.get('automatic_observation_restarts',0) for j in self.jobs.values()),
                 'action_required':bool(blocked_messages),'agent_blocks':blocks,
                 'updated_at':time.time()}
 

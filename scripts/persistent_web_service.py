@@ -120,7 +120,7 @@ def collection_host(port, category, *, paid=False, preserve_prepared=True):
 
 def host(port):
     from selection_automation.process_lock import ProcessLock
-    from restart_web import listener, validate_console
+    from restart_web import listener, validate_console, native_process_active
     import psutil
     configure_environment(port)
     directory = ROOT / 'runtime/web-console'
@@ -139,10 +139,25 @@ def host(port):
                         cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
                         creationflags=subprocess.CREATE_NO_WINDOW)
                 process = psutil.Process(child.pid)
-            try:
-                process.wait()
-            except psutil.NoSuchProcess:
-                pass
+            # A Windows venv launcher can survive its real Python child. A
+            # blocking wait on that shell used to leave the port offline forever.
+            missing_since=None
+            while True:
+                try:process.wait(timeout=5);break
+                except psutil.NoSuchProcess:break
+                except psutil.TimeoutExpired:
+                    try:
+                        if not native_process_active(process.pid):break
+                    except psutil.NoSuchProcess:break
+                current=listener(port)
+                if current:
+                    validate_console(current,ROOT);missing_since=None
+                    continue
+                if missing_since is None:missing_since=time.monotonic()
+                if time.monotonic()-missing_since>=60:
+                    from restart_web import stop_console
+                    stop_console(process,ROOT)
+                    break
             # Let the console's own release handoff finish before adopting it.
             time.sleep(2)
 

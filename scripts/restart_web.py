@@ -42,6 +42,32 @@ def validate_console(process, root):
         raise RuntimeError('端口由其他程序占用，未停止任何程序')
 
 
+def stop_console(process,root):
+    """Stop the verified server and its Windows venv wrappers only."""
+    validate_console(process,root)
+    wrappers=[]
+    for parent in process.parents():
+        try:validate_console(parent,root)
+        except (RuntimeError,psutil.Error):continue
+        wrappers.append(parent)
+    process.terminate();wait_console_exit(process,15)
+    for parent in wrappers:
+        try:
+            validate_console(parent,root)
+            if parent.is_running():parent.terminate();wait_console_exit(parent,5)
+        except psutil.NoSuchProcess:pass
+
+
+def wait_console_exit(process,timeout):
+    try:process.wait(timeout=timeout)
+    except psutil.TimeoutExpired:
+        # Windows may retain the PID/handle while kernel I/O drains even though
+        # GetExitCodeProcess already confirms that execution has ended.
+        try:
+            if native_process_active(process.pid):raise
+        except psutil.NoSuchProcess:pass
+
+
 def validate_maintenance_idle(state):
     """Only the independently owned collection task may remain active."""
     generation=state.get('generation')
@@ -164,8 +190,7 @@ def restart(port, root=ROOT, *, keep_task=False, task_root=None, independent=Fal
                 kept=validate_kept_task(previous,owner_root,state)
             if keep_task: validate_readonly_idle(previous, root, state)
             # psutil checks process identity (PID + creation time) before terminate.
-            previous.terminate()
-            previous.wait(timeout=15)
+            stop_console(previous,root)
         if not independent and listener(port):
             raise RuntimeError('端口仍被占用，未启动重复网页服务')
         logs = root / 'runtime/web-console'

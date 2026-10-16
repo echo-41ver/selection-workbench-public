@@ -229,7 +229,7 @@ def catalog(root,agent_id,refresh=False,agent=None):
             # claiming another live menu read. Runtime caches are not deployed.
             try:
                 prior=json.loads(cache_path.read_text(encoding='utf-8'))
-                if (time.time()-cache_path.stat().st_mtime<900 and prior.get('id')==agent_id
+                if ((time.time()-cache_path.stat().st_mtime<900 or prior.get('native_identity')==list(key[1:])) and prior.get('id')==agent_id
                         and prior.get('status')=='ready' and prior.get('models')
                         and prior.get('native_identity',list(key[1:]))==list(key[1:])):
                     return {**prior,'cached':True,'message':'豆包发送队列忙，暂用本机最近读取的模型列表；可稍后刷新。'}

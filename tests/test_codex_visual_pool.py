@@ -142,12 +142,13 @@ def test_ready_facts_require_complete_rows_and_unchanged_original_images(tmp_pat
     assert not pool.job_reviews_ready(cat, job)
 
 
-def test_finished_facts_import_even_while_cli_summary_is_still_running(tmp_path, monkeypatch):
+@pytest.mark.parametrize('agent',['codex','doubao','acciowork','workbuddy'])
+def test_finished_facts_import_even_while_cli_summary_is_still_running(tmp_path, monkeypatch,agent):
     worker = stub_pool(tmp_path, monkeypatch)
     pair, _ = fixture()
     task = {'task_id': 'ready', 'rows': [pair]}
     job = {'task_id': 'ready', 'folder': str(tmp_path / 'job'),
-           'identities': [list(pool.key(pair))], 'digest': 'digest'}
+           'identities': [list(pool.key(pair))], 'digest': 'digest','agent_id':agent}
     (tmp_path / 'job').mkdir()
     worker.jobs = {'job': job}
     worker.processes = {'job': SimpleNamespace(poll=lambda: None)}
@@ -162,9 +163,48 @@ def test_finished_facts_import_even_while_cli_summary_is_still_running(tmp_path,
     assert pool.read(tmp_path / 'job/job.json')['state'] == 'complete'
 
 
+@pytest.mark.parametrize('guard',['ready','paused','blocked','uncertain','exhausted','active'])
+def test_native_watchdog_resumes_only_confirmed_stalled_observation(tmp_path,monkeypatch,guard):
+    import time,psutil
+    worker=stub_pool(tmp_path,monkeypatch)
+    worker.config.update(agent_backends=[{'id':'doubao','name':'豆包'}],workers=8)
+    folder=worker.folder/'jobs/owned';folder.mkdir(parents=True)
+    job={'folder':str(folder),'agent_id':'doubao','model':'selected-expert','started_at':time.time()-1000}
+    pool.save(folder/'native-session.json',{'agent':'doubao','model':'selected-expert','state':'send_intended',
+        'url':'chrome://doubao-chat/chat/12345','marker':'EXACT_ORIGINAL'})
+    if guard=='paused':pool.save(worker.base/'stage123/stage3_control.json',{})
+    from selection_automation import stage3_runtime
+    monkeypatch.setattr(stage3_runtime,'read_control',lambda *a:{'paused':guard=='paused','agent_blocks':{'doubao':{}} if guard=='blocked' else {}})
+    if guard=='uncertain':pool.save(folder/'native-session.json',{'agent':'doubao','sent_at':1})
+    if guard=='exhausted':job['automatic_observation_restarts']=3
+    if guard=='active':pool.save(folder/'native-progress.json',{'last_poll_at':time.time(),'last_progress_at':time.time()})
+    calls=[]
+    monkeypatch.setattr(pool,'stop_owned_job',lambda value:calls.append('stop') or True)
+    monkeypatch.setattr('selection_automation.local_agents.analysis_command',lambda agent,path,model,*a:['native','--job',str(path),'--model',model])
+    monkeypatch.setattr(pool.subprocess,'Popen',lambda args,**kw:calls.append((args,kw)) or SimpleNamespace(pid=123))
+    monkeypatch.setattr(psutil,'Process',lambda _:SimpleNamespace(create_time=lambda:2))
+    worker.recover_native_reader(job)
+    if guard!='ready':assert calls==[];return
+    assert calls[1][0][-1]=='--observe-only' and calls[1][1]['stdin']==pool.subprocess.DEVNULL
+    assert job['automatic_observation_restarts']==1 and job['observation_only']
+    assert pool.read(folder/'native-session.json')['marker']=='EXACT_ORIGINAL'
+    assert worker.config['workers']==8 and not worker.attempts
+    pool.save(folder/'native-progress.json',{'last_poll_at':time.time()-1000,'last_progress_at':time.time()-1000})
+    worker.recover_native_reader(job)
+    assert len(calls)==2  # Recovery cooldown survives the old progress file.
+
+
 def test_ready_job_cannot_stop_a_process_without_current_ownership(monkeypatch):
     monkeypatch.setattr(pool, 'alive_job', lambda _: False)
     assert not pool.stop_owned_job({'pid': 1})
+
+
+def test_exited_windows_job_does_not_keep_a_queue_slot_while_pid_is_retained(monkeypatch):
+    import psutil,restart_web
+    monkeypatch.setattr(psutil,'Process',lambda pid:SimpleNamespace(is_running=lambda:True,
+        status=lambda:'running',create_time=lambda:1,cmdline=lambda:['python','exact-job']))
+    monkeypatch.setattr(restart_web,'native_process_active',lambda pid:False)
+    assert not pool.alive_job({'pid':123,'created':1,'folder':'job','command_marker':'exact-job'})
 
 
 def test_locked_owner_is_published_before_slow_initialization(tmp_path, monkeypatch):

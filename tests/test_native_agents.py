@@ -10,6 +10,52 @@ from selection_automation import native_agent_transport as native
 from selection_automation.stage3_provider import settings
 
 
+def test_native_progress_keeps_real_progress_distinct_from_polling(tmp_path,monkeypatch):
+    clock=[10];monkeypatch.setattr(native.time,'time',lambda:clock[0])
+    native.native_progress(tmp_path,'waiting_response',response_digest='one')
+    clock[0]=30;native.native_progress(tmp_path,'waiting_response',response_digest='one')
+    value=native.read(tmp_path/'native-progress.json')
+    assert value['last_poll_at']==30 and value['last_progress_at']==10
+    clock[0]=40;native.native_progress(tmp_path,'waiting_response',response_digest='two')
+    assert native.read(tmp_path/'native-progress.json')['last_progress_at']==40
+
+
+def test_shared_native_reader_releases_lease_even_when_close_fails():
+    events=[]
+    client=SimpleNamespace(close=lambda:(_ for _ in ()).throw(OSError('closed')))
+    lock=SimpleNamespace(__exit__=lambda:events.append('unlocked'))
+    with pytest.raises(OSError):native.release_registered_reader(client,lock)
+    assert events==['unlocked']
+
+
+def test_shared_reader_releases_between_polls_without_resending(tmp_path,monkeypatch):
+    job=tmp_path/'job';job.mkdir();events=[];clock=[0]
+    state={'agent':'doubao','model':'expert','state':'send_intended','url':'chrome://doubao-chat/chat/123',
+           'marker':'ORIGINAL_MARKER','result_job':str(job),'target_id':'REGISTERED','registered_observer':True}
+    native.save(job/'native-session.json',state)
+    monkeypatch.setattr(native,'result_exists',lambda *a:False)
+    monkeypatch.setattr(native,'doubao_targets',lambda *a:[{'id':'REGISTERED'}])
+    monkeypatch.setattr(native.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(native.time,'sleep',lambda n:clock.__setitem__(0,clock[0]+n))
+    monkeypatch.setattr(native,'release_doubao_observer',lambda *a:None)
+    class Client:
+        def close(self):events.append('close')
+        def call(self,method,params):assert method=='Page.setWebLifecycleState'
+        def evaluate(self,expr):
+            if 'vc_captcha_wrapper' in expr:return False
+            if expr=='location.href':return state['url']
+            if '[data-testid=send_message]' in expr:
+                assert 'ORIGINAL_MARKER' in expr;return True
+            assert 'receive_message' in expr;return None
+    def observe(*a):
+        events.append('acquire')
+        return {'id':'REGISTERED'},Client(),SimpleNamespace(__exit__=lambda:events.append('release'))
+    monkeypatch.setattr(native,'open_doubao_observer',observe)
+    monkeypatch.setattr(native,'registered_doubao_observer',observe)
+    with pytest.raises(RuntimeError,match='不自动重复发送'):native.doubao_run(tmp_path,job,'MUST_NOT_SEND',timeout=3,model='expert')
+    assert events==['acquire','close','release']*3
+
+
 def test_doubao_verification_gate_is_reported_before_clicking_or_sending():
     from selection_automation.agent_blockers import AgentActionRequired
     from selection_automation.agent_models import select_doubao_model

@@ -127,6 +127,11 @@ def test_busy_doubao_uses_recent_native_catalog_without_interrupting_upload(tmp_
     monkeypatch.setattr(models,'_doubao',busy)
     result=models.catalog(tmp_path,'doubao',refresh=True,agent=agent)
     assert result['status']=='ready' and result['cached'] and result['models'][0]['id']=='actual-expert'
+    stamp=executable.stat()
+    bound={**result,'native_identity':['doubao',str(executable),stamp.st_mtime_ns,stamp.st_size]}
+    path.write_text(json.dumps(bound));os.utime(path,(time.time()-3600,time.time()-3600))
+    assert models.catalog(tmp_path,'doubao',refresh=True,agent=agent)['status']=='ready'
+    path.write_text(json.dumps({'id':'doubao','status':'ready','models':[{'id':'legacy'}]}))
     os.utime(path,(time.time()-901,time.time()-901))
     assert models.catalog(tmp_path,'doubao',refresh=True,agent=agent)['status']=='unavailable'
     path.write_text(json.dumps({'id':'doubao','status':'ready','models':[{'id':'actual-expert'}],'native_identity':['other-installation']}))

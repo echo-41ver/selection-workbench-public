@@ -19,6 +19,22 @@ def read(path,default=None):
 def save(path,value):atomic_write(Path(path),json.dumps(value,ensure_ascii=False,indent=2))
 
 
+def native_progress(job,phase,**details):
+    path=Path(job)/'native-progress.json';previous=read(path,{})
+    now=time.time();changed=any(previous.get(k)!=v for k,v in details.items())
+    progress=now if changed or not previous else previous.get('last_progress_at',now)
+    if phase!=previous.get('phase') or now-previous.get('last_poll_at',0)>=5 or changed:
+        save(path,{**previous,**details,'phase':phase,'last_poll_at':now,'last_progress_at':progress})
+
+
+def release_registered_reader(cdp,lock):
+    """A shared native view is a short read lease, never a generation lock."""
+    try:
+        if cdp:cdp.close()
+    finally:
+        if lock:lock.__exit__()
+
+
 def finish_native_response(job,state):
     """Settle the original conversation too; fact validation remains separate."""
     job=Path(job);state['state']='complete';save(job/'native-session.json',state)
@@ -372,10 +388,12 @@ def registered_doubao_observer(root,job,state):
     locks=Path(os.environ.get('LOCALAPPDATA',Path.home()))/'SelectionWorkbench/agent-locks';locks.mkdir(parents=True,exist_ok=True)
     lock=ProcessLock(locks/('doubao.lock' if primary else 'doubao-observer.lock'))
     deadline=time.monotonic()+900
+    native_progress(job,'waiting_reader')
     while True:
         try:lock.__enter__();break
         except RuntimeError:
             if time.monotonic()>=deadline:raise RuntimeError('豆包结果读取排队超时；原会话保留且不重发')
+            native_progress(job,'waiting_reader')
             time.sleep(.5)
     cdp=None
     try:
@@ -407,7 +425,7 @@ def registered_doubao_observer(root,job,state):
                 cdp.call('Page.setWebLifecycleState',{'state':'active'})
                 require_doubao_ready(cdp)
                 if cdp.evaluate("[...document.querySelectorAll('[data-testid=send_message]')].some(e=>e.innerText.includes("+json.dumps(marker)+"))"):
-                    state.update(target_id=target['id'],owned_target=False,registered_observer=True)
+                    state.update(target_id=target['id'],owned_target=False,registered_observer=True,observer_uses_composer=primary)
                     save(Path(job)/'native-session.json',state)
                     return target,cdp,lock
             except (OSError,TimeoutError,websocket.WebSocketException):
@@ -614,10 +632,12 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
             # only its composer during submission, then observe each saved chat
             # in a separate page so model execution can overlap.
             composer=ProcessLock(lock.parent/'doubao.lock');deadline=time.monotonic()+180
+            native_progress(job,'waiting_composer')
             while True:
                 try:composer.__enter__();break
                 except RuntimeError:
                     if time.monotonic()>deadline:raise RuntimeError('豆包发送队列繁忙，本组尚未发送')
+                    native_progress(job,'waiting_composer')
                     time.sleep(.3)
             target=None
             try:
@@ -634,6 +654,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
         composer_held=not bool(state)
         try:
             if not state:
+                native_progress(job,'preparing_images')
                 require_doubao_ready(cdp)
                 created=cdp.evaluate(r"""(()=>{const visible=e=>e.getClientRects().length&&!e.disabled;
                   const nodes=[...document.querySelectorAll('button,[role="button"],a')].filter(visible);
@@ -677,6 +698,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 else:raise RuntimeError('豆包图片上传或输入未就绪，本组尚未发送')
                 state={'agent':'doubao','target_id':target['id'],'owned_target':False,'result_job':str(job),'state':'send_intended','sent_at':time.time(),'marker':marker,'model':model}
                 save(receipt,state)
+                native_progress(job,'sending',marker=marker)
                 sent=cdp.evaluate("""(()=>{const e=document.querySelector('[data-testid=chat_input_send_button]:not(:disabled)');if(!e)return false;e.click();return true;})()""")
                 if not sent:raise RuntimeError('豆包发送状态待确认，保留任务且不重复发送')
                 deadline=time.monotonic()+45
@@ -688,6 +710,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                     time.sleep(.3)
                 else:raise RuntimeError('豆包会话尚未确认，保留原任务且不重复发送')
                 state.update(url=url,bound_url=True,send_target_id=target['id']);save(receipt,state)
+                native_progress(job,'waiting_response',url=url)
                 composer.__exit__();composer_held=False
                 cdp.close()
                 target,cdp,observer_lock=open_doubao_observer(root,job,state)
@@ -695,6 +718,8 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
             original=Path(state.get('result_job',job));deadline=time.monotonic()+timeout
             last_answer=None;stable_since=time.monotonic()
             while time.monotonic()<deadline:
+                if cdp is None:
+                    target,cdp,observer_lock=registered_doubao_observer(root,job,state)
                 if result_exists(original):copy_result(original,job);finish_native_response(job,state);return
                 if state.get('registered_observer'):cdp.call('Page.setWebLifecycleState',{'state':'active'})
                 require_doubao_ready(cdp)
@@ -706,20 +731,28 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                     # only when the original, unique user request is visible.
                     if owned:state.update(url=current,bound_url=True);save(receipt,state)
                     else:raise RuntimeError('豆包已切换到其他聊天；本任务暂停且不重发')
-                if not owned:time.sleep(.5);continue
+                if not owned:
+                    if observer_lock:
+                        release_registered_reader(cdp,observer_lock);cdp=None;observer_lock=None
+                    native_progress(job,'recovering_reader');time.sleep(.5);continue
                 answer=cdp.evaluate("""(()=>{const busy=[...document.querySelectorAll('[data-testid=chat_input_local_break_button],button,[role="button"]')].some(e=>e.getClientRects().length&&(e.getAttribute('data-testid')==='chat_input_local_break_button'||/停止|Stop generating/i.test(e.getAttribute('aria-label')||e.textContent||'')));if(busy)return null;
                   const nodes=[...document.querySelectorAll('[data-testid=receive_message] [data-testid=message_text_content],[data-message-role="assistant"],[data-role="assistant"],[data-testid*="assistant-message"]')].filter(e=>e.getClientRects().length&&e.getAttribute('data-streaming')!=='true');
                   if(!nodes.length)return null;const last=nodes.at(-1),blocks=[...last.querySelectorAll('pre')].map(e=>e.querySelector('code')?.innerText||e.innerText);return blocks.length?blocks.join(String.fromCharCode(10)):last.innerText;})()""")
                 if answer!=last_answer:last_answer=answer;stable_since=time.monotonic()
+                import hashlib
+                native_progress(job,'waiting_response',response_chars=len(answer or ''),
+                    response_digest=hashlib.sha256((answer or '').encode()).hexdigest())
                 if answer and time.monotonic()-stable_since>=3:
-                    terminal=cdp.evaluate("Boolean(document.querySelector('[data-testid=receive_message] [data-testid=message_action_regenerate]'))")
+                    terminal=cdp.evaluate("Boolean(document.querySelector('[data-testid=receive_message] [data-testid=message_action_regenerate],[data-testid=receive_message] [data-testid=message_action_bar] button,[data-testid=receive_message] [data-testid=message_action_bar] [role=button]'))")
                     if terminal:
                         receive_finished_response(job,state,answer);return
                     if write_response(job,answer):finish_native_response(job,state);return
+                if observer_lock:
+                    release_registered_reader(cdp,observer_lock);cdp=None;observer_lock=None
                 time.sleep(1)
             raise RuntimeError('豆包任务超时；已保留原任务，不自动重复发送')
         finally:
             if composer_held:composer.__exit__()
-            cdp.close()
+            if cdp:cdp.close()
             release_doubao_observer(root,target,state)
             if observer_lock:observer_lock.__exit__()

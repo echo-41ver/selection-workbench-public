@@ -8,11 +8,19 @@ sys.path.insert(0,str(ROOT/'src'))
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--agent',choices=['workbuddy','acciowork','doubao'],required=True)
-    parser.add_argument('--job',type=Path,required=True);parser.add_argument('--model');args=parser.parse_args()
+    parser.add_argument('--job',type=Path,required=True);parser.add_argument('--model')
+    parser.add_argument('--observe-only',action='store_true');args=parser.parse_args()
     from selection_automation.native_agent_transport import accio_run,doubao_run,workbuddy_run
     sys.stdin.reconfigure(encoding='utf-8');sys.stdout.reconfigure(encoding='utf-8')
     prompt=sys.stdin.read();job=args.job.resolve()
     try:
+        if args.observe_only:
+            from selection_automation.native_agent_transport import read
+            receipt=read(job/'native-session.json',{})
+            if (receipt.get('agent')!=args.agent or receipt.get('model')!=args.model
+                    or not (receipt.get('url') and receipt.get('marker') if args.agent=='doubao'
+                            else receipt.get('conversation_id') and receipt.get('agent_id') if args.agent=='acciowork' else False)):
+                raise RuntimeError('不能把已有观察任务重新发送，原会话凭据不完整')
         {'workbuddy':workbuddy_run,'acciowork':accio_run,'doubao':doubao_run}[args.agent](ROOT,job,prompt,model=args.model)
         print('Completed owned desktop-agent job.')
     except Exception as exc:

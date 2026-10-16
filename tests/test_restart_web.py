@@ -9,6 +9,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import restart_web as service
 
 
+def test_console_stop_releases_matching_venv_wrappers_but_preserves_other_parents(tmp_path,monkeypatch):
+    events=[]
+    class Process:
+        def __init__(self,pid,script):self.pid=pid;self.script=script
+        def cwd(self):return str(tmp_path)
+        def cmdline(self):return ['python',str(tmp_path/'scripts'/self.script)]
+        def parents(self):return [wrapper,host,collector]
+        def terminate(self):events.append(self.pid)
+        def wait(self,timeout):pass
+        def is_running(self):return True
+    server=Process(1,'web_console.py');wrapper=Process(2,'web_console.py')
+    host=Process(3,'persistent_web_service.py');collector=Process(4,'selection.py')
+    service.stop_console(server,tmp_path)
+    assert events==[1,2]
+
+
+@pytest.mark.parametrize('active',[True,False])
+def test_retained_windows_pid_is_not_confused_with_an_executing_server(monkeypatch,active):
+    process=SimpleNamespace(pid=123,wait=lambda **kw:(_ for _ in ()).throw(service.psutil.TimeoutExpired(1)))
+    monkeypatch.setattr(service,'native_process_active',lambda pid:active)
+    if active:
+        with pytest.raises(service.psutil.TimeoutExpired):service.wait_console_exit(process,1)
+    else:service.wait_console_exit(process,1)
+
+
 def test_rejects_other_installation_before_termination(tmp_path, monkeypatch):
     process = SimpleNamespace(cwd=lambda: str(tmp_path), cmdline=lambda: ['python', 'other.py'])
     monkeypatch.setattr(service, 'listener', lambda port: process)

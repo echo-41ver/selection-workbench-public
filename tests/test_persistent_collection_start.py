@@ -9,6 +9,27 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import persistent_web_service as persistent
 import selection
 
+
+def test_web_guard_recovers_a_live_wrapper_with_no_listening_server(tmp_path,monkeypatch):
+ import restart_web
+ monkeypatch.setattr(persistent,'ROOT',tmp_path)
+ monkeypatch.setattr(persistent,'configure_environment',lambda *a:None)
+ clock=[0];stopped=[]
+ monkeypatch.setattr(persistent.time,'monotonic',lambda:clock[0])
+ def pause(n):raise InterruptedError('stop after recovery')
+ monkeypatch.setattr(persistent.time,'sleep',pause)
+ def wait(timeout):
+  clock[0]+=30
+  raise psutil.TimeoutExpired(timeout)
+ wrapper=SimpleNamespace(pid=123,wait=wait)
+ monkeypatch.setattr(restart_web,'native_process_active',lambda *a:True)
+ listeners=iter([wrapper,None,None,None])
+ monkeypatch.setattr(restart_web,'listener',lambda *a:next(listeners))
+ monkeypatch.setattr(restart_web,'validate_console',lambda *a:None)
+ monkeypatch.setattr(restart_web,'stop_console',lambda process,root:stopped.append(process))
+ with pytest.raises(InterruptedError):persistent.host(8765)
+ assert stopped==[wrapper]
+
 @pytest.mark.parametrize('paid,preserve',[(False,True),(False,False),(True,True)])
 def test_collection_task_is_independent_and_preserves_explicit_flags(tmp_path,monkeypatch,paid,preserve):
  category=tmp_path/'runs/task/category.json';category.parent.mkdir(parents=True);category.write_text('{}')
