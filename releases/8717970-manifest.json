@@ -1,0 +1,12 @@
+{
+  "source_commit": "87179706756787684f24156dbe70294d3c8c0685",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/deployment-8717970",
+  "artifacts": [
+    {
+      "name": "selection-workbench-8717970-public.zip",
+      "bytes": 1384849746,
+      "sha256": "9a86e7a0fb39be695b983cd13815ad69429b3753f58368632cd108ab5db19b1a",
+      "contains_company_credentials": false
+    }
+  ]
+}

@@ -86,6 +86,22 @@ class ConsoleError(ValueError):
         self.code, self.message, self.status = code, message, status
 
 
+def check_stage3_local_service(provider):
+    """Check connectivity without submitting inference or changing dispatch state."""
+    if provider['mode'] != 'local_model':
+        return
+    address = urlsplit(provider['base_url'])
+    host = address.hostname
+    port = address.port or (443 if address.scheme == 'https' else 80)
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            pass
+    except OSError:
+        raise ConsoleError('LOCAL_MODEL_UNAVAILABLE',
+            f'本地模型服务无法连接（{host}:{port}），请先启动该服务或选择其他分析方案。'
+            '本次操作未生效，原方案、暂停状态和已完成结果均保留。', 409) from None
+
+
 def clean(value):
     if isinstance(value, dict):
         return {k: clean(v) for k,v in value.items() if not any(s in k.lower() for s in ('password','api_key','secret','token','proxy_user'))}
@@ -1462,6 +1478,8 @@ class Console:
             try: provider=provider_settings(body['provider']) if 'provider' in body else from_category(category)
             except ValueError as exc: raise ConsoleError('INVALID_INPUT',str(exc)) from None
             provider_changed=provider!=from_category(category)
+            if not configure_only or provider_changed:
+                check_stage3_local_service(provider)
             api_running=controller_alive(base)
             codex_state=codex_review_control(base)
             running=api_running or codex_state.get('running')
@@ -1594,6 +1612,7 @@ class Console:
                 from selection_automation.stage3_runtime import resume_dispatch
                 from selection_automation.stage3_provider import from_category
                 provider=from_category(selection.read(folder.parent/'category.json',{}))
+                check_stage3_local_service(provider)
                 value=resume_dispatch(folder,provider['agent_ids'] if provider['mode']=='local_agent' else ())
             else:value=update_control(folder,paused=True,switch_error=None)
             if action=='resume':

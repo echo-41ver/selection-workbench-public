@@ -249,6 +249,7 @@ def test_bad_config_and_partial_variant_band():
 @pytest.mark.parametrize('mode',['liquid_d1','multimodal_api','local_model','local_agent'])
 def test_console_dispatches_only_selected_provider_and_never_stops_collection(tmp_path,monkeypatch,mode):
     import web_console as web
+    monkeypatch.setattr(web,'check_stage3_local_service',lambda provider:None)
     import run_codex_visual_pool as agent
     console=web.Console(tmp_path)
     base=tmp_path/'runs/fixture';base.mkdir(parents=True)
