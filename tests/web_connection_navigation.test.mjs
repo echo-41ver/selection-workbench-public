@@ -5,6 +5,32 @@ import vm from 'node:vm';
 
 const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 
+test('history timeout releases refresh lock and allows the next request',async()=>{
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{hidden:true,replaceChildren(){this.textContent='';}});return nodes.get(id);};
+ let calls=0;const timers=[];
+ const context=vm.createContext({$:get,AbortController,Error,
+  setTimeout(callback,delay){timers.push(delay);if(delay===8000)queueMicrotask(callback);return timers.length;},clearTimeout(){},
+  fetch:async(_path,{signal})=>{if(++calls===1)return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(Error('timeout'),{name:'AbortError'}))));return {ok:true,json:async()=>({ok:true,runs:[]})};}});
+ vm.runInContext(html.slice(html.indexOf('let historyLoading=false'),html.indexOf('function historyExcelLinks(')),context);
+ await vm.runInContext('loadHistory()',context);
+ assert.match(get('history-list').textContent,/超时.*自动重试/);
+ assert.equal(vm.runInContext('historyLoading',context),false);
+ await vm.runInContext('loadHistory()',context);
+ assert.equal(calls,2);assert.match(get('history-list').textContent,/还没有历史任务/);
+ assert.ok(timers.includes(3000));
+});
+
+test('background history loading shows progress and schedules a retry instead of empty history',async()=>{
+ const box={replaceChildren(){throw Error('must preserve loading state');}};const timers=[];
+ const context=vm.createContext({$:()=>box,AbortController,Error,
+  setTimeout(_callback,delay){timers.push(delay);return timers.length;},clearTimeout(){},
+  fetch:async()=>({ok:true,json:async()=>({ok:true,history_loading:true})})});
+ vm.runInContext(html.slice(html.indexOf('let historyLoading=false'),html.indexOf('function historyExcelLinks(')),context);
+ await vm.runInContext('loadHistory()',context);
+ assert.match(box.textContent,/正在后台读取历史记录/);assert.ok(timers.includes(2000));
+ assert.equal(vm.runInContext('historyLoading',context),false);
+});
+
 test('rule application feedback is independent and never overwrites typed requirements',()=>{
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'用户尚未应用的输入'});return nodes.get(id);};
  const context=vm.createContext({$:get,applyingScope:'stage3'});
@@ -19,9 +45,9 @@ test('rule application feedback is independent and never overwrites typed requir
 });
 
 test('cold page controls accept absent task state before the first status request',()=>{
- const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(){}});return nodes.get(id);};
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('const excelOpening='));
- const context=vm.createContext({$:get,statusFresh:false,busy:false});
+ const context=vm.createContext({$:get,statusFresh:false,busy:false,renderStage3Settings(){},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);
  assert.doesNotThrow(()=>vm.runInContext('stage3Button(null)',context));
  assert.equal(get('start-stage3').disabled,true);
@@ -31,13 +57,13 @@ test('cold page controls accept absent task state before the first status reques
 });
 
 test('Codex pool status stays separate from full candidate progress and reports Excel publishing',()=>{
- const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('const excelOpening='));
- const context=vm.createContext({$:get,statusFresh:true,busy:false});
+ const context=vm.createContext({$:get,statusFresh:true,busy:false,renderStage3Settings(){},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);
  vm.runInContext(`stage3Button({category_key:'fixture',scope:{execution_mode:'full'},stage3_control:{enabled:false,running:false,can_stop:false,phase:'等待',progress:{total:1986,completed:491,codex_completed:0,pending:1495},codex_review:{available:true,running:true,phase:'持续并行看图',target:768,imported:696,expected_tasks:8,all_reviews_complete:true,excel_current:false,pool:{enabled:true,running:true,workers:6,group_size:12,model:'gpt-6-luna',effort:'high',running_groups:6,pending_pairs:1495,completed_groups:41,phase:'并行看图并自动接续下一组'}}}})`,context);
  assert.match(get('stage3-count').textContent,/已进入第三层 1,986 对 · 已处理 491 对/);
- assert.match(get('codex-review-pool').textContent,/6 路 gpt-6-luna high · 每组 12 对/);
+ assert.match(get('codex-review-pool').textContent,/6 组并发 · gpt-6-luna high · 每组 1 个 Amazon＋最多 12 个 TEMU/);
  assert.match(get('codex-review-pool').textContent,/自动接续下一组/);
  assert.match(get('codex-review-target').textContent,/已导入分片结果 696 \/ 768 对/);
  assert.match(get('codex-review-publisher').textContent,/最新 Excel 尚未确认/);

@@ -4,8 +4,8 @@ import math
 
 def concurrency(stage):
     value = stage.get('max_concurrency', 4)
-    if type(value) is not int or not 1 <= value <= 256:
-        raise ValueError('stage3.max_concurrency must be an integer from 1 to 256')
+    if type(value) is not int or value < 1:
+        raise ValueError('stage3.max_concurrency must be a positive integer')
     return value
 
 

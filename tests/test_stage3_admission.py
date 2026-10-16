@@ -33,13 +33,13 @@ def test_unconfigured_categories_are_compatible():
     assert threshold(cat) is None and admitted(cat,{})
 
 
-@pytest.mark.parametrize('value',[0,257,True,'50',4.5])
+@pytest.mark.parametrize('value',[0,-1,True,'50',4.5])
 def test_parallelism_is_validated_instead_of_silently_clamped(value):
     cat=category();cat['stage3']['max_concurrency']=value
     with pytest.raises(ValueError):validate(cat)
 
 
-@pytest.mark.parametrize('value',[50,64,256])
+@pytest.mark.parametrize('value',[50,64,256,400,1024])
 def test_configured_parallel_groups_are_supported(value):
     cat=category();cat['stage3']['max_concurrency']=value
     validate(cat)

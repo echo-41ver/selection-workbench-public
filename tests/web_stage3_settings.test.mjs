@@ -5,6 +5,17 @@ import vm from 'node:vm';
 const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 const code=html.slice(html.indexOf('let stage3SettingsDirty='),html.indexOf('function businessSettings'));
 
+test('manual concurrency preserves the entered value across Agent and API modes without an HTML ceiling',()=>{
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id);};
+ const context=vm.createContext({$:get,lastStatus:null});vm.runInContext(code,context);
+ get('stage3-workers').value='1024';get('stage3-confidence').value='90';
+ for(const mode of ['local_agent','liquid_d1','multimodal_api','local_model']){
+  get('stage3-mode').value=mode;const provider=vm.runInContext('stage3ProviderSettings()',context);
+  assert.equal(provider.workers,1024);assert.equal(provider.concurrency_mode,'manual');
+ }
+ assert.doesNotMatch(html.match(/<input id="stage3-workers"[^>]*>/)[0],/\bmax=/);
+});
+
 test('four provider modes bind endpoint model protocol and concurrency without retaining key',()=>{
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',hidden:false,replaceChildren(){},append(){}});return nodes.get(id);};
  const context=vm.createContext({$:get,lastStatus:null,fetch:async()=>({ok:true,json:async()=>({agents:[]})})});vm.runInContext(code,context);

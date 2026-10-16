@@ -42,13 +42,17 @@ def test_image_cache_invalidates_when_source_changes(tmp_path):
     assert batch.data_url(image,encode)!=b'first'.hex() and len(calls)==2
 
 
-def test_two_real_twelve_candidate_payloads_run_concurrently(tmp_path,monkeypatch):
+@pytest.mark.parametrize('workers',[2,80,400])
+def test_two_real_twelve_candidate_payloads_run_concurrently(tmp_path,monkeypatch,workers):
     import openai
     import run_category_layer3 as runner
     from selection_automation import stage3_provider
-    rows=sample_rows(tmp_path);barrier=threading.Barrier(2);requests=[]
+    rows=sample_rows(tmp_path);barrier=threading.Barrier(2);requests=[];connections=[];executors=[]
+    executor=runner.ThreadPoolExecutor
+    def create_executor(**kwargs):executors.append(kwargs['max_workers']);return executor(**kwargs)
+    monkeypatch.setattr(runner,'ThreadPoolExecutor',create_executor)
     class Transport:
-        def __init__(self,**kwargs):pass
+        def __init__(self,**kwargs):connections.append(kwargs['limits'].max_connections)
         def __enter__(self):return self
         def __exit__(self,*args):pass
     class Client:
@@ -63,10 +67,11 @@ def test_two_real_twelve_candidate_payloads_run_concurrently(tmp_path,monkeypatc
     monkeypatch.setattr(runner,'protocol',lambda category,count:('compare',{}))
     monkeypatch.setattr(runner,'decode',lambda category,response,ids:{identity:{'overall_confidence':.9} for identity in ids})
     monkeypatch.setattr(runner,'score',lambda category,facts:{'hard_conflicts':[]})
-    category={'stage3':{'modules':{'shape':100},'batch_size':12,'max_concurrency':2}}
+    category={'stage3':{'modules':{'shape':100},'batch_size':12,'max_concurrency':workers}}
     args=SimpleNamespace(results=tmp_path/'results.jsonl',validate_only=False,max_requests=0)
     runner.consume(args,category,tmp_path/'blocked.json','fixture',iter(rows))
     assert len(requests)==2
+    assert connections==executors==[workers]
     assert all(len([block for block in request['input'][0]['content'] if block['type']=='input_image'])==2 for request in requests)
     results=list(runner.rows(args.results))
     assert len(results)==24 and {row['goods_id'] for row in results}=={row['goods_id'] for row in rows}

@@ -223,7 +223,8 @@ def test_installed_desktop_executable_is_never_invoked_as_a_generic_cli(tmp_path
     monkeypatch.setattr(desktop,'doubao_endpoint',lambda root:(_ for _ in ()).throw(RuntimeError('not enabled')))
     result=desktop.probe(tmp_path,'doubao')
     assert result['installed'] and result['requires_enable'] and not result['ready']
-    assert result['max_parallel']==6 and result['max_group_size']==12
+    assert result['recommended_parallel']==6 and result['max_group_size']==12
+    assert 'max_parallel' not in result
     command=desktop.command(tmp_path,result,tmp_path/'job with spaces')
     assert str(app) not in command and 'run_desktop_agent.py' in command[1]
 

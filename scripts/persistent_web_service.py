@@ -26,7 +26,8 @@ def start(port, root=ROOT, amazon_category=None,resume_category=None, *, paid=Fa
         name+=('-amazon-' if amazon_category else '-collect-')+hashlib.sha256(str(category).encode()).hexdigest()[:12]
     configuration = {'name': name, 'python': str(root / '.venv/Scripts/python.exe'),
                      'script': str(root / 'scripts/persistent_web_service.py'),
-                     'root': str(root), 'port': port,'resume':bool(resume_category)}
+                     'root': str(root), 'port': port,'resume':bool(resume_category),
+                     'priority':7 if category else 4}
     configuration['arguments']='"'+configuration['script']+'" --host --port '+str(port)
     if amazon_category:
         configuration['arguments']='"'+str(root/'scripts/collect_amazon_until_complete.py')+'" --category "'+str(category)+'"'
@@ -53,6 +54,7 @@ $definition.Settings.ExecutionTimeLimit = 'PT0S'
 $definition.Settings.DisallowStartIfOnBatteries = $false
 $definition.Settings.StopIfGoingOnBatteries = $false
 $definition.Settings.AllowDemandStart = $true
+$definition.Settings.Priority = $configuration.priority
 $action = $definition.Actions.Create(0)
 $action.Path = $configuration.python
 $action.Arguments = $configuration.arguments

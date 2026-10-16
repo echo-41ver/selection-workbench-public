@@ -182,6 +182,8 @@ class Console:
         self.pending_key=None
         from selection_automation.monitor_status import MonitorStatus
         self.monitor=MonitorStatus(self.status,lambda:(self.key,self.busy,self.phase,self.draft_used,self.stage3_busy,id(self.draft),id(self.pending_scope)))
+        self.history_monitor=MonitorStatus(self.history,lambda:None,interval=5,loading_key='history_loading')
+        self._history_monitors={};self._history_monitor_lock=threading.Lock()
         from selection_automation.rule_provider import settings
         self.draft_provider=settings()
         self.plain_application={}
@@ -831,6 +833,17 @@ class Console:
                 continue
         return clean({'ok':True,'runs':sorted(runs,key=lambda row:row['updated_at'],reverse=True)})
 
+    def history_snapshot(self,key=None):
+        if key is None:return self.history_monitor.get()
+        self.history_base(key)
+        from selection_automation.monitor_status import MonitorStatus
+        with self._history_monitor_lock:
+            if key not in self._history_monitors:
+                self._history_monitors[key]=MonitorStatus(lambda:self.history_status(key),lambda:key,
+                    interval=5,loading_key='history_loading')
+            monitor=self._history_monitors[key]
+        return monitor.get()
+
     def history_collection_complete(self,base,category,details):
         """Only distinguish proven acquisition completion from optional market gaps."""
         amazon=selection.read(base/'amazon/amazon_frontend_latest.json',{})
@@ -1333,7 +1346,11 @@ class Console:
             api_running=controller_alive(base)
             codex_state=codex_review_control(base)
             running=api_running or codex_state.get('running')
-            if running and not provider_changed:
+            pool_config=selection.read(base/'stage123/codex_pool_config.json',{})
+            pool_matches=(provider['mode']!='local_agent' or not pool_config or all(
+                pool_config.get(field)==provider[field] for field in ('workers','concurrency_mode','agent_ids','agent_models')))
+            if running and not provider_changed and pool_matches:
+                if configure_only:return {'ok':True,'provider':provider,'message':'第三层方案已保存，运行状态保持不变'}
                 from selection_automation.stage3_runtime import resume_dispatch
                 (base/'stage123/STOP').unlink(missing_ok=True)
                 resume_dispatch(base/'stage123',provider['agent_ids'] if provider['mode']=='local_agent' else ())
@@ -1376,7 +1393,7 @@ class Console:
                     raise ConsoleError('AGENT_UNAVAILABLE','未找到已连接且能够看图的本机 Agent；请在方案中检测并登录',409)
                 if provider['concurrency_mode']=='auto':
                     from selection_automation.analysis_concurrency import recommended
-                    provider['workers']=min(recommended('local_agent',len(agents) or 1),sum(int(a.get('max_parallel',6)) for a in agents) or 6)
+                    provider['workers']=recommended('local_agent',len(agents) or 1)
                     provider_changed=provider!=from_category(category)
             from selection_automation.stage3_runtime import update_control,read_control
             native_update=running and provider['mode']=='local_agent' and from_category(category)['mode']=='local_agent'
@@ -1409,7 +1426,10 @@ class Console:
                     'workers':provider['workers'],'model':provider['model'],'group_size':12,
                     'agent_ids':[agent['id'] for agent in agents],
                     'agent_models':provider['agent_models'],
-                    'agent_backends':agents,'concurrency_mode':provider['concurrency_mode']})
+                    # A still-running older manager may read max_parallel.
+                    # Give it the requested global width, never the old fixed six.
+                    'agent_backends':[{**agent,'max_parallel':provider['workers']} for agent in agents],
+                    'concurrency_mode':provider['concurrency_mode']})
                 ensure_pool(category_path,self.root)
                 self.stage3_key=key;self.stage3_phase='本机Agent并行看图已启动'
                 return {'ok':True,'phase':self.stage3_phase,'provider':provider}
@@ -1770,7 +1790,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(state)
             if self.path=='/api/visual-review': return self.send_json(self.server.console.visual_review())
             if self.path=='/api/operator': return self.send_json(self.server.console.operator_view())
-            if self.path=='/api/history': return self.send_json(self.server.console.history())
+            if self.path=='/api/history': return self.send_json(self.server.console.history_snapshot())
             if self.path=='/api/developer': return self.send_json(self.server.console.developer_info())
             if self.path=='/api/local-agents':
                 from selection_automation.local_agents import discover
@@ -1790,7 +1810,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ConsoleError('NOT_FOUND','对接文件不存在',404)
             if self.path.startswith('/api/history/'):
                 parts=self.path.removeprefix('/api/history/').split('/')
-                if len(parts)==1: return self.send_json(self.server.console.history_status(parts[0]))
+                if len(parts)==1: return self.send_json(self.server.console.history_snapshot(parts[0]))
                 if len(parts)==3 and parts[1]=='excel':
                     self.server.console.history_base(parts[0])
                     return self.send_workbook(self.server.console.excel_workbook(parts[2],parts[0]))
@@ -1808,6 +1828,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8')
             self.send_header('Cache-Control','no-store')
             self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
+        except (ConnectionError,BrokenPipeError): return
         except ConsoleError as exc: self.send_json({'ok':False,'error':{'code':exc.code,'message':exc.message}},exc.status)
         except Exception: self.send_json({'ok':False,'error':{'code':'READ_FAILED','message':'页面或状态读取失败'}},500)
     def do_POST(self):
@@ -1895,7 +1916,11 @@ def watch_release(server,stopping):
             with server.release_lock:
                 update=server.release.check(force=True)
                 if not update['pending'] or not server.release.stable():continue
-                server.release.waiting=not idle_for_reload(server.console.status(),server.console)
+                state=server.console.monitor.get()
+                sample=state.get('status_sample') or {}
+                server.release.waiting=(state.get('status_loading') is True or
+                    sample.get('age_seconds') is None or sample['age_seconds']>15 or
+                    not idle_for_reload(state,server.console))
                 if server.release.waiting:continue
                 server.release.restarting=True
                 server.shutdown()
@@ -1906,6 +1931,11 @@ def watch_release(server,stopping):
 
 
 def main():
+    # Scheduled hosts may survive an update and retain their old low priority.
+    # Keep this interactive HTTP service at normal priority regardless of parent.
+    if os.name=='nt':
+        import psutil
+        psutil.Process().nice(psutil.NORMAL_PRIORITY_CLASS)
     parser=argparse.ArgumentParser(); parser.add_argument('--host',choices=['127.0.0.1'],default='127.0.0.1'); parser.add_argument('--port',type=int,default=8765); parser.add_argument('--open-browser',action='store_true')
     args=parser.parse_args(); server=LocalConsoleServer((args.host,args.port),Handler); server.console=Console()
     from selection_automation.release_reload import ReleaseReload

@@ -110,7 +110,7 @@ def probe(root,agent_id):
             'executable':str(app) if app else None,'version':None,'authenticated':None,'connected':False,
             'ready':False,'status':'未安装','checked_at':time.time(),
             'transport_available':False,
-            'max_parallel':6,'max_group_size':12}
+            'recommended_parallel':6,'max_group_size':12}
     if not app:return result
     if agent_id=='workbuddy':
         entry=workbuddy_cli();result['executable']=str(entry) if entry else None

@@ -68,8 +68,8 @@ def settings(value=None):
             if not urlsplit(address).path:address+='/v1'
     from .analysis_concurrency import recommended
     workers = value.get('workers', recommended(mode))
-    if type(workers) is not int or not 1 <= workers <= 256:
-        raise ValueError('分析并发数须为 1–256')
+    if type(workers) is not int or workers < 1:
+        raise ValueError('分析并发数须为正整数')
     concurrency_mode = value.get('concurrency_mode', 'manual' if 'workers' in value else 'auto')
     if concurrency_mode not in {'auto', 'manual'}:
         raise ValueError('并发方式无效')

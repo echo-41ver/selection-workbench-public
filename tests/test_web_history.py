@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sys
 import threading
+import time
 
 import pytest
 
@@ -91,10 +92,16 @@ def test_history_http_download_is_explicit_run_and_does_not_republish(tmp_path,m
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
         client=http.client.HTTPConnection('127.0.0.1',server.server_port)
-        client.request('GET','/api/history');response=client.getresponse()
-        assert response.status==200 and len(json.loads(response.read())['runs'])==2
-        client.request('GET','/api/history/drill_a');response=client.getresponse()
-        assert response.status==200 and json.loads(response.read())['category_key']=='drill_a'
+        def snapshot(path):
+            deadline=time.monotonic()+3
+            while time.monotonic()<deadline:
+                client.request('GET',path);response=client.getresponse();data=json.loads(response.read())
+                assert response.status==200
+                if not data.get('history_loading'):return data
+                time.sleep(.01)
+            pytest.fail('History background snapshot did not complete')
+        assert len(snapshot('/api/history')['runs'])==2
+        assert snapshot('/api/history/drill_a')['category_key']=='drill_a'
         client.request('GET','/api/history/drill_a/excel/amazon');response=client.getresponse()
         assert response.status==200 and response.read()==b'drill_a'
         for path in ['/api/history/../secret','/api/history/drill_a/excel/../../secret',
@@ -104,6 +111,28 @@ def test_history_http_download_is_explicit_run_and_does_not_republish(tmp_path,m
         assert console.key=='pen_b'
         client.close()
     finally:server.shutdown();server.server_close();thread.join()
+
+
+def test_history_http_stays_responsive_during_slow_list_and_detail_reads(tmp_path,monkeypatch):
+    saved_run(tmp_path,'drill_a','电钻')
+    console=web.Console(tmp_path);started=threading.Event();release=threading.Event();calls=[]
+    def slow(kind):
+        calls.append(kind);started.set();release.wait(3)
+        return {'ok':True,'runs':[]} if kind=='list' else {'ok':True,'category_key':'drill_a'}
+    monkeypatch.setattr(console,'history',lambda:slow('list'))
+    # The monitor must resolve the current method, as real Console construction does.
+    console.history_monitor.loader=console.history
+    monkeypatch.setattr(console,'history_status',lambda key:slow('detail'))
+    server=web.LocalConsoleServer(('127.0.0.1',0),web.Handler);server.console=console
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        client=http.client.HTTPConnection(*server.server_address,timeout=1)
+        for path in ['/api/history','/api/history','/api/history/drill_a','/api/history/drill_a']:
+            client.request('GET',path);response=client.getresponse()
+            assert response.status==200 and json.loads(response.read())['history_loading']
+        assert started.is_set() and sorted(calls)==['detail','list']
+        client.close()
+    finally:release.set();server.shutdown();server.server_close();thread.join()
 
 
 def complete_collection(root):

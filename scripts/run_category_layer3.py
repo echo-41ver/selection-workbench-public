@@ -450,7 +450,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
     from selection_automation.analysis_concurrency import ThroughputTuner
     from selection_automation.merge_temu_snapshots import atomic_write
     auto = provider.get('concurrency_mode')=='auto'
-    capacity = (4 if provider['mode']=='local_model' else 16) if auto else width
+    capacity = max(width,4 if provider['mode']=='local_model' else 16) if auto else width
     tuning_path = args.results.with_name('concurrency.json')
     fingerprint = {k:provider[k] for k in ('mode','base_url','model','protocol')}
     try:prior_tuning=json.loads(tuning_path.read_text(encoding='utf-8'))

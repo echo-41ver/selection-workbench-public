@@ -155,7 +155,7 @@ def workbuddy_environment(executable):
 def _probe(root,agent_id,model=None):
     if agent_id not in {'workbuddy','acciowork','doubao'}:
         result=_probe_cli(root,agent_id,model)
-        result.update(max_parallel=6,max_group_size=12,selected_model=model)
+        result.update(recommended_parallel=6,max_group_size=12,selected_model=model)
         return result
     from .desktop_agents import probe
     result=probe(root,agent_id)

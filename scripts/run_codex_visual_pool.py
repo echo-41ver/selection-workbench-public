@@ -477,10 +477,15 @@ class Pool:
         from selection_automation.stage3_runtime import read_control
         paused=read_control(self.base/'stage123').get('paused_agents',[])
         blocks=read_control(self.base/'stage123').get('agent_blocks',{})
-        available=[a for a in backends if a['id'] not in blocks and (a['id'] not in paused or task.get('required_agent')==a['id']) and sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+        active_load=sum(not job.get('observation_only') and job.get('agent_id') not in paused for job in self.jobs.values())
+        if not task.get('required_agent') and active_load>=int(self.config.get('workers',6)):
+            raise RuntimeError('已达到所填写的分析并发数')
+        # Saved max_parallel values from older installations are recommendations,
+        # never an additional per-Agent ceiling on the user's total concurrency.
+        available=[a for a in backends if a['id'] not in blocks and (a['id'] not in paused or task.get('required_agent')==a['id'])]
         if task.get('required_agent'):available=[a for a in available if a['id']==task['required_agent']]
-        if backends and not available:raise RuntimeError('Agent 并发槽位已满')
-        agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())/int(a.get('max_parallel',6))) if available else None
+        if backends and not available:raise RuntimeError('所选 Agent 已暂停或需要人工处理')
+        agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())) if available else None
         rows = _absolute_image_rows(rows[:int(agent.get('max_group_size',12))] if agent else rows)
         digest = _group_digest(rows)
         prior_attempt = _strict_attempt(self.attempts.get(digest, {}))
@@ -702,8 +707,8 @@ class Pool:
         paused=control.get('paused_agents',[])
         blocks=control.get('agent_blocks',{})
         if control.get('paused') or control.get('switch_pending') or not self.config.get('enabled',True):workers=0
-        if self.config.get('agent_backends'):
-            workers=min(workers,sum(int(a.get('max_parallel',6)) for a in self.config['agent_backends'] if a['id'] not in paused and a['id'] not in blocks))
+        if self.config.get('agent_backends') and not any(a['id'] not in paused and a['id'] not in blocks for a in self.config['agent_backends']):
+            workers=0
         if workers and self.config.get('concurrency_mode')=='auto':
             from selection_automation.analysis_concurrency import ThroughputTuner
             tuning_key=json.dumps([self.config.get('agent_models',{}),sorted(paused),group_size,workers],sort_keys=True)
@@ -739,13 +744,13 @@ class Pool:
             if workers==0:break
             if active_load>=workers and not task.get('required_agent'):continue
             backends=self.config.get('agent_backends',[])
-            available=[a for a in backends if a['id'] not in blocks and (a['id'] not in paused or task.get('required_agent')==a['id']) and sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())<int(a.get('max_parallel',6))]
+            available=[a for a in backends if a['id'] not in blocks and (a['id'] not in paused or task.get('required_agent')==a['id'])]
             if task.get('required_agent'):
                 available=[a for a in available if a['id']==task['required_agent']]
                 if not available:continue
             if backends and not available:break
             if available:
-                agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())/int(a.get('max_parallel',6)))
+                agent=min(available,key=lambda a:sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values()))
                 rows=rows[:int(agent.get('max_group_size',12))]
             digest = _group_digest(rows)
             prior = _strict_attempt(self.attempts.get(digest, {}))
@@ -826,7 +831,12 @@ def watch(category_path, interval=5):
                 state = pool.tick()
             except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
                 state = {'phase':'调度暂缓，自动重试', 'errors':[str(exc)], 'running':len(pool.jobs), 'updated_at':time.time()}
-            save(folder / 'pool.json', {**identity, **state})
+            try:
+                save(folder / 'pool.json', {**identity, **state})
+            except PermissionError:
+                # The atomic writer already retries briefly. A longer Windows
+                # reader lock must not kill the manager and orphan active jobs.
+                print('看图队列状态文件暂被占用，下一轮重试；已有子任务继续运行。',flush=True)
             time.sleep(interval)
 
 

@@ -83,7 +83,9 @@ def test_watcher_waits_for_active_task_then_requests_one_graceful_reload(tmp_pat
         read_version=lambda root:{'commit':'new','source_sha256':'new'},clock=lambda:10)
     release.check(force=True);release.changed_at=0
     states=[{**idle_state(),'active':True},idle_state()]
-    console=idle_console();console.status=lambda:states.pop(0)
+    console=idle_console()
+    console.status=lambda:(_ for _ in ()).throw(AssertionError('watcher must reuse background sample'))
+    console.monitor=SimpleNamespace(get=lambda:{**states.pop(0),'status_sample':{'age_seconds':0}})
     stopped=[]
     server=SimpleNamespace(release=release,release_lock=threading.RLock(),console=console,
                            shutdown=lambda:stopped.append(True))
@@ -93,3 +95,18 @@ def test_watcher_waits_for_active_task_then_requests_one_graceful_reload(tmp_pat
         return len(waits)>2
     web.watch_release(server,SimpleNamespace(wait=wait))
     assert len(waits)==2 and stopped==[True] and release.restarting
+
+
+def test_watcher_never_reloads_from_missing_or_stale_background_status(tmp_path):
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+    import web_console as web
+    release=ReleaseReload(tmp_path,{},read_version=lambda root:{'commit':'new'},clock=lambda:10)
+    release.check(force=True);release.changed_at=0
+    states=[{'ok':True,'status_loading':True},
+            {**idle_state(),'status_sample':{'age_seconds':20}}]
+    console=idle_console();console.monitor=SimpleNamespace(get=lambda:states.pop(0))
+    stopped=[];waits=[]
+    def wait(_):waits.append(True);return len(waits)>2
+    web.watch_release(SimpleNamespace(release=release,release_lock=threading.RLock(),console=console,
+        shutdown=lambda:stopped.append(True)),SimpleNamespace(wait=wait))
+    assert not stopped and release.waiting

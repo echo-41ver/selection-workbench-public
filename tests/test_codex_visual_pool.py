@@ -56,7 +56,11 @@ def test_doubao_dispatches_whole_twelve_pair_groups_into_independent_slots(tmp_p
     job=next(iter(worker.jobs.values()))
     assert len(job['identities'])==len(bound[0])==12
     assert worker.launch({'task_id':'two'},[{**pair,'goods_id':'other'}])==1
-    with pytest.raises(RuntimeError,match='槽位'):worker.launch({'task_id':'two'},[{**pair,'goods_id':'other'}])
+    for index in range(3,11):
+        assert worker.launch({'task_id':str(index)},[{**pair,'goods_id':f'extra-{index}'}])==1
+    assert len(worker.jobs)==10
+    with pytest.raises(RuntimeError,match='所填写的分析并发数'):
+        worker.launch({'task_id':'eleven'},[{**pair,'goods_id':'extra-11'}])
 from test_codex_visual_review import fixture
 from test_set_inventory_identity import configured
 
@@ -328,6 +332,27 @@ def stub_pool(tmp_path, monkeypatch):
     return worker
 
 
+def test_manager_survives_locked_status_file_without_restarting_existing_jobs(tmp_path,monkeypatch):
+    import psutil
+    category=tmp_path/'category.json';category.write_text('{}')
+    pool.save(tmp_path/'stage123/codex_pool_config.json',{'enabled':True,'workers':2})
+    ticks=[];writes=[]
+    original={'existing':{'state':'running','pid':123}}
+    manager=SimpleNamespace(jobs=original,tick=lambda:ticks.append(True) or {'running':1})
+    monkeypatch.setattr(pool,'Pool',lambda *args:manager)
+    monkeypatch.setattr(psutil,'Process',lambda:SimpleNamespace(create_time=lambda:1))
+    def save(path,state):
+        writes.append(state)
+        if len(writes)==2:raise PermissionError('TEST_ONLY_READER_LOCK')
+    monkeypatch.setattr(pool,'save',save)
+    def sleep(_):
+        if len(ticks)==2:raise InterruptedError('TEST_ONLY_END_WATCH')
+    monkeypatch.setattr(pool.time,'sleep',sleep)
+    with pytest.raises(InterruptedError):pool.watch(category)
+    assert len(ticks)==2 and len(writes)==3
+    assert manager.jobs is original and original['existing']['pid']==123
+
+
 def test_saved_reply_import_retries_in_place_without_new_model_attempt(tmp_path,monkeypatch):
     worker=stub_pool(tmp_path,monkeypatch);worker.config['workers']=0
     pair,_=fixture();folder=tmp_path/'saved';folder.mkdir()
@@ -424,6 +449,19 @@ def test_one_active_group_cannot_be_dispatched_twice(tmp_path,monkeypatch):
         {'task_id':'one','rows':[row]},{'task_id':'duplicate-old-allocation','rows':[row]}]))
     state=worker.tick()
     assert state['running']==1
+
+
+@pytest.mark.parametrize('agent',['doubao','codex','workbuddy','acciowork'])
+def test_manual_pool_fills_requested_width_despite_legacy_agent_limit(tmp_path,monkeypatch,agent):
+    worker=stub_pool(tmp_path,monkeypatch)
+    worker.config.update(workers=10,concurrency_mode='manual',agent_backends=[
+        {'id':agent,'name':agent,'max_parallel':2,'max_group_size':12}])
+    rows=[{'asin':'A','goods_id':str(i),'vision_revision_key':'v'} for i in range(132)]
+    monkeypatch.setattr(pool,'tasks',lambda _:iter([{'task_id':'one','rows':rows}]))
+    state=worker.tick()
+    assert state['workers']==state['running']==10
+    assert all(len(job['identities'])==12 for job in worker.jobs.values())
+    assert state['pending']==12
 
 
 def test_current_completed_shards_do_not_end_enabled_continuous_observer(tmp_path,monkeypatch):

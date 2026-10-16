@@ -84,7 +84,7 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
 <label for="stage3-protocol">服务接口</label><select id="stage3-protocol"><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option><option value="decisions" selected>D1 决策接口</option></select></div>
 <label class="check-option"><input id="stage3-auto" type="checkbox" checked> 自动选择并发（可取消后手动设置）</label>
 <div class="two"><div id="stage3-model-field"><label for="stage3-model">模型 ID</label><input id="stage3-model" value="d1" maxlength="200" autocomplete="off"></div>
-<div id="stage3-workers-field"><label for="stage3-workers">分析并发数</label><input id="stage3-workers" type="number" value="4" min="1" max="256"></div></div>
+<div id="stage3-workers-field"><label for="stage3-workers">分析并发数</label><input id="stage3-workers" type="number" value="4" min="1" step="1"><p class="small">手动填写多少就按多少路调度，无程序上限；每组最多 12 个 TEMU。自动并发仅在勾选时调整。</p></div></div>
 <div id="stage3-confidence-field" hidden><label for="stage3-confidence">决策确认概率（%）</label><input id="stage3-confidence" type="number" value="90" min="50" max="100"><p class="small">仅供决策接口分流，尚未按当前品类校准；中间区间保留证据不足。</p></div>
 
 <p id="stage3-provider-hint" class="small">服务地址、Key 与模型必须来自同一服务商；提交后清空 Key。</p></details>
@@ -569,14 +569,21 @@ function showPage(page){
  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);
  placeDraftEditor();if(page==='history')loadHistory();
 }
-let historyLoading=false,historyRequest=0;
+let historyLoading=false,historyRequest=0,historyRetry,historyDetailRetry;
+async function historyJSON(path){
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
+ try{const response=await fetch(path,{cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'历史记录读取失败');return data;}
+ finally{clearTimeout(timer);}
+}
+function retryHistory(callback,delay=2000){return setTimeout(()=>{if(!$('history-panel').hidden)callback();},delay);}
 async function loadHistory(){
- if(historyLoading)return;historyLoading=true;const box=$('history-list');box.className='';
- try{const response=await fetch('/api/history',{cache:'no-store'});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'历史记录读取失败');box.replaceChildren();
+ if(historyLoading)return;clearTimeout(historyRetry);historyLoading=true;const box=$('history-list');box.className='';
+ try{const data=await historyJSON('/api/history');if(data.history_loading){box.textContent=data.status_sample?.error?'历史记录读取失败，正在自动重试；已有任务和文件保留。':'正在后台读取历史记录，请稍候…';historyRetry=retryHistory(loadHistory);return;}box.replaceChildren();
+ if(data.status_sample?.refreshing)historyRetry=retryHistory(loadHistory);
  if(!data.runs?.length){box.textContent='还没有历史任务。';return;}
  const quantity=value=>Number.isInteger(value)&&value>=0?value.toLocaleString('zh-CN')+' 件':'数量未记录';
  for(const row of data.runs){const card=document.createElement('div');card.className='history-row';const info=document.createElement('div');const name=document.createElement('strong');name.textContent=row.category_name||row.category_key;const detail=document.createElement('p');detail.className='small';detail.textContent=(row.status||'状态未知')+' · Amazon '+quantity(row.counts?.amazon)+' · TEMU '+quantity(row.counts?.temu)+(row.updated_at?' · '+new Date(typeof row.updated_at==='number'?row.updated_at*1000:row.updated_at).toLocaleString('zh-CN'):'');info.append(name,detail);const button=document.createElement('button');button.textContent='查看结果';button.addEventListener('click',()=>openHistory(row.category_key));card.append(info,button);box.append(card);}
- }catch(error){box.textContent=error.message;box.className='notice danger';}finally{historyLoading=false;}
+ }catch(error){box.textContent=error.name==='AbortError'?'历史记录连接超时，正在自动重试；也可点击刷新记录。':error.message;box.className='notice warning';historyRetry=retryHistory(loadHistory,3000);}finally{historyLoading=false;}
 }
 function historyExcelLinks(key,files){
  const links=document.createElement('div');links.className='excel-actions';
@@ -594,8 +601,10 @@ function historyExcelLinks(key,files){
  return links;
 }
 async function openHistory(key){const request=++historyRequest;
+ clearTimeout(historyDetailRetry);
  const box=$('history-detail');box.replaceChildren();box.textContent='正在读取历史结果…';
- try{const response=await fetch('/api/history/'+encodeURIComponent(key),{cache:'no-store'});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'读取失败');if(request!==historyRequest)return;box.replaceChildren();const heading=document.createElement('h2');heading.textContent=(data.scope?.category||key)+' · 历史结果';box.append(heading);const state=document.createElement('p');state.textContent=data.phase||data.status||data['状态']||'已保存';box.append(state);
+ try{const data=await historyJSON('/api/history/'+encodeURIComponent(key));if(request!==historyRequest)return;if(data.history_loading){box.textContent=data.status_sample?.error?'历史结果读取失败，正在自动重试；原始文件保留。':'正在后台读取历史结果，请稍候…';historyDetailRetry=retryHistory(()=>{if(request===historyRequest)openHistory(key);});return;}box.replaceChildren();const heading=document.createElement('h2');heading.textContent=(data.scope?.category||key)+' · 历史结果';box.append(heading);const state=document.createElement('p');state.textContent=data.phase||data.status||data['状态']||'已保存';box.append(state);
+ if(data.status_sample?.refreshing)historyDetailRetry=retryHistory(()=>{if(request===historyRequest)openHistory(key);});
  const latest=data.excel_files?.layer123;
  if(latest?.available){const published=document.createElement('p');published.className='notice';published.textContent='综合 Excel 已发布'+(latest.updated_at?' · 最新更新时间：'+new Date(latest.updated_at*1000).toLocaleString('zh-CN'):'')+'。下方市场数据日期为原始采集时间。';box.insertBefore(published,state);state.textContent='采集任务保存状态：'+state.textContent;}
  box.append(historyExcelLinks(key,data.excel_files));
@@ -604,7 +613,7 @@ async function openHistory(key){const request=++historyRequest;
  const businessBox=document.createElement('section');businessBox.id='history-commercial';box.append(businessBox);renderBusiness(data.commercial,businessBox,true);if(data.commercial_error){const warning=document.createElement('p');warning.className='notice danger';warning.textContent='该任务保存的商业判断异常：'+data.commercial_error;businessBox.append(warning);}
  const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='查看保存的市场结果和进度';const pre=document.createElement('pre');pre.textContent=JSON.stringify(safe({market:data.frontend_market,progress:data.details}),null,2);details.append(summary,pre);box.append(details);
  box.scrollIntoView({behavior:'smooth',block:'start'});
- }catch(error){if(request===historyRequest)box.textContent=error.message;}
+ }catch(error){if(request===historyRequest){box.textContent=error.name==='AbortError'?'历史结果连接超时，正在自动重试。':error.message;historyDetailRetry=retryHistory(()=>{if(request===historyRequest)openHistory(key);},3000);}}
 }
 async function loadVisualReview(){
  const requestedKey=lastStatus?.category_key;

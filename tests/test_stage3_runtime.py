@@ -1,6 +1,7 @@
 from copy import deepcopy
 from pathlib import Path
 import sys
+import pytest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from selection_automation.stage3_runtime import update_control,dispatch_allowed,read_control
@@ -19,6 +20,12 @@ def test_pause_one_agent_preserves_other_dispatch_and_saved_state(tmp_path):
     assert dispatch_allowed(tmp_path,'doubao')
     update_control(tmp_path,switch_pending=True)
     assert not dispatch_allowed(tmp_path,'doubao')
+
+
+def test_manual_provider_concurrency_has_no_fixed_ceiling():
+    for mode in ('local_agent','liquid_d1','multimodal_api','local_model'):
+        provider=settings({'mode':mode,'workers':1024,'concurrency_mode':'manual'})
+        assert provider['workers']==1024 and provider['concurrency_mode']=='manual'
 
 
 def test_explicit_continue_clears_selected_verification_but_preserves_manual_pauses(tmp_path):
@@ -160,7 +167,9 @@ def test_pool_keeps_twelve_candidates_together_across_old_shards(tmp_path,monkey
     assert len(dispatched[0][0]['members'])==12
 
 
-def test_native_agent_change_applies_to_new_groups_while_old_jobs_settle(tmp_path,monkeypatch):
+@pytest.mark.parametrize('workers',[2,24,400])
+@pytest.mark.parametrize('saved_first',[False,True])
+def test_native_agent_change_applies_to_new_groups_while_old_jobs_settle(tmp_path,monkeypatch,workers,saved_first):
     import web_console as web
     import run_codex_visual_pool as pool
     import selection_automation.stage3_progress as progress
@@ -178,11 +187,16 @@ def test_native_agent_change_applies_to_new_groups_while_old_jobs_settle(tmp_pat
     monkeypatch.setattr(local_agents,'ready_agents',lambda *args,**kw:agents)
     monkeypatch.setattr(agent_models,'validate_selection',lambda *args:None)
     starts=[];monkeypatch.setattr(pool,'ensure_pool',lambda *args:starts.append(args))
-    target=settings({'mode':'local_agent','agent_ids':['doubao'],'agent_models':{'doubao':'TEST_FAST_MODEL'},'workers':2,'concurrency_mode':'manual'})
+    target=settings({'mode':'local_agent','agent_ids':['doubao'],'agent_models':{'doubao':'TEST_FAST_MODEL'},'workers':workers,'concurrency_mode':'manual'})
+    if saved_first:
+        apply(cat,target);web.selection.save(base/'category.json',cat)
+        web.selection.save(base/'stage123/codex_pool_config.json',{'workers':2,'agent_ids':['acciowork','doubao']})
     result=console.start_stage3({'provider':target})
     assert not result.get('switch_pending') and len(starts)==1
     assert not (base/'stage123/STOP').exists()
     assert web.selection.read(base/'stage123/codex_pool_config.json')['agent_ids']==['doubao']
+    saved=web.selection.read(base/'stage123/codex_pool_config.json')
+    assert saved['workers']==saved['agent_backends'][0]['max_parallel']==workers
     assert web.selection.read(base/'category.json')['stage3']['provider']==target
 
 
