@@ -53,7 +53,7 @@ test('cold page controls accept absent task state before the first status reques
  assert.equal(get('start-stage3').disabled,true);
  assert.equal(get('stop-stage3').disabled,true);
  assert.equal(get('codex-review-controls').hidden,true);
- assert.match(get('stage3-count').textContent,/已进入第三层 0 对/);
+ assert.match(get('stage3-count').textContent,/等待读取候选与已处理数量/);
 });
 
 test('Codex pool status stays separate from full candidate progress and reports Excel publishing',()=>{
@@ -117,7 +117,7 @@ test('a hung status connection times out and the next poll can recover',async()=
  assert.match(get('connection').textContent,/超时.*自动重试/);
  assert.equal(vm.runInContext('polling',context),false);assert.equal(context.statusFresh,false);
  await vm.runInContext('poll()',context);
- assert.equal(calls,2);assert.deepEqual({...rendered},{ok:true});assert.equal(context.statusFresh,true);assert.equal(cleared,2);
+ assert.equal(calls,2);assert.equal(rendered.ok,true);assert.ok(rendered.received_at);assert.equal(context.statusFresh,true);assert.equal(cleared,2);
 });
 
 test('background status loading and stale samples never enable task actions',async()=>{
@@ -127,4 +127,29 @@ test('background status loading and stale samples never enable task actions',asy
  await vm.runInContext('poll()',context);assert.equal(rendered,0);assert.equal(context.statusFresh,false);assert.match(get('connection').textContent,/正在汇总/);
  context.fetch=async()=>({ok:true,json:async()=>({ok:true,status_sample:{age_seconds:31}})});
  await vm.runInContext('poll()',context);assert.equal(context.statusFresh,false);assert.match(get('overview').textContent,/31 秒前/);
+});
+
+
+test('live controls survive slow report accounting but disconnect immediately removes live authority',async()=>{
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);};
+ const context=vm.createContext({$:get,lastStatus:{live_loading:false},statusFresh:true,AbortController,Error,Date,Math,console:{error(){}},updateControls(){},render(data){context.lastStatus=data;},setTimeout(){return 1;},clearTimeout(){},fetch:async()=>({ok:true,json:async()=>({ok:true,status_sample:{age_seconds:40},live_sample:{age_seconds:0,sampled_at:Date.now()/1000},stage3_runtime:{agent_blocks:{}}})})});
+ vm.runInContext(html.slice(html.indexOf('let polling=false;'),html.indexOf('function showPage(page)')),context);
+ await vm.runInContext('poll()',context);
+ assert.equal(context.statusFresh,false);assert.match(get('connection-warning').textContent,/第三层运行控制已单独同步/);
+ assert.match(get('overview').textContent,/第三层运行状态已同步/);
+ context.fetch=async()=>{throw Error('offline');};await vm.runInContext('poll()',context);
+ assert.equal(context.lastStatus.live_loading,true);assert.match(get('connection-warning').textContent,/上次记录/);
+ context.fetch=async()=>({ok:true,json:async()=>({ok:true,status_sample:{age_seconds:0},live_sample:{age_seconds:0,sampled_at:Date.now()/1000}})});
+ await vm.runInContext('poll()',context);assert.equal(get('connection-warning').hidden,true);
+});
+
+test('a timed out control request unlocks the page and never resubmits automatically',async()=>{
+ let timeout,calls=0,message='';
+ const context=vm.createContext({busy:false,statusFresh:false,lastStatus:{category_key:'fixture'},liveStage3Fresh:()=>true,AbortController,
+  updateControls(){},feedback(text){message=text;},poll(){},setTimeout(callback){timeout=callback;return 1;},clearTimeout(){},
+  fetch:(_path,{signal})=>{calls++;return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(Error('timeout'),{name:'AbortError'}))));}});
+ vm.runInContext(html.slice(html.indexOf('async function action(endpoint,body)'),html.indexOf("$('retry-generation').addEventListener")),context);
+ const pending=vm.runInContext("action('/api/control-stage3',{action:'pause'})",context);
+ assert.equal(calls,1);timeout();await pending;
+ assert.equal(context.busy,false);assert.equal(calls,1);assert.match(message,/提交结果待确认.*不会自动重复提交/);
 });
