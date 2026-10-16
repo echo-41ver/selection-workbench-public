@@ -1334,9 +1334,9 @@ class Console:
             codex_state=codex_review_control(base)
             running=api_running or codex_state.get('running')
             if running and not provider_changed:
-                from selection_automation.stage3_runtime import update_control
+                from selection_automation.stage3_runtime import resume_dispatch
                 (base/'stage123/STOP').unlink(missing_ok=True)
-                update_control(base/'stage123',paused=False,switch_error=None)
+                resume_dispatch(base/'stage123',provider['agent_ids'] if provider['mode']=='local_agent' else ())
                 return {'ok':True,'phase':'第三层已继续，沿用已保存断点','provider':provider}
             if self.stage3_busy and self.stage3_key==key and not running and not provider_changed:
                 return {'ok':True,'phase':'第三层启动中'}
@@ -1397,6 +1397,9 @@ class Console:
                 return {'ok':True,'provider':provider,'message':'第三层方案已保存；API Key 已在本机加密保存，尚未启动分析'}
             (folder/'STOP').unlink(missing_ok=True)
             update_control(folder,paused=False,switch_pending=False,switch_cancelled=False,switch_error=None)
+            if provider['mode']=='local_agent':
+                from selection_automation.stage3_runtime import resume_dispatch
+                resume_dispatch(folder,provider['agent_ids'])
             selection.save(folder/'paid_enabled.json',{'category_key':key,'enabled_at':time.time(),
                 'source':'web-console','controller':'independent','provider':provider['mode']})
             if provider['mode']=='local_agent':
@@ -1448,7 +1451,12 @@ class Console:
                 clear_agent_block(folder,agent)
             value=update_control(folder,paused_agents=sorted(paused))
         else:
-            value=update_control(folder,paused=action=='pause',switch_error=None)
+            if action=='resume':
+                from selection_automation.stage3_runtime import resume_dispatch
+                from selection_automation.stage3_provider import from_category
+                provider=from_category(selection.read(folder.parent/'category.json',{}))
+                value=resume_dispatch(folder,provider['agent_ids'] if provider['mode']=='local_agent' else ())
+            else:value=update_control(folder,paused=True,switch_error=None)
             if action=='resume':
                 from selection_automation.stage3_progress import controller_alive
                 if not controller_alive(self.root/'runs'/key) and not codex_review_control(self.root/'runs'/key).get('running'):

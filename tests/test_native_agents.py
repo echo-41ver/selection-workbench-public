@@ -102,6 +102,83 @@ def test_observer_setup_timeout_cleans_created_view_before_worker_receives_it(tm
     assert closed==['OWNED_CREATED_VIEW']
 
 
+def test_unresponsive_independent_view_uses_registered_reader_without_sending(tmp_path,monkeypatch):
+    monkeypatch.setattr(native,'new_doubao_target',lambda *args:(_ for _ in ()).throw(TimeoutError('unattached view')))
+    observed=[]
+    result=({'id':'REGISTERED'},object(),object())
+    monkeypatch.setattr(native,'registered_doubao_observer',lambda root,job,state:observed.append(state['url']) or result)
+    assert native.open_doubao_observer(tmp_path,tmp_path/'job',{'url':'chrome://doubao-chat/chat/123'})==result
+    assert observed==['chrome://doubao-chat/chat/123']
+    assert native.read(tmp_path/'runtime/agent-config/doubao-observer-fallback.json')['enabled']
+
+
+def test_observer_verification_never_falls_back_to_another_view(tmp_path,monkeypatch):
+    from selection_automation.agent_blockers import AgentActionRequired
+    monkeypatch.setattr(native,'new_doubao_target',lambda *args:(_ for _ in ()).throw(AgentActionRequired('doubao','HUMAN_VERIFICATION_REQUIRED','verification')))
+    monkeypatch.setattr(native,'registered_doubao_observer',lambda *args:pytest.fail('must not route around verification'))
+    with pytest.raises(AgentActionRequired):native.open_doubao_observer(tmp_path,tmp_path/'job',{'url':'saved'})
+
+
+@pytest.mark.parametrize('draft,gate',[(False,False),(True,False),(False,True)])
+def test_registered_reader_checks_gate_draft_and_original_marker(tmp_path,monkeypatch,draft,gate):
+    from selection_automation.agent_blockers import AgentActionRequired
+    job=tmp_path/'job';job.mkdir();native.save(tmp_path/'runtime/agent-config/doubao-observer-fallback.json',{'target_id':'REGISTERED'})
+    monkeypatch.setenv('LOCALAPPDATA',str(tmp_path))
+    monkeypatch.setattr(native,'doubao_targets',lambda root:[{'id':'REGISTERED','webSocketDebuggerUrl':'ws://127.0.0.1/page'}])
+    monkeypatch.setattr(native,'activate_doubao_target',lambda *args:None)
+    events=[]
+    class Page:
+        def __init__(self,url):pass
+        def evaluate(self,expression):
+            if 'vc_captcha_wrapper' in expression:return gate
+            if 'contenteditable' in expression:return draft
+            if expression=='location.href':return 'saved-url'
+            assert 'UNIQUE_ORIGINAL' in expression
+            events.append('original-marker-checked');return True
+        def call(self,method,params):
+            assert method=='Page.setWebLifecycleState' and params=={'state':'active'}
+            return {}
+        def close(self):events.append('closed')
+    monkeypatch.setattr(native,'CDP',Page)
+    state={'url':'saved-url','marker':'UNIQUE_ORIGINAL','send_target_id':'MAIN'}
+    if draft or gate:
+        with pytest.raises(AgentActionRequired):native.registered_doubao_observer(tmp_path,job,state)
+        assert events==['closed']
+    else:
+        target,client,lock=native.registered_doubao_observer(tmp_path,job,state)
+        assert target['id']=='REGISTERED' and events==['original-marker-checked']
+        assert native.read(job/'native-session.json')['owned_target'] is False
+        client.close();lock.__exit__()
+
+
+@pytest.mark.parametrize('history_ready',[True,False])
+def test_registered_reader_uses_native_history_link_without_reloading_a_chat_deep_link(tmp_path,monkeypatch,history_ready):
+    native.save(tmp_path/'runtime/agent-config/doubao-observer-fallback.json',{'target_id':'REGISTERED'})
+    monkeypatch.setenv('LOCALAPPDATA',str(tmp_path));monkeypatch.setattr(native,'activate_doubao_target',lambda *args:None)
+    monkeypatch.setattr(native,'doubao_targets',lambda root:[{'id':'REGISTERED','webSocketDebuggerUrl':'ws://127.0.0.1/page'}])
+    events=[]
+    class Page:
+        def __init__(self,url):self.ready=history_ready
+        def evaluate(self,expr):
+            if 'vc_captcha_wrapper' in expr or 'contenteditable' in expr:return False
+            if expr=='location.href':return 'chrome://doubao-chat/chat'
+            if "querySelectorAll('a[href]')" in expr:
+                assert '/chat/123' in expr
+                if not self.ready:return False
+                events.append('native-history-link');return True
+            assert 'UNIQUE' in expr;return True
+        def call(self,method,params):
+            if method=='Page.navigate':
+                assert params['url']=='chrome://doubao-chat/chat'
+                self.ready=True;events.append('landing-route')
+            else:assert method=='Page.setWebLifecycleState','must not submit'
+            return {}
+        def close(self):pass
+    monkeypatch.setattr(native,'CDP',Page)
+    _,page,lock=native.registered_doubao_observer(tmp_path,tmp_path/'job',{'url':'chrome://doubao-chat/chat/123','marker':'UNIQUE'})
+    assert events==(['native-history-link'] if history_ready else ['landing-route','native-history-link']);page.close();lock.__exit__()
+
+
 def test_compact_recovery_uses_original_codec_and_accepts_numeric_text_without_changing_facts(tmp_path,monkeypatch):
     from test_vision_group_compact import responses
     cat,_,raw=responses(2)

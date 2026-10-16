@@ -30,3 +30,15 @@ def block_agent(folder,agent,code,message):
 def clear_agent_block(folder,agent):
     value=read_control(folder);blocks=dict(value.get('agent_blocks',{}));blocks.pop(agent,None)
     return update_control(folder,agent_blocks=blocks,paused_agents=[a for a in value.get('paused_agents',[]) if a!=agent])
+
+
+def resume_dispatch(folder,agent_ids=()):
+    """An explicit Continue retries selected verification gates, not manual pauses.
+
+    Native workers recheck the actual client gate before any model send.
+    """
+    value=read_control(folder);blocks=dict(value.get('agent_blocks',{}))
+    released={agent for agent in agent_ids if blocks.get(agent,{}).get('code')=='HUMAN_VERIFICATION_REQUIRED'}
+    return update_control(folder,paused=False,switch_error=None,
+        agent_blocks={agent:block for agent,block in blocks.items() if agent not in released},
+        paused_agents=[agent for agent in value.get('paused_agents',[]) if agent not in released])

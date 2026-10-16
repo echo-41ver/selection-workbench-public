@@ -21,6 +21,45 @@ def test_pause_one_agent_preserves_other_dispatch_and_saved_state(tmp_path):
     assert not dispatch_allowed(tmp_path,'doubao')
 
 
+def test_explicit_continue_clears_selected_verification_but_preserves_manual_pauses(tmp_path):
+    from selection_automation.stage3_runtime import block_agent,resume_dispatch
+    update_control(tmp_path,paused=True,paused_agents=['acciowork','codex'])
+    block_agent(tmp_path,'doubao','HUMAN_VERIFICATION_REQUIRED','verification')
+    block_agent(tmp_path,'claude','LOGIN_REQUIRED','login')
+    value=resume_dispatch(tmp_path,['doubao','claude','codex'])
+    assert not value['paused'] and dispatch_allowed(tmp_path,'doubao')
+    assert set(value['paused_agents'])=={'acciowork','codex','claude'}
+    assert set(value['agent_blocks'])=={'claude'}
+
+
+def test_global_continue_route_releases_the_selected_agent_gate(tmp_path,monkeypatch):
+    import web_console as web
+    from selection_automation.stage3_runtime import block_agent
+    cat={'category_key':'fixture','stage3':{'modules':{'design':100}}}
+    apply(cat,settings({'mode':'local_agent','agent_ids':['doubao']}))
+    base=tmp_path/'runs/fixture';base.mkdir(parents=True);web.selection.save(base/'category.json',cat)
+    update_control(base/'stage123',paused=True,paused_agents=['acciowork'])
+    block_agent(base/'stage123','doubao','HUMAN_VERIFICATION_REQUIRED','verification')
+    console=web.Console(tmp_path);monkeypatch.setattr(console,'current_run_key',lambda:('fixture',True))
+    monkeypatch.setattr(web,'codex_review_control',lambda base:{'running':True})
+    result=console.control_stage3({'action':'resume'})
+    assert result['ok'] and dispatch_allowed(base/'stage123','doubao')
+    assert read_control(base/'stage123')['paused_agents']==['acciowork']
+
+
+def test_continue_start_route_releases_existing_agent_gate_without_new_controller(tmp_path,monkeypatch):
+    import web_console as web
+    from selection_automation.stage3_runtime import block_agent
+    cat={'category_key':'fixture','stage3':{'modules':{'design':100}}}
+    provider=settings({'mode':'local_agent','agent_ids':['doubao']});apply(cat,provider)
+    base=tmp_path/'runs/fixture';base.mkdir(parents=True);web.selection.save(base/'category.json',cat)
+    block_agent(base/'stage123','doubao','HUMAN_VERIFICATION_REQUIRED','verification')
+    console=web.Console(tmp_path);monkeypatch.setattr(console,'current_run_key',lambda:('fixture',True))
+    monkeypatch.setattr(web,'codex_review_control',lambda base:{'running':True})
+    result=console.start_stage3({'provider':provider})
+    assert result['ok'] and dispatch_allowed(base/'stage123','doubao')
+
+
 def test_explicit_provider_switch_reuses_unchanged_evidence_only(tmp_path):
     from test_identity_policy import category
     from PIL import Image

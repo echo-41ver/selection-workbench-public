@@ -350,6 +350,92 @@ def release_doubao_observer(root,target,state):
         close_doubao_target(root,target['id'])
 
 
+def activate_doubao_target(root,identifier):
+    with build_opener(ProxyHandler({})).open(doubao_endpoint(root)+'/json/version',timeout=10) as response:version=json.load(response)
+    browser=CDP(version['webSocketDebuggerUrl'])
+    try:browser.call('Target.activateTarget',{'targetId':identifier})
+    finally:browser.close()
+
+
+def registered_doubao_observer(root,job,state):
+    """Read a saved chat in a registered native view; never send another query."""
+    import os
+    import websocket
+    from .process_lock import ProcessLock
+    from .agent_blockers import require_doubao_ready,AgentActionRequired
+    config=read(Path(root)/'runtime/agent-config/doubao-observer-fallback.json',{})
+    targets=doubao_targets(root)
+    target=next((t for t in targets if t['id']==config.get('target_id')),None)
+    if target is None:target=next((t for t in targets if t['id']==state.get('send_target_id')),None)
+    if target is None:raise RuntimeError('豆包已注册的结果读取页不可用；原会话保留且不重发')
+    primary=target['id']==state.get('send_target_id')
+    locks=Path(os.environ.get('LOCALAPPDATA',Path.home()))/'SelectionWorkbench/agent-locks';locks.mkdir(parents=True,exist_ok=True)
+    lock=ProcessLock(locks/('doubao.lock' if primary else 'doubao-observer.lock'))
+    deadline=time.monotonic()+900
+    while True:
+        try:lock.__enter__();break
+        except RuntimeError:
+            if time.monotonic()>=deadline:raise RuntimeError('豆包结果读取排队超时；原会话保留且不重发')
+            time.sleep(.5)
+    cdp=None
+    try:
+        activate_doubao_target(root,target['id'])
+        cdp=CDP(target['webSocketDebuggerUrl'])
+        cdp.call('Page.setWebLifecycleState',{'state':'active'})
+        require_doubao_ready(cdp)
+        draft=cdp.evaluate("[...document.querySelectorAll('textarea,[contenteditable=true]')].some(e=>e.getClientRects().length&&(e.value||e.innerText||'').trim())")
+        if draft is True:raise AgentActionRequired('doubao','CLIENT_DRAFT_PRESENT','豆包输入框有未发送草稿，请先保存或发送草稿后继续；已有任务保留')
+        if cdp.evaluate('location.href')!=state['url']:
+            path=urlsplit(state['url']).path
+            clicked=cdp.evaluate("(()=>{const a=[...document.querySelectorAll('a[href]')].find(e=>e.getAttribute('href')==="+json.dumps(path)+");if(!a)return false;a.click();return true;})()")
+            if not clicked:
+                try:cdp.call('Page.navigate',{'url':'chrome://doubao-chat/chat'})
+                except Exception:
+                    cdp.close();cdp=CDP(target['webSocketDebuggerUrl'])
+                landing_deadline=time.monotonic()+60
+                while time.monotonic()<landing_deadline:
+                    cdp.call('Page.setWebLifecycleState',{'state':'active'})
+                    require_doubao_ready(cdp)
+                    clicked=cdp.evaluate("(()=>{const a=[...document.querySelectorAll('a[href]')].find(e=>e.getAttribute('href')==="+json.dumps(path)+");if(!a)return false;a.click();return true;})()")
+                    if clicked:break
+                    time.sleep(.5)
+                if not clicked:raise RuntimeError('豆包侧边栏尚未载入原会话；保留任务且不重发')
+        deadline=time.monotonic()+60
+        marker=state.get('marker') or str(state.get('result_job',job))
+        while time.monotonic()<deadline:
+            try:
+                cdp.call('Page.setWebLifecycleState',{'state':'active'})
+                require_doubao_ready(cdp)
+                if cdp.evaluate("[...document.querySelectorAll('[data-testid=send_message]')].some(e=>e.innerText.includes("+json.dumps(marker)+"))"):
+                    state.update(target_id=target['id'],owned_target=False,registered_observer=True)
+                    save(Path(job)/'native-session.json',state)
+                    return target,cdp,lock
+            except (OSError,TimeoutError,websocket.WebSocketException):
+                cdp.close();cdp=CDP(target['webSocketDebuggerUrl'])
+            time.sleep(.5)
+        raise RuntimeError('豆包原会话尚未加载，保留任务且不重复发送')
+    except BaseException:
+        if cdp:cdp.close()
+        lock.__exit__()
+        raise
+
+
+def open_doubao_observer(root,job,state):
+    from .agent_blockers import AgentActionRequired
+    config_path=Path(root)/'runtime/agent-config/doubao-observer-fallback.json'
+    config=read(config_path,{})
+    if not config.get('enabled'):
+        try:
+            target=new_doubao_target(root,job,state['url'])
+            return target,CDP(target['webSocketDebuggerUrl']),None
+        except AgentActionRequired:raise
+        except Exception:
+            # Some desktop versions expose unattached Chromium targets whose
+            # pages never execute JS. Recover through a registered native view.
+            save(config_path,{**config,'enabled':True,'reason':'independent_observer_unavailable'})
+    return registered_doubao_observer(root,job,state)
+
+
 def doubao_request(job,prompt):
     job=Path(job)
     if read(job/'transport-result.json',{}).get('type')=='vision_probe':
@@ -514,14 +600,15 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
     lock.parent.mkdir(parents=True,exist_ok=True)
     with ProcessLock(lock):
         targets=doubao_targets(root);state=read(receipt,{})
+        observer_lock=None;registered_cdp=None
         if state and state.get('model')!=model:raise RuntimeError('豆包原任务模型不同，已保留且不重发')
         if state:
             target=next((row for row in targets if row['id']==state.get('target_id')),None)
             if not target or not state.get('owned_target'):
                 url=state.get('url','')
                 if not re.search(r'/chat/\d+',url):raise RuntimeError('原豆包会话地址尚未确认，已保留且不重发')
-                target=new_doubao_target(root,job,url)
-                state.update(target_id=target['id'],owned_target=True);save(receipt,state)
+                target,registered_cdp,observer_lock=open_doubao_observer(root,job,state)
+                state.update(target_id=target['id'],owned_target=observer_lock is None);save(receipt,state)
         else:
             # Native attachment upload needs the registered desktop view. Hold
             # only its composer during submission, then observe each saved chat
@@ -543,7 +630,7 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 if target is None:raise RuntimeError('豆包桌面输入页不可用，本组尚未发送')
             except Exception:
                 composer.__exit__();raise
-        cdp=CDP(target['webSocketDebuggerUrl'])
+        cdp=registered_cdp or CDP(target['webSocketDebuggerUrl'])
         composer_held=not bool(state)
         try:
             if not state:
@@ -602,13 +689,14 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
                 else:raise RuntimeError('豆包会话尚未确认，保留原任务且不重复发送')
                 state.update(url=url,bound_url=True,send_target_id=target['id']);save(receipt,state)
                 composer.__exit__();composer_held=False
-                observer=new_doubao_target(root,job,url)
-                cdp.close();target=observer;cdp=CDP(target['webSocketDebuggerUrl'])
-                state.update(target_id=target['id'],owned_target=True);save(receipt,state)
+                cdp.close()
+                target,cdp,observer_lock=open_doubao_observer(root,job,state)
+                state.update(target_id=target['id'],owned_target=observer_lock is None);save(receipt,state)
             original=Path(state.get('result_job',job));deadline=time.monotonic()+timeout
             last_answer=None;stable_since=time.monotonic()
             while time.monotonic()<deadline:
                 if result_exists(original):copy_result(original,job);finish_native_response(job,state);return
+                if state.get('registered_observer'):cdp.call('Page.setWebLifecycleState',{'state':'active'})
                 require_doubao_ready(cdp)
                 current=cdp.evaluate('location.href')
                 marker=state.get('marker') or str(original)
@@ -634,3 +722,4 @@ def doubao_run(root,job,prompt,timeout=900,model=None):
             if composer_held:composer.__exit__()
             cdp.close()
             release_doubao_observer(root,target,state)
+            if observer_lock:observer_lock.__exit__()
