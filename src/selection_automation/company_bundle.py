@@ -62,7 +62,7 @@ def normalize(value,require_model=False):
 
 def import_bundle(root,value,store):
     """All validation precedes writes; rollback both encrypted files on failure."""
-    normalized=normalize(value,require_model=value.get('schema_version')==SCHEMA);folder=Path(root)/'runtime/secrets';folder.mkdir(parents=True,exist_ok=True)
+    normalized=normalize(value);folder=Path(root)/'runtime/secrets';folder.mkdir(parents=True,exist_ok=True)
     targets=[('company.dpapi',{k:v for k,v in normalized.items() if k not in {'deepseek','liquid_d1'}})]
     if 'deepseek' in normalized:targets.append(('deepseek.dpapi',normalized['deepseek']))
     if 'liquid_d1' in normalized:targets.append(('liquid_d1.dpapi',normalized['liquid_d1']))
@@ -87,6 +87,13 @@ def import_bundle(root,value,store):
             temporary.unlink(missing_ok=True)
             temporary.with_suffix('.tmp').unlink(missing_ok=True)
     return normalized
+
+def portable(value):
+    """Keep company credentials, let the receiving machine discover its own VPN."""
+    config=normalize(value)
+    config.pop('local_proxy_endpoint',None)
+    config['preproxy_candidates']=[]
+    return config
 
 def apply_model_settings(saved,environ):
     # Child-process settings only; no setx, registry or persistent environment changes.

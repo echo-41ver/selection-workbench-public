@@ -76,6 +76,8 @@ def socks_available(host,port):
 def ensure_adspower_api(company):
     from replace_proxyshare_worker_environment import api_call
     base=company.get('adspower_api_url','http://127.0.0.1:50325')
+    # Authentication must be present on the first probe, including a fresh install.
+    os.environ['ADSPOWER_API_KEY']=company['adspower_api_key']
     try:
         api_call(base,'/status',timeout=3)
     except RuntimeError:
@@ -87,7 +89,7 @@ def ensure_adspower_api(company):
         if os.getenv('ADSPOWER_USER_DATA_DIR'):
             arguments.append('--user-data-dir='+os.environ['ADSPOWER_USER_DATA_DIR'])
         from selection_automation.flower_background import startup_environment
-        subprocess.Popen(arguments,env=startup_environment(os.environ),
+        subprocess.Popen(arguments,cwd=str(Path(exe).parent),env=startup_environment(os.environ),
                          stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
         deadline=time.monotonic()+60
         while True:

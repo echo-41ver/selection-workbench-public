@@ -11,6 +11,7 @@ dist/
 .env
 .env.*
 .deployment-backup/
+deployment-assets/
 company.local.json
 config/sessions.json
 config/*local*

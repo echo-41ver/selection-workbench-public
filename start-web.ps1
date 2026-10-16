@@ -10,6 +10,8 @@ if (-not [StringComparer]::OrdinalIgnoreCase.Equals($root, $PSScriptRoot)) {
 Set-Location -LiteralPath $root
 $appAliases = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
 $env:PATH = [Environment]::GetEnvironmentVariable('PATH','Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH','User') + ';' + $appAliases + ';' + $env:PATH
+$localRuntime = Join-Path $root 'local-runtime.ps1'
+if (Test-Path -LiteralPath $localRuntime -PathType Leaf) { . $localRuntime }
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
 $env:TORCH_HOME = Join-Path $root 'runtime\models\torch'

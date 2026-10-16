@@ -1,11 +1,11 @@
 """Human-operated full internal bundle wizard. Never run during release builds."""
-import argparse,json,sys,zipfile,os,uuid
+import argparse,json,sys,zipfile,os,uuid,shutil
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from selection_automation.company_bundle import normalize
+from selection_automation.company_bundle import normalize, portable
 
 def write_bundle(base,destination,configuration):
-    config=normalize(configuration,require_model=True);base=Path(base);destination=Path(destination)
+    config=portable(configuration);base=Path(base);destination=Path(destination)
     if destination.exists() or destination.resolve()==base.resolve():raise ValueError('Output must be a new internal package file')
     temporary=destination.with_name(destination.name+'.'+uuid.uuid4().hex+'.tmp')
     try:
@@ -13,8 +13,9 @@ def write_bundle(base,destination,configuration):
             info=json.loads(source.read('BUILD_INFO.json'))
             if info.get('channel')!='internal' or info.get('contains_company_credentials') or 'company.local.json' in source.namelist():raise ValueError('Use a clean internal base package')
             for entry in source.infolist():
-                if entry.filename!='BUILD_INFO.json':out.writestr(entry,source.read(entry))
-            info.update(contains_company_credentials=True,company_config_schema='company-bundle-v2')
+                if entry.filename!='BUILD_INFO.json':
+                    with source.open(entry) as data,out.open(entry,'w') as target:shutil.copyfileobj(data,target)
+            info.update(contains_company_credentials=True,company_config_schema='company-bundle-v2',unattended_company_import=True)
             out.writestr('BUILD_INFO.json',json.dumps(info,ensure_ascii=False,indent=2))
             out.writestr('company.local.json',json.dumps(config,ensure_ascii=False,indent=2))
         with zipfile.ZipFile(temporary) as archive:

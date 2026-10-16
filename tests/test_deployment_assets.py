@@ -80,14 +80,15 @@ function Checked {
                                  '-File', str(script), '-SkipAdsPower', '-SkipProxyClient'],
                                 env={**os.environ, 'COMMAND_LOG': str(log)}, capture_output=True, timeout=30)
         diagnostic = (result.stdout + result.stderr).decode('utf-8', errors='replace')
-        commands = [json.loads(line) for line in log.read_text(encoding='utf-8-sig').splitlines()]
+        commands = [json.loads(line) for line in log.read_text(encoding='utf-8-sig').splitlines()] if log.exists() else []
         pip_calls = [call for call in commands if 'pip' in call['arguments']]
         status = json.loads((target / 'runtime/install-status.json').read_text(encoding='utf-8-sig'))
         if corrupt:
             assert result.returncode != 0, diagnostic
             assert not pip_calls
             assert status['succeeded'] is False
-            assert status['project_environment_rolled_back'] is True
+            # Asset verification now runs before any environment is moved or tool executed.
+            assert status['project_environment_rolled_back'] is False
         else:
             assert result.returncode == 0, diagnostic
             assert status['succeeded'] is True

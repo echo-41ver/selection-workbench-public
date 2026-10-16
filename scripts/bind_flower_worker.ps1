@@ -110,9 +110,9 @@ function Resolve-ProfileMarionettePort([string]$Id) {
     }
     $script:expectedProfileBrowserPid = $script:profileBrowserPid
     $script:expectedProfileBrowserTicks = $createdTicks
-    $match = [regex]::Match([string]$matched[0].CommandLine, '(?i)(?:--user-data-dir=|--profile(?:-directory)?=)\s*"?([^"\s]+)')
+    $match = [regex]::Match([string]$matched[0].CommandLine, '(?i)(?:--user-data-dir|--profile(?:-directory)?)(?:=|\s+)\s*(?:"(?<quoted>[^"]+)"|(?<bare>[^"\s]+))')
     if (-not $match.Success) { throw 'Cannot locate the selected browser profile directory.' }
-    $profileRoot = $match.Groups[1].Value.Trim('"')
+    $profileRoot = if ($match.Groups['quoted'].Success) { $match.Groups['quoted'].Value } else { $match.Groups['bare'].Value }
     $active = Get-ChildItem -LiteralPath $profileRoot -Filter MarionetteActivePort -File -Recurse -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $active) { return 0 }

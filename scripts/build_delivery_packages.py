@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_DOCS = {"docs/DEPLOYMENT_GUIDE.md", "docs/DELIVERY_BASELINE.md", "docs/COLLECTION_INTERFACE.md", "docs/deployment-parity.md"}
 PRIVATE_PARTS = {".git", ".githooks", ".venv", "node_modules", "runtime", "runs", "dist", "work", "logs", "__pycache__", ".deployment-backup", ".pytest_cache"}
 ASSET_ROOT = "deployment-assets"
+TEXT_SUFFIXES = {'.json','.js','.mjs','.cjs','.py','.ps1','.cmd','.bat','.md','.txt','.toml','.yaml','.yml','.html','.css','.xml'}
 SECRET_TOKEN = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b")
 AUTH_URL = re.compile(r"https?://[^\s/:\"']+:[^\s/@\"']+@[^\s\"'<>]+")
 SECRET_FIELDS = {"password", "proxy_password", "api_key", "adspower_api_key", "deepseek_api_key", "access_token", "client_secret"}
@@ -58,6 +59,10 @@ def scan_files(files: dict[str, bytes]) -> list[dict]:
     for name, data in files.items():
         if not included(name) and name not in {"BUILD_INFO.json", "README.md"}:
             issues.append({"file": name, "rule": "private-path"})
+        if isinstance(data, Path):
+            if data.suffix.lower() not in TEXT_SUFFIXES or data.stat().st_size > 8*1024**2:
+                continue
+            data=data.read_bytes()
         try:
             value = data.decode("utf-8-sig")
         except UnicodeDecodeError:
@@ -88,7 +93,7 @@ def committed_files(root: Path, ref="HEAD"):
     return commit, files
 
 
-def bundled_assets(root: Path) -> dict[str, bytes]:
+def bundled_assets(root: Path, *, as_paths=False) -> dict:
     """Add generated, non-secret installers assets to both delivery archives."""
     source = root / ASSET_ROOT
     if not source.is_dir():
@@ -99,7 +104,7 @@ def bundled_assets(root: Path) -> dict[str, bytes]:
             relative = path.relative_to(source).as_posix()
             if relative.lower().endswith(('.credential.xml', '.dpapi')):
                 raise RuntimeError(f'部署资产禁止包含配置或密钥文件: {relative}')
-            result[f'{ASSET_ROOT}/{relative}'] = path.read_bytes()
+            result[f'{ASSET_ROOT}/{relative}'] = path if as_paths else path.read_bytes()
     return result
 
 
@@ -107,8 +112,24 @@ def write_zip(path: Path, files: dict[str, bytes]):
     temporary = path.with_suffix(".zip.tmp")
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, data in sorted(files.items()):
-            archive.writestr(name, data)
+            if isinstance(data, Path):archive.write(data, name)
+            else:archive.writestr(name, data)
     temporary.replace(path)
+
+
+def file_sha256(path):
+    digest=hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda:stream.read(1024*1024),b''):digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_zip(path):
+    with zipfile.ZipFile(path) as archive:
+        if archive.testzip() is not None:raise RuntimeError('ZIP CRC verification failed')
+        files={entry.filename:archive.read(entry) if PurePosixPath(entry.filename).suffix.lower() in TEXT_SUFFIXES and entry.file_size<=8*1024**2 else b''
+               for entry in archive.infolist() if not entry.is_dir()}
+    return len(files),scan_files(files)
 
 
 def audit_history_paths(root: Path):
@@ -121,7 +142,7 @@ def audit_history_paths(root: Path):
 
 def build(root: Path, dist: Path, ref="HEAD"):
     commit, files = committed_files(root, ref)
-    assets = bundled_assets(root)
+    assets = bundled_assets(root, as_paths=True)
     files.update(assets)
     required = {"deploy.cmd", "install.ps1", "start-web.cmd", "web/index.html",
                 "scripts/verify_deployment.py", "scripts/package_company_config.ps1",
@@ -137,7 +158,7 @@ def build(root: Path, dist: Path, ref="HEAD"):
     names = {"public": f"选品工作台-{commit[:7]}-GitHub展示版.zip",
              "internal": f"选品工作台-{commit[:7]}-内部运行版.zip"}
     report = {"commit": commit, "built_at_utc": now, "contains_company_credentials": False,
-              "bundled_assets": {"present": bool(assets), "files": len(assets), "bytes": sum(map(len, assets.values()))},
+              "bundled_assets": {"present": bool(assets), "files": len(assets), "bytes": sum(path.stat().st_size for path in assets.values())},
               "baseline": "11194c8", "matching_policy": "category-identity-policy-v2-effects",
               "matching_source_commit": "01e86d8",
               "disabled_experiments": ["four-stage-verification", "quadrants-overlap-v1", "default-reference-examples", "luna-production-switch"],
@@ -153,13 +174,11 @@ def build(root: Path, dist: Path, ref="HEAD"):
             # Preserve previously generated archives even when rebuilding the same commit.
             path.rename(path.with_name(path.stem + "-旧-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".zip"))
         write_zip(path, content)
-        with zipfile.ZipFile(path) as archive:
-            verified = {entry.filename: archive.read(entry) for entry in archive.infolist()}
-        issues = scan_files(verified)
+        file_count,issues = verify_zip(path)
         if issues:
             raise RuntimeError("成品 ZIP 检查未通过: " + json.dumps(issues, ensure_ascii=False))
-        report["packages"][channel] = {"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                                         "files": len(verified), "secret_scan_findings": issues}
+        report["packages"][channel] = {"path": str(path.resolve()), "sha256": file_sha256(path),
+                                         "files": file_count, "secret_scan_findings": issues}
     manifest = {**report, "public_package": names["public"], "public_sha256": report["packages"]["public"]["sha256"],
                 "internal_package": names["internal"], "internal_sha256": report["packages"]["internal"]["sha256"]}
     previous = dist / "最新部署包.json"

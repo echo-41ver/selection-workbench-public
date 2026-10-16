@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import argparse
 import json
 from pathlib import Path
 import shutil
@@ -52,8 +53,9 @@ def inspect(root: Path = ROOT) -> dict:
             from selection_automation.secrets import load
 
             company = load(company_path)
+            if not isinstance(company,dict):raise ValueError('Company configuration must be an object')
             proxy = company.get("proxy") if isinstance(company, dict) else None
-            if not isinstance(proxy, dict) or not all(str(proxy.get(key, "")).strip() and not str(proxy[key]).startswith("REPLACE_WITH_") for key in ("host", "port", "username", "password")):
+            if company.get('proxy_architecture','LOCAL_CHAIN_PROXYSHARE') != 'LOCAL_VPN' and (not isinstance(proxy, dict) or not all(str(proxy.get(key, "")).strip() and not str(proxy[key]).startswith("REPLACE_WITH_") for key in ("host", "port", "username", "password"))):
                 missing.append("公司住宅代理配置不完整，请重新导入公司配置")
             if not isinstance(company, dict) or not str(company.get("adspower_api_key", "")).strip() or str(company["adspower_api_key"]).startswith("REPLACE_WITH_"):
                 missing.append("公司 AdsPower API Key 缺失，请重新导入公司配置")
@@ -74,7 +76,7 @@ def inspect(root: Path = ROOT) -> dict:
                     from selection_automation.adspower_kernel import inventory
                     from replace_proxyshare_worker_environment import api_call
                     kernel=inventory(company.get('adspower_api_url','http://127.0.0.1:50325'),api_call)
-                    if not kernel['installed']: missing.append('AdsPower FlowerBrowser Firefox144 missing; rerun deployment kernel preparation')
+                    if not kernel['installed']: missing.append('AdsPower Firefox 153 内核未就绪，请重新部署')
                 except RuntimeError as kernel_error:
                     missing.append("AdsPower kernel/API preparation failed: "+type(kernel_error).__name__)
         except (OSError, ValueError, KeyError, RuntimeError) as exc:
@@ -92,19 +94,30 @@ def inspect(root: Path = ROOT) -> dict:
     try:agent_connection=json.loads((root/'runtime/agent-config/connection.json').read_text(encoding='utf-8'))
     except (OSError,ValueError):agent_connection={}
     codex_ready=any(row.get('id')=='codex' and row.get('ready') for row in agent_connection.get('agents',[]))
-    analysis={'default_provider':'liquid_d1','d1_key_configured':d1_ready,
-              'codex_connected':codex_ready,'workbench_mcp_connected':bool(agent_connection.get('mcp_ready') and agent_connection.get('codex_mcp',{}).get('registered')),
+    analysis={'default_provider':'liquid_d1','d1_key_configured':d1_ready,'d1_connection_state':'CONFIGURED_NOT_INVOKED' if d1_ready else 'MISSING_KEY',
+              'codex_connected':codex_ready,'workbench_mcp_connected':bool(agent_connection.get('mcp_ready')),
               'agents':agent_connection.get('agents',[])}
+    from deployment_smoke import verified
+    smoke_ready=verified(root)
+    parity_missing=list(missing)
+    if not d1_ready:parity_missing.append('默认 D1 分析服务未配置公司密钥')
+    if not analysis['workbench_mcp_connected']:parity_missing.append('工作台 MCP 本地握手未通过')
+    if not smoke_ready:parity_missing.append('当前安装的模型、Excel、Chromium 和 Firefox 绑定实测未通过')
     result={"ready":not missing,"missing":missing,"network_preflight":network_preflight,
-            'analysis_readiness':analysis,'parity_ready':not missing and d1_ready and codex_ready and analysis['workbench_mcp_connected']}
+            'analysis_readiness':analysis,'deployment_smoke_ready':smoke_ready,
+            'parity_ready':not parity_missing,'parity_missing':parity_missing,
+            'agent_login_optional':not codex_ready}
     if compatibility is not None: result['compatibility']=compatibility
     return result
 
 
 def main() -> int:
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--require-parity',action='store_true')
+    args=parser.parse_args()
     result = inspect()
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result["ready"] else 1
+    return 0 if result['parity_ready' if args.require_parity else 'ready'] else 1
 
 
 if __name__ == "__main__":

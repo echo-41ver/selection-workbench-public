@@ -14,7 +14,7 @@ def test_whitelist_complete_schema_and_process_only_settings():
     assert 'MUST_NOT_EXPORT' not in json.dumps(value)
     env={'UNRELATED':'unchanged'};apply_model_settings(value['deepseek'],env)
     assert env['DEEPSEEK_API_KEY']=='TEST_ONLY_DEEPSEEK' and env['OPENAI_BASE_URL']=='https://api.deepseek.com' and env['OPENAI_VISION_MODEL']=='deepseek-flash' and env['UNRELATED']=='unchanged'
-@pytest.mark.parametrize('field',['adspower_api_key','proxy','deepseek'])
+@pytest.mark.parametrize('field',['adspower_api_key','proxy'])
 def test_missing_complete_bundle_fails_before_any_write(tmp_path,field):
     value=fixture();value.pop(field);writes=[]
     with pytest.raises(ValueError):import_bundle(tmp_path,value,lambda *a:writes.append(a))
