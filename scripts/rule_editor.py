@@ -56,6 +56,8 @@ def edit_rules(category, edits, *, compile_model=model_json):
                 if not isinstance(value,str) or not isinstance(phrases,list) or not phrases or any(not isinstance(p,str) or not p.strip() for p in phrases): raise ValueError('文字规则必须为字面短语列表')
             if not isinstance(attr.get('ambiguous_phrases',[]),list) or any(not isinstance(p,str) for p in attr.get('ambiguous_phrases',[])): raise ValueError('歧义短语格式无效')
         result['stage1']['attributes']=attrs
+        from selection_automation.stage1_authoring import compile_stage1_rules
+        result=compile_stage1_rules(result)
     if 'stage3_modules_json' in edits:
         modules=json.loads(edits['stage3_modules_json'])
         if not isinstance(modules,dict) or set(modules)!=set(MODULE_FIELDS): raise ValueError('视觉模块JSON字段不完整')

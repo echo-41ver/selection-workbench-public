@@ -34,7 +34,9 @@ def publish_once(base, previous=None):
     union=base/'union'; inputs=[]
     state={**prior,'heartbeat_at':time.time(),'updated_at':time.strftime('%Y-%m-%dT%H:%M:%S%z')}
     stopped=threading.Event()
-    progress={**prior,'status':'MERGING','merge_started_at':time.time(),'owner_pid':os.getpid()}
+    import psutil
+    owner={'owner_pid':os.getpid(),'owner_created':psutil.Process().create_time()}
+    progress={**prior,'status':'MERGING','merge_started_at':time.time(),**owner}
     def heartbeat():
         while not stopped.is_set():
             try:
@@ -74,8 +76,16 @@ def publish_once(base, previous=None):
     finally:
         stopped.set()
         pulse.join()
-    state.update(heartbeat_at=time.time(),owner_pid=os.getpid(),merge_started_at=None)
-    atomic_write(union/'watch_state.json',json.dumps(state,ensure_ascii=False,indent=2))
+    state.update(heartbeat_at=time.time(),merge_started_at=None,**owner)
+    state.pop('health_write_pending',None)
+    try:
+        atomic_write(union/'watch_state.json',json.dumps(state,ensure_ascii=False,indent=2))
+    except PermissionError:
+        # A reader can retain the Windows destination beyond atomic_write's
+        # bounded retry. Keep this local watcher alive and retry next cycle.
+        # Published goods remain intact; the supervisor still sees stale health
+        # if the destination never becomes writable.
+        state['health_write_pending']=True
     return state
 
 
@@ -95,7 +105,7 @@ def watch_health(base, now=None):
     stale=age>90 or merge_age>600
     failed=state.get('status')=='SOURCE_READ_FAILED_PRESERVED_PREVIOUS_UNION'
     return {'状态':'汇总监督器无心跳，等待自动重启' if stale else '汇总失败，正在自动重试' if failed else
-                  '等待采集快照' if state.get('status')=='WAITING_SOURCE' else '汇总已更新',
+                  '等待采集快照' if state.get('status')=='WAITING_SOURCE' else '正在汇总已采集商品' if merging else '汇总已更新',
             '阻断':stale or failed,'stale':stale,'source_failed':failed,'error':state.get('error'),
             '建议动作':state.get('error') if failed else '',
             '连续失败次数':state.get('consecutive_failures',0),'最近成功更新时间':state.get('last_success_at'),
@@ -113,12 +123,14 @@ def main() -> None:
     category = load_category(args.category.resolve())
     base = ROOT / "runs" / category["category_key"] / "temu"
     state = {}
-    while True:
-        state=publish_once(base,state)
-        if args.once:
-            if state['status']!='PUBLISHED': raise SystemExit(state.get('error') or 'no TEMU worker snapshots found')
-            return
-        time.sleep(min(30.0,max(2.0,args.interval)))
+    from selection_automation.process_lock import ProcessLock
+    with ProcessLock(base/'union/watcher.lock'):
+        while True:
+            state=publish_once(base,state)
+            if args.once:
+                if state['status']!='PUBLISHED': raise SystemExit(state.get('error') or 'no TEMU worker snapshots found')
+                return
+            time.sleep(min(30.0,max(2.0,args.interval)))
 
 
 if __name__ == "__main__":

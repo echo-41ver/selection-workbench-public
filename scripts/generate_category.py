@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL_PROGRESS_REPORTER=None
 sys.path.insert(0, str(ROOT / 'src'))
 from selection_automation.category_contract import category_contract
+from selection_automation.stage1_authoring import compile_stage1_rules
 from selection_automation.rules import validate
 from selection_automation.identity_policy import compile_policy
 from selection_automation.identity_profiles import reviewed_profile
@@ -361,6 +362,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         cached['temu']['max_products_per_keyword']=temu_count
         cached['approved_rule_source']={'kind':'VERIFIED_EXISTING_CATEGORY','category_key':cached['category_key']}
         cached=ensure_subject_rules(cached,evidence)
+        cached=compile_stage1_rules(cached)
         validate(cached)
         return cached
     if not os.environ.get('DEEPSEEK_API_KEY', '').strip():
@@ -431,6 +433,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         config = compile_generated_policy(config)
         config = apply_reviewed_recall_aliases(config)
         config = ensure_subject_rules(config,evidence,allow_model=False)
+        config = compile_stage1_rules(config)
         validate(config)
     except CategoryGenerationError:
         raise
