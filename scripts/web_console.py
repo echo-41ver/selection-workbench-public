@@ -1935,7 +1935,9 @@ def main():
     # Keep this interactive HTTP service at normal priority regardless of parent.
     if os.name=='nt':
         import psutil
-        psutil.Process().nice(psutil.NORMAL_PRIORITY_CLASS)
+        process=psutil.Process()
+        process.nice(psutil.NORMAL_PRIORITY_CLASS)
+        process.ionice(psutil.IOPRIO_NORMAL)
     parser=argparse.ArgumentParser(); parser.add_argument('--host',choices=['127.0.0.1'],default='127.0.0.1'); parser.add_argument('--port',type=int,default=8765); parser.add_argument('--open-browser',action='store_true')
     args=parser.parse_args(); server=LocalConsoleServer((args.host,args.port),Handler); server.console=Console()
     from selection_automation.release_reload import ReleaseReload
