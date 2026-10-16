@@ -1349,7 +1349,7 @@ class Console:
             except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
             if provider['concurrency_mode']=='auto':
                 from selection_automation.analysis_concurrency import recommended
-                provider['workers']=recommended(provider['mode'],len(provider['agent_ids']) or 1)
+                provider['workers']=recommended(provider['mode'],provider=provider,root=self.root)
             if provider['mode']!='local_agent' and controller_alive(base) and provider!=current:
                 paused=bool(control.get('paused'))
                 update_control(folder,paused=True,switch_pending=True,switch_cancelled=False,
@@ -1435,7 +1435,7 @@ class Console:
                     raise ConsoleError('AGENT_UNAVAILABLE','未找到已连接且能够看图的本机 Agent；请在方案中检测并登录',409)
                 if provider['concurrency_mode']=='auto':
                     from selection_automation.analysis_concurrency import recommended
-                    provider['workers']=recommended('local_agent',len(agents) or 1)
+                    provider['workers']=recommended('local_agent',provider=provider,root=self.root)
                     provider_changed=provider!=from_category(category)
             from selection_automation.stage3_runtime import update_control,read_control
             native_update=running and provider['mode']=='local_agent' and from_category(category)['mode']=='local_agent'
@@ -1887,7 +1887,7 @@ class Handler(BaseHTTPRequestHandler):
             body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
             if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market',
-                    '/api/local-agents/models','/api/local-agents/refresh','/api/stage3/concurrency','/api/control-stage3'):
+                    '/api/local-agents/models','/api/local-agents/refresh','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)
@@ -1901,6 +1901,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
             if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))
             if self.path=='/api/stage3/concurrency': return self.send_json(self.server.console.set_stage3_concurrency(body))
+            if self.path=='/api/stage3/concurrency-default':
+                from selection_automation.stage3_provider import settings
+                from selection_automation.analysis_concurrency import recommendation
+                return self.send_json({'ok':True,**recommendation(settings(body),self.server.console.root)})
             if self.path=='/api/local-agents/models':
                 from selection_automation.agent_models import catalogs
                 from selection_automation.local_agents import IDS

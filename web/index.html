@@ -85,6 +85,7 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
 <label class="check-option"><input id="stage3-auto" type="checkbox" checked> 自动选择并发（可取消后手动设置）</label>
 <div class="two"><div id="stage3-model-field"><label for="stage3-model">模型 ID</label><input id="stage3-model" value="d1" maxlength="200" autocomplete="off"></div>
 <div id="stage3-workers-field"><label for="stage3-workers">分析并发数</label><input id="stage3-workers" type="number" value="4" min="1" step="1"><p class="small">手动填写多少就按多少路调度，无程序上限；每组最多 12 个 TEMU。自动并发仅在勾选时调整。</p></div></div><div class="actions"><button id="apply-stage3-concurrency" type="button">应用并发设置</button><span class="small">运行中也可调整；已发送的组保存后接续。</span></div>
+<p id="stage3-concurrency-default" class="small"></p>
 <div id="stage3-confidence-field" hidden><label for="stage3-confidence">决策确认概率（%）</label><input id="stage3-confidence" type="number" value="90" min="50" max="100"><p class="small">仅供决策接口分流，尚未按当前品类校准；中间区间保留证据不足。</p></div>
 
 <p id="stage3-provider-hint" class="small">服务地址、Key 与模型必须来自同一服务商；提交后清空 Key。</p></details>
@@ -104,12 +105,22 @@ function stage3ProviderSettings(){
 function stage3ProviderFields(){
  const mode=$('stage3-mode').value,local=mode==='local_agent';$('stage3-api-fields').hidden=local;$('stage3-confidence-field').hidden=local||$('stage3-protocol').value!=='decisions';$('stage3-agents').hidden=!local;if($('stage3-model-field'))$('stage3-model-field').hidden=local;if($('configure-stage3'))$('configure-stage3').textContent=local?'保存方案（不启动）':'保存方案与 Key（不启动）';
  if($('stage3-auto')){$('stage3-workers').disabled=$('stage3-auto').checked;if($('stage3-workers-field'))$('stage3-workers-field').hidden=$('stage3-auto').checked;}
- $('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取。自动并发从 4 路起步，依据成功吞吐量调整。':mode==='local_model'?'连接已启动的本地看图模型服务。':local?'默认只使用你选中的一个 Agent；它可以按并发数同时处理多组商品。需要多个 Agent 分担时，在下方展开添加。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';
+ $('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取。默认并发优先复用此前稳定且吞吐量最高的记录，可取消自动后手动修改。':mode==='local_model'?'连接已启动的本地看图模型服务。':local?'默认只使用你选中的一个 Agent；它可以按并发数同时处理多组商品。需要多个 Agent 分担时，在下方展开添加。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';
+}
+let stage3ManualConcurrency=false,stage3DefaultRead=0;
+async function refreshConcurrencyDefault(){
+ if(stage3ManualConcurrency)return;
+ const generation=++stage3DefaultRead,provider=stage3ProviderSettings();delete provider.workers;delete provider.concurrency_mode;
+ $('stage3-concurrency-default').textContent='正在读取并发默认值…';
+ try{const response=await fetch('/api/stage3/concurrency-default',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(provider)}),data=await response.json();
+  if(generation!==stage3DefaultRead||stage3ManualConcurrency||!response.ok||!Number.isInteger(data.workers)||data.workers<1)return;
+  $('stage3-workers').value=data.workers;$('stage3-concurrency-default').textContent=data.message;
+ }catch{} // A missing history record never blocks manual configuration.
 }
 function chooseStage3Mode(){
  const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:18181/v1/systemone','d1-3b','decisions',2],local_agent:['','gpt-6.1-sol','responses',6]};
  const [url,model,protocol,workers]=values[$('stage3-mode').value];$('stage3-base-url').value=url;$('stage3-model').value=model;$('stage3-protocol').value=protocol;$('stage3-workers').value=workers;$('stage3-api-key').value='';if($('stage3-auto'))$('stage3-auto').checked=true;
- stage3SettingsDirty=true;stage3ProviderFields();if($('stage3-mode').value==='local_agent'){stage3AgentSelection=[];refreshLocalAgents();}if(lastStatus)stage3Button(lastStatus);
+ stage3ManualConcurrency=false;stage3SettingsDirty=true;stage3ProviderFields();if($('stage3-mode').value==='local_agent'){stage3AgentSelection=[];refreshLocalAgents();}refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);
 }
 function localAgentSettingsLocked(){return Boolean(lastStatus?.stage3_runtime?.switch_pending);}
 function stage3AgentInputsReady(){return stage3AgentSelection.length>0&&stage3AgentSelection.every(id=>{
@@ -120,7 +131,7 @@ function renderStage3Settings(data){
  if(changedRun){stage3SettingsDirty=false;stage3SettingsRun=data.category_key;$('stage3-api-key').value='';}
  const p=data.stage3_provider;
  if(p&&!stage3SettingsDirty){
-  const before=JSON.stringify([stage3AgentSelection,stage3AgentModels]);
+  const before=JSON.stringify([stage3AgentSelection,stage3AgentModels]);stage3ManualConcurrency=p.concurrency_mode==='manual';
   $('stage3-mode').value=p.mode;$('stage3-base-url').value=p.base_url;$('stage3-model').value=p.model;$('stage3-protocol').value=p.protocol;$('stage3-workers').value=p.workers;$('stage3-confidence').value=Math.round(p.confidence*100);if($('stage3-auto'))$('stage3-auto').checked=p.concurrency_mode==='auto';stage3AgentSelection=[...(p.agent_ids||[])];stage3AgentModels={...(p.agent_models||{})};
   if(before!==JSON.stringify([stage3AgentSelection,stage3AgentModels])||changedRun)renderAgentControls();
  }
@@ -178,7 +189,7 @@ function renderAgentControls(){
  if(stage3AgentSelection.length>1)$('stage3-multi-agent-details').open=true;
  $('stage3-add-agent').disabled=localAgentSettingsLocked()||!id||!stage3DetectedAgents.some(a=>a.installed&&!stage3AgentSelection.includes(a.id));
 }
-function agentSelectionChanged(readModels=false){stage3SettingsDirty=true;renderAgentControls();if(lastStatus)stage3Button(lastStatus);if(readModels)refreshAgentModels();}
+function agentSelectionChanged(readModels=false){stage3SettingsDirty=true;renderAgentControls();refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);if(readModels)refreshAgentModels();}
 function choosePrimaryAgent(){const id=$('stage3-agent').value;stage3AgentSelection=id?[id,...stage3AgentSelection.slice(1).filter(a=>a!==id)]:[];agentSelectionChanged(true);}
 function addAnalysisAgent(){const next=stage3DetectedAgents.find(a=>a.installed&&!stage3AgentSelection.includes(a.id));if(!stage3AgentSelection.length||!next)return;stage3AgentSelection.push(next.id);agentSelectionChanged(true);}
 function setAgentModel(id,model){if(model)stage3AgentModels[id]=model;else delete stage3AgentModels[id];agentSelectionChanged();}
@@ -430,7 +441,8 @@ $('stage3-add-agent').addEventListener('click',addAnalysisAgent);
 $('stage3-agent-connect').addEventListener('click',()=>agentAction('connect',stage3AgentSelection[0],$('stage3-agent-connect')));
 $('stage3-agent-login').addEventListener('click',()=>agentAction('login',stage3AgentSelection[0],$('stage3-agent-login')));
 $('stage3-enable-doubao').addEventListener('click',enableSelectedDoubao);
-for(const id of ['stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-auto'])$(id).addEventListener('input',()=>{stage3SettingsDirty=true;stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);});
+for(const id of ['stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-auto'])$(id).addEventListener('input',()=>{if(id==='stage3-workers'||id==='stage3-auto')stage3ManualConcurrency=id==='stage3-workers'||!$('stage3-auto').checked;stage3SettingsDirty=true;stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);});
+for(const id of ['stage3-base-url','stage3-model','stage3-protocol','stage3-auto'])$(id).addEventListener('change',()=>refreshConcurrencyDefault());
 $('stop-stage3').addEventListener('click',()=>action('/api/stop-stage3',{}));
 $('stop').addEventListener('click',()=>action('/api/stop',{}));
 $('resume').addEventListener('click',()=>action('/api/resume',{}));
