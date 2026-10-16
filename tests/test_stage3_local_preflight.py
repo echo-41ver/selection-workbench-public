@@ -11,6 +11,12 @@ from selection_automation.stage3_provider import apply, settings
 from selection_automation.stage3_runtime import update_control
 
 
+@pytest.fixture(autouse=True)
+def no_machine_specific_recovery(monkeypatch):
+    monkeypatch.setattr('selection_automation.local_model_service.repair_provider',
+        lambda *args, **kwargs: {'provider': None, 'message': 'fixture service unavailable'})
+
+
 def task(tmp_path, mode='multimodal_api'):
     base = tmp_path / 'runs/fixture'
     folder = base / 'stage123'
@@ -58,7 +64,7 @@ def test_resume_of_unavailable_service_keeps_pause_and_checkpoint(tmp_path, monk
         raise ConnectionRefusedError('fixture')
 
     monkeypatch.setattr(web.socket, 'create_connection', unavailable)
-    with pytest.raises(web.ConsoleError, match='本地模型服务无法连接'):
+    with pytest.raises(web.ConsoleError, match='本地模型服务或指定模型尚未就绪'):
         console.control_stage3({'action': 'resume'})
     assert {path: path.read_bytes() for path in base.rglob('*') if path.is_file()} == before
 

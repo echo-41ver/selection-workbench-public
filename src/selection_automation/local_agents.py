@@ -122,12 +122,13 @@ def _probe_cli(root, agent_id,model=None):
             result['status'] = '已登录，待连接验证' if result['authenticated'] else '需要登录'
         else:
             result['status'] = '已发现，待连接验证'
-        # A successful vision probe is bound to this exact installation/version.
+        # Vision capability is bound to installation/version/model, not a one-hour
+        # timer. Current login is checked above; a failed new probe replaces it.
         receipt = connection_receipt(root,agent_id,model)
         try:
             saved = json.loads(receipt.read_text(encoding='utf-8'))
             if (saved.get('executable')==path and saved.get('version')==result['version']
-                    and time.time()-saved.get('tested_at',0)<3600 and saved.get('connected') and saved.get('probe_revision')==2
+                    and saved.get('connected') and saved.get('probe_revision')==2
                     and result['authenticated'] is not False and saved.get('selected_model')==model):
                 result.update(authenticated=True, connected=True, ready=True, status='已连接，可看图分析')
             elif (saved.get('executable')==path and saved.get('version')==result['version']
@@ -174,7 +175,7 @@ def _probe(root,agent_id,model=None):
         saved=json.loads(receipt.read_text(encoding='utf-8'))
         if (saved.get('executable')==result['executable'] and saved.get('probe_revision')==2
                 and saved.get('version')==result['version'] and saved.get('installation_stamp')==result['installation_stamp']
-                and time.time()-saved.get('tested_at',0)<3600 and saved.get('connected')
+                and saved.get('connected')
                 and (agent_id=='workbuddy' or result.get('transport_available'))
                 and result['authenticated'] is not False and not result.get('requires_enable') and saved.get('selected_model')==model):
             result.update(authenticated=True,connected=True,ready=True,status='已连接，可看图分析')

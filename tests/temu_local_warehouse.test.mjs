@@ -62,6 +62,21 @@ test('inspector distinguishes a real checked filter from product badge text',()=
   document:{querySelectorAll:s=>s==='a[href]'?[{href:'https://www.temu.com/item-g-123.html'}]:s.includes('button,label')?[label,badge]:[]}});
  assert.equal(result.selected,true);assert.equal(result.explicit,true);assert.equal(result.ambiguous,false);
 });
+test('all-filters entry takes priority over a shipping control in the horizontal carousel',()=>{
+ const button=text=>({tagName:'DIV',innerText:text,getAttribute:k=>k==='role'?'button':null,hasAttribute:()=>false,
+  closest:()=>null,querySelector:()=>null,getBoundingClientRect:()=>({width:100,height:30})});
+ const filters=button('Filters (1)\nFilters (1)'),shipping=button('Ships From (1)\nShips From (1)');
+ const result=vm.runInNewContext(`(${inspectLocalWarehouse.toString()})()`,{location:{href:url},getComputedStyle:()=>({}),
+  document:{querySelectorAll:s=>s.includes('button,label')?[shipping,filters]:[]}});
+ assert.equal(result.menu,filters);
+});
+test('an obstructed click is recorded and retried against freshly read controls',async()=>{
+ let clicked=0;const retries=[];
+ const result=await selectLocalWarehouse({query,guard:async()=>{},sleep:async()=>{},onRetry:async r=>retries.push(r),
+  inspect:async()=>({...selected(),selected:clicked>=2,option:'checkbox'}),
+  click:async()=>{clicked++;if(clicked===1)throw Error('element click intercepted');}});
+ assert.equal(result.state,'UI_CONFIRMED');assert.equal(retries.length,1);assert.equal(retries[0].reason,'控件被遮挡');
+});
 test('shipping claims and warehouse wording in titles do not qualify',()=>{
  for(const text of ['Fast delivery','Ships from US','Local','Free shipping','US warehouse','Local Warehouse storage shelf','本地仓货架商品','Not Local Warehouse'])
   assert.equal(hasLocalWarehouseLabel(card(text)),false);
