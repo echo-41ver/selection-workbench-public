@@ -23,6 +23,8 @@ SECRET_FIELDS = {"password", "proxy_password", "api_key", "adspower_api_key", "d
 
 def included(name: str) -> bool:
     path = PurePosixPath(name)
+    if path.as_posix() == "web/accuracy_benchmark.html":
+        return False
     is_bundled_asset = path.parts and path.parts[0].lower() == ASSET_ROOT.lower()
     if path.is_absolute() or ".." in path.parts or (not is_bundled_asset and any(p.lower() in PRIVATE_PARTS for p in path.parts)):
         return False

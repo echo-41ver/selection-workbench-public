@@ -771,19 +771,27 @@ class Pool:
         if control.get('paused') or control.get('switch_pending') or not self.config.get('enabled',True):workers=0
         if self.config.get('agent_backends') and not any(a['id'] not in paused and a['id'] not in blocks for a in self.config['agent_backends']):
             workers=0
-        if workers and self.config.get('concurrency_mode')=='auto':
-            from selection_automation.analysis_concurrency import ThroughputTuner
-            tuning_key=json.dumps([self.config.get('agent_models',{}),sorted(paused),group_size,workers],sort_keys=True)
+        if workers:
+            from selection_automation.analysis_concurrency import ThroughputTuner,stable_best,record_sample
+            auto=self.config.get('concurrency_mode')=='auto'
+            measured_provider={'mode':'local_agent','agent_ids':self.config.get('agent_ids') or [a['id'] for a in self.config.get('agent_backends',[])],
+                               'agent_models':self.config.get('agent_models',{})}
+            tuning_key=json.dumps([measured_provider,sorted(paused),group_size,workers,auto],sort_keys=True)
             tuning_path=self.folder/'concurrency.json'
             if self.tuning_key!=tuning_key:
                 previous=read(tuning_path,{})
-                self.tuner=ThroughputTuner(min(2,workers),workers,previous if previous.get('configuration')==tuning_key else None)
+                self.tuner=ThroughputTuner(workers,workers,stable_best(previous.get('samples',[])) if previous.get('configuration')==tuning_key else None)
                 self.tuning_key=tuning_key;self.window_started=time.monotonic()
+                self.sample_success=self.sample_failed=0
             if self.sample_success+self.sample_failed>=max(8,self.tuner.width*2):
-                self.tuner.observe(self.sample_success,self.sample_failed,time.monotonic()-self.window_started,bool(waiting))
+                seconds=time.monotonic()-self.window_started
+                saturated=bool(waiting) and not any(a in paused or a in blocks for a in measured_provider['agent_ids'])
+                record_sample(measured_provider,self.tuner.width,self.sample_success,self.sample_failed,seconds,saturated=saturated,root=ROOT)
+                if auto:self.tuner.observe(self.sample_success,self.sample_failed,seconds,bool(waiting))
                 self.sample_success=self.sample_failed=0;self.window_started=time.monotonic()
-            workers=min(workers,self.tuner.width)
-            save(tuning_path,{**self.tuner.snapshot(),'configuration':tuning_key,'updated_at':time.time()})
+            if auto:
+                workers=min(workers,self.tuner.width)
+                save(tuning_path,{**self.tuner.snapshot(),'configuration':tuning_key,'updated_at':time.time()})
         def ready(rows):
             digest = _group_digest(rows)
             prior = _strict_attempt(self.attempts.get(digest,{}))

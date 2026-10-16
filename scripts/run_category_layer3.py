@@ -447,7 +447,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
     # per pass; do not mutate client settings while worker calls are active.
     # ExitStack outlives the executor, including exceptional worker exits.
     client=None;client_setup_error=None
-    from selection_automation.analysis_concurrency import ThroughputTuner
+    from selection_automation.analysis_concurrency import ThroughputTuner,stable_best,record_sample
     from selection_automation.merge_temu_snapshots import atomic_write
     auto = provider.get('concurrency_mode')=='auto'
     capacity = max(width,4 if provider['mode']=='local_model' else 16) if auto else width
@@ -455,7 +455,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
     fingerprint = {k:provider[k] for k in ('mode','base_url','model','protocol')}
     try:prior_tuning=json.loads(tuning_path.read_text(encoding='utf-8'))
     except (OSError,ValueError):prior_tuning={}
-    tuner=ThroughputTuner((2 if provider['mode']=='local_model' else 4) if auto else width,capacity,prior_tuning if prior_tuning.get('provider')==fingerprint else None)
+    tuner=ThroughputTuner(width,capacity,stable_best(prior_tuning.get('samples',[])) if prior_tuning.get('provider')==fingerprint else None)
     if auto:width=tuner.width
     with ExitStack() as resources:
         try:
@@ -481,9 +481,12 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 for future in done:
                     count=inflight.pop(future); successful=future.result() or 0
                     observed+=successful;failures+=max(0,count-successful)
-                if auto and (observed+failures>=max(8,width*2) or failures):
-                    width=tuner.observe(observed,failures,time.monotonic()-window_started,not exhausted)
-                    atomic_write(tuning_path,json.dumps({**tuner.snapshot(),'provider':fingerprint,'updated_at':time.time()}))
+                if observed+failures>=max(8,width*2) or failures:
+                    seconds=time.monotonic()-window_started
+                    record_sample(provider,width,observed,failures,seconds,saturated=not exhausted,root=ROOT)
+                    if auto:
+                        width=tuner.observe(observed,failures,seconds,not exhausted)
+                        atomic_write(tuning_path,json.dumps({**tuner.snapshot(),'provider':fingerprint,'updated_at':time.time()}))
                     observed=failures=0;window_started=time.monotonic()
                 if stop.is_set() and not inflight:break
     after = billing_hold(intent_log, args.results)

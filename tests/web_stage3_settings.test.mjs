@@ -5,6 +5,29 @@ import vm from 'node:vm';
 const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 const code=html.slice(html.indexOf('let stage3SettingsDirty='),html.indexOf('function businessSettings'));
 
+test('measured defaults follow the provider while manual edits defeat late responses',async()=>{
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id);};
+ let resolve;const context=vm.createContext({$:get,lastStatus:null,fetch:()=>new Promise(r=>{resolve=r;})});vm.runInContext(code,context);
+ get('stage3-mode').value='multimodal_api';get('stage3-confidence').value='90';
+ const pending=vm.runInContext('refreshConcurrencyDefault()',context);
+ resolve({ok:true,json:async()=>({workers:200,message:'measured'})});await pending;
+ assert.equal(get('stage3-workers').value,200);
+ const stale=vm.runInContext('refreshConcurrencyDefault()',context);
+ vm.runInContext('stage3ManualConcurrency=true',context);get('stage3-workers').value='777';
+ resolve({ok:true,json:async()=>({workers:10,message:'old'})});await stale;
+ assert.equal(get('stage3-workers').value,'777');
+});
+
+test('a delayed default for the previous provider cannot replace the new provider',async()=>{
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id);};
+ const replies=[];const context=vm.createContext({$:get,fetch:()=>new Promise(r=>replies.push(r))});vm.runInContext(code,context);
+ get('stage3-mode').value='liquid_d1';get('stage3-confidence').value='90';const first=vm.runInContext('refreshConcurrencyDefault()',context);
+ get('stage3-mode').value='local_agent';const second=vm.runInContext('refreshConcurrencyDefault()',context);
+ replies[1]({ok:true,json:async()=>({workers:10,message:'agent'})});await second;
+ replies[0]({ok:true,json:async()=>({workers:200,message:'old-api'})});await first;
+ assert.equal(get('stage3-workers').value,10);
+});
+
 test('manual concurrency preserves the entered value across Agent and API modes without an HTML ceiling',()=>{
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id);};
  const context=vm.createContext({$:get,lastStatus:null});vm.runInContext(code,context);
