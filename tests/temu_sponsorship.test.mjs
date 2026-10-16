@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {parseProductCardMetrics} from '../scripts/product_card_metrics.mjs';
+import {inspectSearchReadiness} from '../scripts/temu_search_readiness.mjs';
 const source=fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs',import.meta.url),'utf8');
 const block=source.slice(source.indexOf('const extractScript = `')+23,source.indexOf('\nconst installResponseCaptureScript'));
-const script=vm.runInNewContext('`'+block.slice(0,block.lastIndexOf('`;'))+'`',{parseProductCardMetrics});
+const script=vm.runInNewContext('`'+block.slice(0,block.lastIndexOf('`;'))+'`',{parseProductCardMetrics,inspectSearchReadiness});
 function extract({text='Remote control\n$5.00',hidden=false,label='',long=false,offscreen=false,partial=false,labelDelay=false,loading=false,shortGap=false}={}){
   const img={currentSrc:'https://img.kwcdn.com/product.jpg',alt:'Remote control product',getAttribute:()=>null,attributes:[]};
   const card={innerText:long?'x'.repeat(10001):text,parentElement:null,attributes:[],getAttribute:k=>k==='aria-label'?label:null,
     getBoundingClientRect:()=>({width:hidden?0:100,height:100,top:offscreen?200:0,left:0,bottom:partial?150:offscreen?300:100,right:100}),querySelector:()=>loading?{}:null,querySelectorAll:q=>q==='img'?[img]:q==='*'?[]:[anchor]};
   const anchor={href:'https://www.temu.com/item-g-123456789.html',innerText:text,parentElement:card,getAttribute:()=>null};
-  const document={querySelectorAll:()=>[anchor],body:{innerText:text},documentElement:{scrollHeight:100},readyState:'complete',title:'Search',documentURI:'https://www.temu.com/search_result.html'};
+  const document={querySelectorAll:q=>q==='a[href]'?[anchor]:[],body:{innerText:text},documentElement:{scrollHeight:100},readyState:'complete',title:'Search',documentURI:'https://www.temu.com/search_result.html'};
   const ctx=vm.createContext({document,window:{},URL,location:{href:document.documentURI},scrollY:0,innerHeight:100,innerWidth:100,getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1',backgroundImage:''})});
   const run=at=>vm.runInContext('(function(){'+script+'})({knownIds:[],repairIds:[],observedAt:"'+at+'"})',ctx).rows[0];
   const first=run('2026-10-05T00:00:00.000Z');

@@ -4,6 +4,7 @@ import {atomicSnapshot} from './snapshot_atomic.mjs';
 import {createCategoryRelevance, COLLECTION_PROGRESS_VERSION, restoreNoNewRounds} from './category_relevance.mjs';
 import {readInitialWindowHandles} from './browser_control_bootstrap.mjs';
 import {parseProductCardMetrics} from './product_card_metrics.mjs';
+import {hasLocalWarehouseLabel,inspectLocalWarehouse,confirmsLocalWarehouse,selectLocalWarehouse} from './temu_local_warehouse.mjs';
 import {sessionRecoveryRequest, captchaNeedsManualVerification} from './temu_session_recovery.mjs';
 import {createBrowserControlClient} from './browser_control_request.mjs';
 import {clickVisibleControl,expansionObserved} from './temu_control_click.mjs';
@@ -38,6 +39,8 @@ const SORT_REQUEST = argument('--sort', 'sales');
 if (!['sales','recent'].includes(SORT_REQUEST)) throw new Error('Unsupported TEMU sort');
 let salesSort = { requested: SORT_REQUEST, state: 'PENDING' };
 let salesSortEstablished = false;
+let localWarehouseFilter = {state:'PENDING'};
+const readLocalWarehouse = () => execute(`return (${inspectLocalWarehouse.toString()})();`, [], 'read_local_warehouse');
 let noMoreResultsConfirmed = false;
 let initialProductsPreparing = true;
 // Local to this collector session; never restore from a previous checkpoint.
@@ -310,7 +313,7 @@ async function writeSnapshot(status, extra = {}) {
   })).join('\n') + (missingImages.length ? '\n' : ''));
   await atomic(NETWORK_USAGE, JSON.stringify(networkUsageSnapshot(), null, 2));
   await atomic(PROGRESS, JSON.stringify({
-    schema_version: 'temu-flower-existing-v2', status, search_query: QUERY, sales_sort: salesSort,
+    schema_version: 'temu-flower-existing-v2', status, search_query: QUERY, sales_sort: salesSort, local_warehouse_filter:localWarehouseFilter,
     site: 'TEMU_US', currency: 'USD', source: 'VISIBLE_TEMU_FRONTEND',
     unique_goods: rows.length, round, see_more_clicks: clicks,
     stop_logic_version: COLLECTION_PROGRESS_VERSION,
@@ -674,6 +677,13 @@ async function scan({commit=!(['sales','recent'].includes(SORT_REQUEST) && initi
   // A login/verification/network page has no sort controls. Return its actual
   // state to the recovery loop before checking sorting or ingesting any rows.
   if (!commit || classify(data)) return data;
+  if (!confirmsLocalWarehouse(await readLocalWarehouse().catch(()=>({})),QUERY,localWarehouseFilter)) {
+    const latest=await bootstrapPageState();
+    if(classify(latest))return latest;
+    await prepareLocalWarehouseFilter();
+    // The filter replaces the list. Discard rows extracted before it applied.
+    return scan({commit:false});
+  }
   if (['sales','recent'].includes(SORT_REQUEST)) {
     const state=await readSalesSort().catch(() => ({}));
     const confirmed=salesSortEstablished && confirmsSalesSort(state, QUERY);
@@ -703,7 +713,7 @@ async function scan({commit=!(['sales','recent'].includes(SORT_REQUEST) && initi
     row.main_image_url, row.thumbnail_url,
   ].filter(v => typeof v === 'string' && /^https?:\/\//i.test(v)))];
   const readyForCommit = row => Boolean(
-    row?.title && row?.product_url && Number.isFinite(Number(row?.price_usd)) && normalizeImages(row).length,
+    hasLocalWarehouseLabel(row) && row?.title && row?.product_url && Number.isFinite(Number(row?.price_usd)) && normalizeImages(row).length,
   );
   const withNormalizedImages = row => {
     const images = normalizeImages(row);
@@ -711,6 +721,7 @@ async function scan({commit=!(['sales','recent'].includes(SORT_REQUEST) && initi
       main_image_url: row.main_image_url || images[0] || null, all_image_urls: images };
   };
   for (const row of data.rows || []) {
+    if (!hasLocalWarehouseLabel(row)) continue;
     if (isSevereOffTopic(row)) {
       filteredSevereOffTopic.set(String(row.goods_id), row);
       products.delete(String(row.goods_id));
@@ -1616,6 +1627,28 @@ if (BOOTSTRAP_VALIDATE_ONLY) {
   console.log(JSON.stringify({ status: 'IMAGE_BLOCK_GATE_READY', output: OUT, bidi_status: bidiStatus }));
   process.exit(0);
 }
+async function prepareLocalWarehouseFilter() {
+  await writeSnapshot('正在筛选本地仓');
+  const guard=async()=>{
+    let state=await bootstrapPageState();
+    await guardInitialProducts(state,'local_warehouse');
+    while(classify(state)==='HUMAN_VERIFICATION') {
+      await writeSnapshot('WAITING_CAPTCHA',{phase:'local_warehouse',browser_preserved:true,manual_action_required:true});
+      await sleep(1000);state=await bootstrapPageState();await guardInitialProducts(state,'local_warehouse');
+    }
+  };
+  localWarehouseFilter=await selectLocalWarehouse({inspect:readLocalWarehouse,query:QUERY,sleep,guard,
+    onAction:action=>appendEvent('LOCAL_WAREHOUSE_CONTROL_ACTION',action),
+    click:element=>clickSalesSortControl({element,execute,sleep,click:current=>wd('POST',`/element/${current[EKEY]}/click`,{})})});
+  await appendEvent('LOCAL_WAREHOUSE_FILTER_RESULT',localWarehouseFilter);
+  if(localWarehouseFilter.state!=='UI_CONFIRMED') {
+    finalStatus='本地仓筛选失败，需要处理';
+    await writeSnapshot(finalStatus,{local_warehouse_filter:localWarehouseFilter,manual_action_required:true,
+      automatic_retry:false,keyword_complete:false,browser_preserved:true,collector_paused:true});
+    throw new InitialProductsStopped(finalStatus);
+  }
+  await writeSnapshot('本地仓筛选已确认',{local_warehouse_filter:localWarehouseFilter});
+}
 async function waitForInitialProducts() {
   initialProductsWait = { observedAtMs: Date.now(), activeWaitMs: 0, manual: false };
   // A resumed collector may find the user's existing verification page.
@@ -1653,6 +1686,10 @@ async function waitForInitialProducts() {
     await bootstrapThroughEmptySearch();
     }
   }
+  // Resume an interrupted filter submission before waiting for product cards
+  // that the open filter dialog may cover.
+  const pendingWarehouse=await readLocalWarehouse().catch(()=>({}));
+  if(pendingWarehouse.dialog_open&&pendingWarehouse.option)await prepareLocalWarehouseFilter();
   await ensurePageGuards(true);
   let initial = await scan();
   await guardInitialProducts(initial, 'initial_load');
@@ -1692,7 +1729,7 @@ async function waitForInitialProducts() {
   }
 }
 async function prepareSalesSort() {
-
+  await prepareLocalWarehouseFilter();
   await writeSnapshot('SELECTING_SALES_SORT');
   const guard=async () => {
     let state=await bootstrapPageState();

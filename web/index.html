@@ -292,7 +292,7 @@ function statusTone(row={}){
  if(/监督进程已退出/i.test(state))return 'warning';
  if(row['阻断']||/STOPPED_HTTP|STOPPED_PROXY|ACCESS_DENIED|PROVIDER_BLOCKED|存在阻断/i.test(state))return 'danger';
  if(/尚无|未启动|尚未|等待状态|状态未知|等待点击|等待手动|已暂停|已停止|停止中/.test(state))return '';
- if(row.running===true)return 'success';
+ if(row.running===true||state==='汇总已更新')return 'success';
  if(/RUNNING|STARTING|COLLECTING|COMPLETE|RESUMING|SESSION_REPLACED|WAITING_|RETRYING_|SELECTING_|采集中|运行中|启动中|生成|采集|完成|已就绪|恢复|自动重试|自动继续/.test(state))return 'success';
  return '';
 }

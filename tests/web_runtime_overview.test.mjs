@@ -59,6 +59,13 @@ test('manual pause is neutral, unrelated Agent blocks do not stop the selected A
  assert.equal(vm.runInContext('attentionItems(data).length',context),0);
 });
 
+test('updated union is green while an actual union block stays red',()=>{
+ const {context}=setup();
+ assert.equal(vm.runInContext("statusTone({状态:'汇总已更新'})",context),'success');
+ assert.equal(vm.runInContext("statusTone({状态:'汇总已更新',阻断:true})",context),'danger');
+ assert.equal(vm.runInContext("statusTone({状态:'汇总失败'})",context),'danger');
+});
+
 test('all manual-only stages are aggregated; automatic waits are not alerts',()=>{
  const {context,nodes}=setup();context.data={workers:[{name:'worker-01-new',status:'WAITING_CAPTCHA',manual_action_required:true},{name:'worker-02-new',status:'WAITING_INITIAL_PRODUCTS'}],
   details:{阶段:{temu_union:{状态:'汇总恢复预算耗尽',recovery_exhausted:true},stage12:{状态:'失败，需要处理'},excel:{状态:'已更新',actual_count:16}}},scope:{execution_mode:'full'}};

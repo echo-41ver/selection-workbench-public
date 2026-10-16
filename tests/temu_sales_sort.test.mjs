@@ -170,7 +170,7 @@ test('collector retries unconfirmed sorting from the top before requiring interv
   let tries=0,repositions=0;const snapshots=[];
   const context=vm.createContext({pendingRecovery:null,samplingState:()=>({reduced:false}),QUERY:'power drill',SORT_REQUEST:'recent',salesSort:{},salesSortEstablished:false,
     finalStatus:null,sleep:async()=>{},bootstrapPageState:async()=>({}),guardInitialProducts:async()=>{},classify:()=>null,
-    readSalesSort:async()=>{},selectSalesSort:async()=>({state:++tries===2?'UI_CONFIRMED':'UNCONFIRMED'}),
+    prepareLocalWarehouseFilter:async()=>{},readSalesSort:async()=>{},selectSalesSort:async()=>({state:++tries===2?'UI_CONFIRMED':'UNCONFIRMED'}),
     writeSnapshot:async status=>snapshots.push(status),appendEvent:async()=>{},
     execute:async source=>{assert.ok(source.includes('window.scrollTo'));repositions++;}});
   vm.runInContext('class InitialProductsStopped extends Error {}\n'+preparation,context);
@@ -340,7 +340,7 @@ test('login and verification are not overwritten by missing sorting controls dur
     let sortReads=0;
     const context=vm.createContext({pendingRecovery:null,samplingState:()=>({reduced:false}),SORT_REQUEST:'recent',QUERY:'power drill',initialProductsPreparing:false,
       products:new Map([['saved',{main_image_url:'https://fixture/image.jpg'}]]),pendingProducts:new Map(),unclassifiedProducts:new Map(),
-      now:()=>'',extractScript:'fixture',salesSortEstablished:true,salesSort:{},classify:classifyPageState,
+      localWarehouseFilter:{},readLocalWarehouse:async()=>({}),confirmsLocalWarehouse:()=>true,now:()=>'',extractScript:'fixture',salesSortEstablished:true,salesSort:{},classify:classifyPageState,
       execute:async()=>navigationRace?{url,rows:[]}:page,
       readSalesSort:async()=>{sortReads++;return {};},confirmsSalesSort,
       bootstrapPageState:async()=>page,
