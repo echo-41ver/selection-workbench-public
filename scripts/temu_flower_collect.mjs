@@ -840,9 +840,16 @@ async function visibleScrollToBottom() {
 }
 
 async function visibleScrollToLearnedSeeMoreZone() {
-  if (!Number.isFinite(seeMoreBottomOffset)) return visibleScrollToBottom();
   const initial = await scan();
   if (classify(initial)) return initial;
+  // Save the currently rendered cards before jumping to the actual control.
+  // Use its current DOM position, including on the first page; a remembered
+  // offset and gradual scrolling are only fallbacks when no control exists.
+  const direct = await findSeeMoreFromCurrentDom();
+  if (direct?.[EKEY]) {
+    return scan();
+  }
+  if (!Number.isFinite(seeMoreBottomOffset)) return visibleScrollToBottom();
   let previousY = null, stalledScrolls = 0, instantRecovery = false, recoveryVerified = false;
   for (let i = 0; i < 80; i++) {
     const s = await lightPageState();
@@ -893,24 +900,23 @@ async function humanJitterAtSeeMore() {
   return findSeeMore();
 }
 
-async function waitForExpansionToSettle(countBefore) {
+async function waitForExpansionToSettle(countBefore, before) {
   const deadline = Date.now() + 10000;
-  const minimum = Date.now() + 2800;
   let previousVisibleCount = -1;
   let previousHeight = -1;
   let stablePolls = 0;
   let latest = null;
   while (Date.now() < deadline) {
-    await sleep(rand(400, 700));
+    await sleep(250);
     latest = await lightPageState();
+    if (classify(latest)) return latest;
     const currentVisibleCount = Number(latest?.visibleGoodsCount) || 0;
     const currentHeight = Number(latest?.scrollHeight) || 0;
     if (currentVisibleCount === previousVisibleCount && currentHeight === previousHeight) stablePolls += 1;
     else stablePolls = 0;
     previousVisibleCount = currentVisibleCount;
     previousHeight = currentHeight;
-    if (Date.now() >= minimum && stablePolls >= 3) return scan();
-    if (classify(latest)) return latest;
+    if (!latest.loading && expansionObserved(before,latest) && stablePolls >= 2) return scan();
   }
   return scan();
 }
@@ -1136,9 +1142,11 @@ async function findSeeMoreFromCurrentDom() {
     }
     return null;`);
   if (control && Number.isFinite(control.top)) {
-    const delta = Math.round(control.top + control.height / 2 - 0.5 * (await lightPageState()).innerHeight);
-    if (Math.abs(delta) <= 3000) {
-      await execute(`window.scrollBy({top:arguments[0],left:0,behavior:'instant'});return true;`, [delta]);
+    const viewport=await lightPageState();
+    const delta = Math.round(control.top + control.height / 2 - 0.5 * viewport.innerHeight);
+    if (Number.isFinite(delta)) {
+      const movedY=await execute(`window.scrollBy({top:arguments[0],left:0,behavior:'instant'});return window.scrollY;`, [delta]);
+      if(Number.isFinite(movedY)&&Math.abs(movedY-viewport.scrollY)>1)await recordCollectionScroll();
       await sleep(450);
       element = await findVisibleSeeMore();
       if (element?.[EKEY]) {
@@ -1969,7 +1977,6 @@ while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRec
     }
     continue;
   }
-  await sleep(rand(1800, 3200));
   let element = await findSeeMoreFromCurrentDom();
   if (!element?.[EKEY]) {
     element = await revealSeeMoreAboveFooter();
@@ -2008,10 +2015,6 @@ while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRec
   }
   consecutiveTryAgainErrors = 0;
   consecutiveTryAgainNoProgress = 0;
-  // Add a small human-like pause only before a real See more click. Network
-  // retries keep their existing timing so recovery is not needlessly delayed.
-  await sleep(rand(900, 1100));
-  element = (await humanJitterAtSeeMore()) || element;
   await rememberSeeMoreBottomOffset(element);
   const countBefore = products.size;
   const clickBaselineIds = new Set([...products.keys(),...unclassifiedProducts.keys()]);
@@ -2023,8 +2026,7 @@ while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRec
   await appendEvent('SEE_MORE_CLICKED', { round:round+1, click: clicks, unique_before: countBefore,
     expansion_confirmed:false,...clickEvidence,clicks_since_recovery: clicksSinceRecovery,
     see_more_bottom_offset_px: Math.round(seeMoreBottomOffset || 0) });
-  await sleep(rand(2800, 4300));
-  const after = await waitForExpansionToSettle(countBefore);
+  const after = await waitForExpansionToSettle(countBefore,expansionBefore);
   const blockAfterClick = classify(after);
 
   if (blockAfterClick || httpBlock) {
@@ -2079,7 +2081,6 @@ while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRec
     last_round_images_backfilled: Number(after?.imageBackfilled) || 0,
     last_round_promoted_from_pending: Number(after?.promotedFromPending) || 0,
   });
-  await sleep(rand(1800, 3000));
 }
 
 } catch (error) { if (!(error instanceof InitialProductsStopped)) throw error; }
