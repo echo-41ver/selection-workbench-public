@@ -112,7 +112,33 @@ def _codex_pool_process_running(row, base):
         return False
 
 
-def codex_review_control(base):
+def agent_review_speed(base, provider, pool, *, now=None):
+    """Read completed Agent groups only; API timings never estimate Agent work."""
+    now=time.time() if now is None else now
+    agents=set(provider.get('agent_ids') or [])
+    models=provider.get('agent_models') or {}
+    window=min(900,max(1,now-float(pool.get('created') or now-900)))
+    completed=set();durations=[]
+    for path in (Path(base)/'stage123/codex_pool/jobs').glob('*/job.json'):
+        job=selection.read(path,{})
+        agent=job.get('agent_id','codex')
+        if (job.get('state')!='complete' or agent not in agents
+                or job.get('observation_only') or job.get('model')!=models.get(agent,job.get('model'))):continue
+        identities=job.get('identities') or []
+        count=job.get('imported',0);start=job.get('started_at',0);end=job.get('finished_at',0)
+        if (type(count) is not int or count<=0 or count!=len(identities)
+                or type(start) not in (int,float) or type(end) not in (int,float)
+                or not 0<start<end<=now):continue
+        if end>=now-window:completed.update(tuple(identity) for identity in identities)
+        if not job.get('reused_reviews_from'):durations.append((end-start)/count)
+    workers=max(1,int(pool.get('workers') or provider.get('workers') or 1))
+    expected=workers*3600/(sum(durations)/len(durations)) if durations else None
+    return {'recent_rate_per_hour':round(len(completed)*3600/window,1),'window_seconds':round(window),
+            'estimated_rate_per_hour':round(expected,1) if expected else None,
+            'sample_groups':len(durations),'updated_at':now}
+
+
+def codex_review_control(base, *, scan_batches=True):
     """Read independent reviewer liveness without changing paid API accounting."""
     import psutil
     base = Path(base)
@@ -121,7 +147,7 @@ def codex_review_control(base):
     pool_config = selection.read(base / 'stage123/codex_pool_config.json', {})
     if not row and not pool:
         return {'available': False, 'running': False}
-    batches = sorted((Path(base)/'nightly_review').glob('*/review-batch.json'))
+    batches = sorted((Path(base)/'nightly_review').glob('*/review-batch.json')) if scan_batches else []
     if batches:
         from watch_codex_visual_reviews import all_batch_tasks
         tasks, errors = all_batch_tasks(Path(base), batches[0].parent)
@@ -171,6 +197,10 @@ def codex_review_control(base):
                           'agents':pool.get('agents',[]),
                           'phase':pool.get('phase'), 'errors':pool.get('errors', []),
                           'updated_at':pool.get('updated_at')}
+        if scan_batches:
+            from selection_automation.stage3_provider import from_category
+            provider=from_category(selection.read(base/'category.json',{}))
+            if provider.get('mode')=='local_agent':result['speed']=agent_review_speed(base,provider,pool)
     return result
 
 
@@ -182,6 +212,7 @@ class Console:
         self.pending_key=None
         from selection_automation.monitor_status import MonitorStatus
         self.monitor=MonitorStatus(self.status,lambda:(self.key,self.busy,self.phase,self.draft_used,self.stage3_busy,id(self.draft),id(self.pending_scope)))
+        self.live_monitor=MonitorStatus(self.live_status,lambda:self.key,interval=1,loading_key='live_loading')
         self.history_monitor=MonitorStatus(self.history,lambda:None,interval=5,loading_key='history_loading')
         self._history_monitors={};self._history_monitor_lock=threading.Lock()
         from selection_automation.rule_provider import settings
@@ -233,6 +264,52 @@ class Console:
                 self.phase='上次完整规则请求中断；已改为流式接收，请重新填写 Key 后沿用已定位榜单重试'
             self.generation_error={'code':pending.get('code') or 'GENERATION_INTERRUPTED','message':self.phase}
 
+
+    def live_status(self):
+        """Small operational files only; never scan reviews, publish or dispatch."""
+        from selection_automation.stage3_progress import controller_alive
+        from selection_automation.stage3_provider import from_category
+        key=self.key
+        value={'ok':True,'category_key':key}
+        if not key:return value
+        base=self.root/'runs'/key
+        category=json.loads((base/'category.json').read_text(encoding='utf-8'))
+        control_path=base/'stage123/runtime_control.json'
+        # A read error must not masquerade as an empty, cleared verification gate.
+        runtime=json.loads(control_path.read_text(encoding='utf-8')) if control_path.exists() else {}
+        if not isinstance(runtime,dict):raise ValueError('invalid dispatch control')
+        value.update(stage3_runtime=runtime,stage3_provider=from_category(category),
+            stage3_concurrency=selection.read(base/'stage123/concurrency.json',{}),
+            review=codex_review_control(base,scan_batches=False),
+            running=controller_alive(base),
+            enabled=(base/'stage123/paid_enabled.json').is_file() and not (base/'stage123/STOP').exists(),
+            controller=selection.read(base/'stage123/controller.json',{}))
+        return clean(value)
+
+    def monitor_status(self):
+        """Overlay current dispatch state even when a full report is still reading."""
+        state=self.monitor.get()
+        live=self.live_monitor.get()
+        state['live_sample']=live['status_sample']
+        if live.get('live_loading') or live.get('category_key')!=state.get('category_key'):
+            state['live_loading']=True
+            return state
+        for field in ('stage3_runtime','stage3_provider','stage3_concurrency'):
+            if field in live:state[field]=live[field]
+        if not live.get('category_key'):return state
+        control=state.setdefault('stage3_control',{})
+        old_review=control.get('codex_review') or {}
+        review=live['review']
+        # Validated pair totals retain their independent result snapshot.
+        control.update(running=live['running'],enabled=live['enabled'],
+            can_stop=live['enabled'] or live['running'] or bool(review.get('running')),
+            codex_review={**old_review,**{k:review[k] for k in ('available','running','phase','pid','created') if k in review},
+                          'pool':review.get('pool',{})})
+        control['phase']=live['controller'].get('phase') or '等待手动启动'
+        from runtime_overview import stage3_display
+        state.setdefault('details',{}).setdefault('阶段',{})['stage3']=stage3_display(
+            control,state['stage3_runtime'],state['stage3_provider'])
+        return state
 
     def owner(self): return selection.live_owner()
 
@@ -1349,7 +1426,7 @@ class Console:
             except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
             if provider['concurrency_mode']=='auto':
                 from selection_automation.analysis_concurrency import recommended
-                provider['workers']=recommended(provider['mode'],len(provider['agent_ids']) or 1)
+                provider['workers']=recommended(provider['mode'],provider=provider,root=self.root)
             if provider['mode']!='local_agent' and controller_alive(base) and provider!=current:
                 paused=bool(control.get('paused'))
                 update_control(folder,paused=True,switch_pending=True,switch_cancelled=False,
@@ -1435,7 +1512,7 @@ class Console:
                     raise ConsoleError('AGENT_UNAVAILABLE','未找到已连接且能够看图的本机 Agent；请在方案中检测并登录',409)
                 if provider['concurrency_mode']=='auto':
                     from selection_automation.analysis_concurrency import recommended
-                    provider['workers']=recommended('local_agent',len(agents) or 1)
+                    provider['workers']=recommended('local_agent',provider=provider,root=self.root)
                     provider_changed=provider!=from_category(category)
             from selection_automation.stage3_runtime import update_control,read_control
             native_update=running and provider['mode']=='local_agent' and from_category(category)['mode']=='local_agent'
@@ -1650,6 +1727,8 @@ class Console:
             preparing_environment=details.get('阶段',{}).get('bootstrap',{}).get('状态') in ('运行中','启动准备失败')
             if not preparing_environment:
                 details=enrich_progress(base,details,watch_running=bool(owner and owner.get('category_key')==key),asynchronous=True)
+                from local_service_recovery import apply_local_recovery
+                apply_local_recovery(self.root,base,details)
                 from collection_progress import collection_total
                 current_category=selection.read(base/'category.json',{})
                 if current_category:
@@ -1695,10 +1774,11 @@ class Console:
         def tone(value):
             if not isinstance(value,dict): return 'neutral'
             state=' '.join(str(value.get(field) or '') for field in ('状态','status','采集状态','query_status')).upper()
-            if re.search(r'REPLACING_.*_ENVIRONMENT|正在自动更换环境|WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY|WAITING_INITIAL_PRODUCTS_RETRY',state): return 'green'
+            if value.get('automatic_recovery'):return 'neutral'
+            if re.search(r'REPLACING_.*_ENVIRONMENT|正在自动更换环境|LOGIN_REQUIRED|WAITING_LOGIN|WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY|WAITING_INITIAL_PRODUCTS_RETRY',state): return 'green'
             if re.search(r'FAILED|ERROR|失败|错误',state): return 'red'
             if any(value.get(flag) is True for flag in ('需人工介入','manual_action_required','human_action_required')) or re.search(
-                    r'CAPTCHA|VERIFICATION|HUMAN_ACTION|STOPPED_LOGIN_REQUIRED|ACTION_REQUIRED|验证码|等待人工|待人工|需要人工',state): return 'yellow'
+                    r'CAPTCHA|VERIFICATION|HUMAN_ACTION|LOGIN_REQUIRED|WAITING_LOGIN|ACTION_REQUIRED|验证码|等待人工|待人工|需要人工',state): return 'red'
             if value.get('阻断') or re.search(r'STOPPED_HTTP|STOPPED_PROXY|ACCESS_DENIED|PROVIDER_BLOCKED|存在阻断',state): return 'red'
             return 'neutral'
         def current_worker(worker):
@@ -1712,7 +1792,7 @@ class Console:
         generation_failed=preparing_new and (bool(self.generation_error) or generation.get('stage')=='error')
         tones=[tone({'状态':phase})]+[tone(current_worker(worker)) for worker in workers]
         tones += [tone(value) for value in details.values() if isinstance(value,dict)]
-        tones += [tone(value) for value in details.get('阶段',{}).values() if isinstance(value,dict)]
+        tones += [tone(value) for name,value in details.get('阶段',{}).items() if name!='stage3' and isinstance(value,dict)]
         red=generation_failed or 'red' in tones
         yellow=stale or 'yellow' in tones
         publish_errors=selection.read(self.root/'runs'/key/'publish_state.json',{}).get('errors',{}) if key else {}
@@ -1747,6 +1827,15 @@ class Console:
             stage3_ready=False
             if not stage3_running: stage3_phase='当前候选已全部处理，结果已保留；新增候选后可继续分析'
         codex_control=self.codex_review_snapshot(key) if key else {'available':False,'running':False}
+        from runtime_overview import stage3_display
+        provider=__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)
+        stage3_control={'enabled':stage3_enabled,'can_start':stage3_ready,'running':stage3_running,
+                       'can_stop':stage3_enabled or stage3_running or bool(codex_control.get('running')),
+                       'progress':stage3_progress,'phase':stage3_phase,'codex_review':codex_control}
+        if key and category.get('execution_mode')!='collection':
+            live_stage3=stage3_display(stage3_control,runtime_control,provider)
+            details.setdefault('阶段',{})['stage3']=live_stage3
+            if live_stage3.get('需人工介入'):red=True
         from selection_automation.network_readiness import describe
         network_readiness=selection.read(self.root/'runtime/network-readiness.json',{}) or describe(selection.read(self.root/'runtime/secrets/proxyshare.settings.json',{}))
         return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,
@@ -1774,9 +1863,8 @@ class Console:
                       'collection_complete':collection_complete,
                       'stage3_key_configured':bool((key,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)['base_url']) in self.stage3_keys or __import__('selection_automation.stage3_credentials',fromlist=['saved_key']).saved_key(self.root,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category))),
                       'stage3_concurrency':selection.read(self.root/'runs'/key/'stage123/concurrency.json',{}) if key else {},
-                      'stage3_provider':__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category),
-                      'stage3_control':{'enabled':stage3_enabled,'can_start':stage3_ready,'running':stage3_running,'can_stop':stage3_enabled or stage3_running or bool(codex_control.get('running')),'progress':stage3_progress,
-                                        'phase':stage3_phase,'codex_review':codex_control}})
+                      'stage3_provider':provider,
+                      'stage3_control':stage3_control})
 
 
 class LocalConsoleServer(ThreadingHTTPServer):
@@ -1820,6 +1908,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self.trusted()
+            if self.path=='/api/health':
+                return self.send_json({'ok':True,'service':'selection-workbench','pid':os.getpid(),'time':time.time()})
             if self.path=='/api/status':
                 state=self.server.console.status()
                 if getattr(self.server,'release',None):
@@ -1827,7 +1917,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(state)
             if self.path=='/api/status-profile': return self.send_json(self.server.console.profile_status_once())
             if self.path=='/api/monitor-status':
-                state=self.server.console.monitor.get()
+                state=self.server.console.monitor_status()
                 if getattr(self.server,'release',None):state['release_update']=self.server.release.snapshot()
                 return self.send_json(state)
             if self.path=='/api/visual-review': return self.send_json(self.server.console.visual_review())
@@ -1887,7 +1977,7 @@ class Handler(BaseHTTPRequestHandler):
             body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
             if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market',
-                    '/api/local-agents/models','/api/local-agents/refresh','/api/stage3/concurrency','/api/control-stage3'):
+                    '/api/local-agents/models','/api/local-agents/refresh','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)
@@ -1901,6 +1991,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
             if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))
             if self.path=='/api/stage3/concurrency': return self.send_json(self.server.console.set_stage3_concurrency(body))
+            if self.path=='/api/stage3/concurrency-default':
+                from selection_automation.stage3_provider import settings
+                from selection_automation.analysis_concurrency import recommendation
+                return self.send_json({'ok':True,**recommendation(settings(body),self.server.console.root)})
             if self.path=='/api/local-agents/models':
                 from selection_automation.agent_models import catalogs
                 from selection_automation.local_agents import IDS
@@ -1989,6 +2083,9 @@ def main():
     server.release.check(force=True)
     stopping=threading.Event()
     threading.Thread(target=watch_release,args=(server,stopping),daemon=True).start()
+    from local_service_recovery import LocalServiceRecovery
+    recovery=LocalServiceRecovery(ROOT,server.console.owner)
+    threading.Thread(target=recovery.run,args=(stopping,),name='local-service-recovery',daemon=True).start()
     if any(row.get('enabled') for row in selection.read(ROOT/'runtime/operations/subscriptions.json',{'subscriptions':[]})['subscriptions']):
         from selection_automation.operations import ensure_daily_service
         ensure_daily_service(ROOT)

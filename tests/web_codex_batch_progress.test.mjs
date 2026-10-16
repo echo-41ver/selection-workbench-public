@@ -36,17 +36,17 @@ test('finished reviews still show Excel pending until latest publication is deli
 test('API historical speed is not shown as the ETA for active free review',()=>{
  const nodes=new Map();
  const get=id=>{
-  if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(){}});
+  if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(){},replaceChildren(){}});
   return nodes.get(id);
  };
- const ctx=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel(){}});
+ const ctx=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel(){},renderStage3Settings(){},stage3ProviderSettings:()=>undefined});
  const buttonCode=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  vm.runInContext(buttonCode,ctx);
  ctx.data={category_key:'task',stage3_control:{running:false,codex_review:{running:true},
   progress:{total:11117,completed:10800,api_completed:5401,codex_completed:5399,pending_after_codex:317,
    rate_per_hour:9566,eta_seconds:120,rate_source:'current'}}};
  vm.runInContext('stage3Button(data)',ctx);
- assert.match(nodes.get('stage3-speed').textContent,/API 当前未运行/);
- assert.match(nodes.get('stage3-speed').textContent,/不用于估算本轮看图时间/);
+ assert.match(nodes.get('stage3-speed').textContent,/正在读取本机 Agent 的完成记录/);
+ assert.match(nodes.get('stage3-speed').textContent,/成功组样本形成后自动估算/);
  assert.doesNotMatch(nodes.get('stage3-speed').textContent,/9,566|2 分钟/);
 });

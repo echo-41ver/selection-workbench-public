@@ -14,6 +14,80 @@ sys.path.insert(0,str(ROOT/'scripts'))
 import web_console as web
 
 
+def test_agent_speed_uses_its_own_successful_groups_and_current_width(tmp_path):
+    jobs=tmp_path/'stage123/codex_pool/jobs';jobs.mkdir(parents=True)
+    def put(name,**changes):
+        folder=jobs/name;folder.mkdir()
+        row={'state':'complete','agent_id':'doubao','model':'专家','started_at':940,'finished_at':1000,
+             'imported':2,'identities':[['A','1','v'],['A','2','v']],**changes}
+        (folder/'job.json').write_text(json.dumps(row),encoding='utf-8')
+    put('success');put('retry',state='retry');put('other-model',model='快速')
+    put('observation',observation_only=True);put('other-agent',agent_id='codex')
+    provider={'agent_ids':['doubao'],'agent_models':{'doubao':'专家'},'workers':4}
+    speed=web.agent_review_speed(tmp_path,provider,{'created':100,'workers':4},now=1060)
+    assert speed['recent_rate_per_hour']==8 and speed['sample_groups']==1
+    assert speed['estimated_rate_per_hour']==480
+    assert web.agent_review_speed(tmp_path,provider,{'workers':8},now=1060)['estimated_rate_per_hour']==960
+    assert web.agent_review_speed(tmp_path,provider,{},now=2000)['recent_rate_per_hour']==0
+
+
+def test_live_state_overrides_cached_captcha_without_rescanning_results(tmp_path,monkeypatch):
+    console=web.Console(tmp_path);console.key='fixture'
+    old={'ok':True,'category_key':'fixture','stage3_runtime':{'paused':True,'agent_blocks':{'doubao':{'code':'HUMAN_VERIFICATION_REQUIRED'}}},
+         'stage3_provider':{'mode':'local_agent','agent_ids':['doubao']},
+         'stage3_control':{'progress':{'total':100,'completed':12,'pending':88},
+                           'codex_review':{'target':96,'imported':12,'pool':{'running_groups':0,'phase':'等待验证码'}}}}
+    monkeypatch.setattr(console.monitor,'get',lambda:json.loads(json.dumps(old)))
+    monkeypatch.setattr(console.live_monitor,'get',lambda:{'ok':True,'category_key':'fixture',
+        'status_sample':{'age_seconds':0,'sampled_at':time.time(),'error':False},
+        'stage3_runtime':{'paused':False,'agent_blocks':{},'paused_agents':['acciowork']},
+        'stage3_provider':{'mode':'local_agent','agent_ids':['doubao'],'agent_models':{'doubao':'专家'}},
+        'stage3_concurrency':{'workers':8},'running':False,'enabled':False,'controller':{},
+        'review':{'available':True,'running':True,'phase':'分析中','pool':{'running':True,'running_groups':8,'phase':'分析中'}}})
+    monkeypatch.setattr(console,'stage3_snapshot',lambda *a:pytest.fail('live overlay must never rescan results'))
+    state=console.monitor_status()
+    assert state['stage3_runtime']['agent_blocks']=={}
+    assert state['stage3_runtime']['paused_agents']==['acciowork']
+    assert state['stage3_control']['codex_review']['pool']['running_groups']==8
+    assert state['stage3_control']['codex_review']['imported']==12
+    assert state['stage3_control']['progress']['completed']==12
+    assert not state['details']['阶段']['stage3'].get('需人工介入')
+    # A task switch must never combine another task's current control state.
+    console.live_monitor.get=lambda:{'ok':True,'category_key':'other','status_sample':{'age_seconds':0}}
+    assert console.monitor_status()['live_loading']
+    assert old['stage3_runtime']['paused']
+
+
+def test_fast_review_reader_does_not_scan_batch_tree(tmp_path,monkeypatch):
+    folder=tmp_path/'stage123/codex_pool';folder.mkdir(parents=True)
+    (folder/'pool.json').write_text(json.dumps({'workers':8,'running':8,'agents':[{'id':'doubao','running':8}]}))
+    (folder.parent/'codex_pool_config.json').write_text('{"enabled":true}')
+    monkeypatch.setattr(web,'_codex_pool_process_running',lambda *a:True)
+    monkeypatch.setattr(Path,'glob',lambda *a:pytest.fail('fast runtime sampling must not scan batches'))
+    state=web.codex_review_control(tmp_path,scan_batches=False)
+    assert state['running'] and state['pool']['running_groups']==8
+
+
+def test_invalid_live_gate_is_an_error_instead_of_a_cleared_captcha(tmp_path):
+    console=web.Console(tmp_path);console.key='fixture'
+    folder=tmp_path/'runs/fixture/stage123';folder.mkdir(parents=True)
+    (folder.parent/'category.json').write_text('{}')
+    (folder/'runtime_control.json').write_text('{incomplete')
+    with pytest.raises(ValueError):console.live_status()
+
+
+def test_health_endpoint_works_without_loading_console_reports(tmp_path):
+    server=web.ThreadingHTTPServer(('127.0.0.1',0),web.Handler)
+    server.console=SimpleNamespace(status=lambda:pytest.fail('health probe must not read task state'))
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    client=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=2)
+    try:
+        client.request('GET','/api/health')
+        response=client.getresponse();state=json.loads(response.read())
+        assert response.status==200 and state['service']=='selection-workbench' and state['pid']==os.getpid()
+    finally:client.close();server.shutdown();server.server_close();thread.join()
+
+
 def test_status_profile_is_local_one_shot_and_never_returns_status_values(tmp_path,monkeypatch):
     console=web.Console(tmp_path);calls=[]
     monkeypatch.setattr(console,'status',lambda:calls.append(True) or {
@@ -564,7 +638,7 @@ def test_stale_running_state_red_and_actual_worker(tmp_path,monkeypatch):
     (base/'status.json').write_text(json.dumps({'状态':'运行中'}))
     (base/'temu/supervisors/worker-01.json').write_text(json.dumps({'status':'WAITING_HUMAN_VERIFICATION'}))
     result=console.status()
-    assert not result['active'] and result['severity']=='yellow'
+    assert not result['active'] and result['severity']=='red'
     assert '已退出' in result['phase']
     assert len(result['workers'])==1
 
@@ -936,7 +1010,7 @@ def test_normal_worker_flags_not_red_and_identity_whitelisted(tmp_path,monkeypat
     monkeypatch.setattr(web.selection,'worker_snapshot',lambda *args:({}, {'状态':'等待首屏商品','阻断':True,'需人工介入':False,'采集状态':'WAITING_INITIAL_PRODUCTS'},None))
     assert console.status()['severity']=='green'
     monkeypatch.setattr(web.selection,'worker_snapshot',lambda *args:({}, {'状态':'等待验证码','需人工介入':True},None))
-    assert console.status()['severity']=='yellow'
+    assert console.status()['severity']=='red'
 
 
 def test_restore_draft_has_no_key_and_plain_failure_preserves(tmp_path,monkeypatch):

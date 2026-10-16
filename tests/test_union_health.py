@@ -63,3 +63,32 @@ def test_concurrent_source_update_publishes_then_catches_up(tmp_path, monkeypatc
     monkeypatch.setattr(watcher,'merge',real_merge)
     second=watcher.publish_once(base,first)
     assert second['status']=='PUBLISHED' and second['unique_goods']==2
+
+
+def test_locked_health_file_does_not_kill_local_watcher(tmp_path, monkeypatch):
+    base=tmp_path/'temu';source=base/'workers/w/q/products.jsonl'
+    source.parent.mkdir(parents=True)
+    source.write_text('{"goods_id":"1"}\n')
+    original=watcher.atomic_write
+    def locked(path, content):
+        if path.name=='watch_state.json':raise PermissionError('reader holds file')
+        return original(path,content)
+    monkeypatch.setattr(watcher,'atomic_write',locked)
+    state=watcher.publish_once(base)
+    assert state['status']=='PUBLISHED' and state['health_write_pending']
+    assert json.loads((base/'union/products.jsonl').read_text())['goods_id']=='1'
+    monkeypatch.setattr(watcher,'atomic_write',original)
+    recovered=watcher.publish_once(base,state)
+    assert not recovered.get('health_write_pending')
+    assert not watcher.watch_health(tmp_path)['阻断']
+
+
+def test_cached_stale_heartbeat_cannot_hide_exhausted_recovery(tmp_path):
+    state=watcher.publish_once(tmp_path/'temu')
+    state.update(heartbeat_at=0,status='PUBLISHED')
+    (tmp_path/'temu/union/watch_state.json').write_text(json.dumps(state))
+    result=dashboard_progress.enrich_progress(tmp_path,{'状态':'存在阻断','阶段':{
+        'temu_union':{'recovery_exhausted':True,'自动恢复':False,'阻断':True}}})
+    row=result['阶段']['temu_union']
+    assert row['需人工介入'] and row['阻断']
+    assert '需要处理' in row['状态'] and '等待自动重启' not in row['状态']
