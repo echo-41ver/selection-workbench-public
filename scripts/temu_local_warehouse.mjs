@@ -33,7 +33,10 @@ export function inspectLocalWarehouse() {
   const chosen=controls.length===1?controls[0]:null;
   const buttons=nodes.filter(e=>['BUTTON','LABEL'].includes(e.tagName)||e.getAttribute('role')==='button');
   const shippingMenus=buttons.filter(e=>/^(?:ships? from|发货地|發貨地|发货地点|發貨地點|物流配送)(?:\s*[（(]\d+[）)])?$/i.test(text(e)));
-  const menus=shippingMenus.length?shippingMenus:buttons.filter(e=>/^(?:filters?|筛选|篩選)(?:\s*\(\d+\))?$/i.test(text(e)));
+  // The all-filters control stays at the visible left edge. Shipping may sit
+  // behind the horizontal carousel's mask even when its DOM rect has a size.
+  const filterMenus=buttons.filter(e=>/^(?:filters?|筛选|篩選)(?:\s*[（(]\d+[）)])?$/i.test(text(e)));
+  const menus=filterMenus.length?filterMenus:shippingMenus;
   const dialogs=[...document.querySelectorAll('[role="dialog"]')].filter(visible);
   const applies=buttons.filter(e=>/^(?:apply|apply filters?|show\s+(?:[\d,.]+\+?\s+)?results?|done|应用|应用筛选|确认|确定|完成|查看结果|显示\s*(?:[\d,.]+\+?\s*个?)?结果)(?:\s*\(\d+\))?$/i.test(text(e))&&dialogs.some(d=>d.contains(e)));
   // TEMU keeps the real radio in its mounted filter group when the applied
@@ -55,7 +58,7 @@ export const confirmsLocalWarehouse=(state,query,evidence={})=>isTargetSearch(st
     &&evidence.filter_item&&(filterItems(state)||'').split('|').includes(evidence.filter_item)))
   &&!state.ambiguous&&!state.loading&&!state.dialog_open&&state.goods_ids?.length>0;
 
-export async function selectLocalWarehouse({inspect,click,guard,sleep,query,maxChecks=60,onAction=async()=>{}}) {
+export async function selectLocalWarehouse({inspect,click,guard,sleep,query,maxChecks=60,onAction=async()=>{},onRetry=async()=>{}}) {
   const attempts={option:0,menu:0,apply:0};let stable=0,previous=null,nextAction=0,checkedFilters=null;
   for(let check=0;check<maxChecks;check++) {
     await guard();
@@ -76,7 +79,10 @@ export async function selectLocalWarehouse({inspect,click,guard,sleep,query,maxC
       const action=!state.selected&&state.option?'option':state.selected&&state.apply?'apply':!applied&&!state.option&&state.menu&&!state.dialog_open&&!state.menu_expanded?'menu':null;
       if(action&&attempts[action]<3) {
         await guard();await onAction({action,attempt:++attempts[action]});
-        try{await click(state[action]);}catch{/* Re-read the real checked state before retrying. */}
+        try{await click(state[action]);}catch(error){
+          const message=String(error?.message||error);
+          await onRetry({action,attempt:attempts[action],reason:/intercept|obscur/i.test(message)?'控件被遮挡':/stale|detach/i.test(message)?'控件已更新':'点击尚未成功'});
+        }
         nextAction=check+3;
       }
     }
