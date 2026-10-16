@@ -86,20 +86,29 @@ class ConsoleError(ValueError):
         self.code, self.message, self.status = code, message, status
 
 
-def check_stage3_local_service(provider):
+def check_stage3_local_service(provider, root=None):
     """Check connectivity without submitting inference or changing dispatch state."""
     if provider['mode'] != 'local_model':
         return
     address = urlsplit(provider['base_url'])
     host = address.hostname
     port = address.port or (443 if address.scheme == 'https' else 80)
+    connected = False
     try:
         with socket.create_connection((host, port), timeout=2):
-            pass
+            connected = True
     except OSError:
-        raise ConsoleError('LOCAL_MODEL_UNAVAILABLE',
-            f'本地模型服务无法连接（{host}:{port}），请先启动该服务或选择其他分析方案。'
-            '本次操作未生效，原方案、暂停状态和已完成结果均保留。', 409) from None
+        pass
+    if connected and port != 11434:
+        return
+    from selection_automation.local_model_service import repair_provider
+    recovered = repair_provider(root or ROOT, provider)
+    if recovered.get('provider'):
+        provider.update(recovered['provider'])
+        return
+    raise ConsoleError('LOCAL_MODEL_UNAVAILABLE',
+        f'本地模型服务或指定模型尚未就绪（{host}:{port}）。{recovered["message"]}'
+        '本次操作未生效，原方案、暂停状态和已完成结果均保留。', 409)
 
 
 def clean(value):
@@ -1479,7 +1488,8 @@ class Console:
             except ValueError as exc: raise ConsoleError('INVALID_INPUT',str(exc)) from None
             provider_changed=provider!=from_category(category)
             if not configure_only or provider_changed:
-                check_stage3_local_service(provider)
+                check_stage3_local_service(provider,self.root)
+                provider_changed=provider!=from_category(category)
             api_running=controller_alive(base)
             codex_state=codex_review_control(base)
             running=api_running or codex_state.get('running')
@@ -1570,7 +1580,8 @@ class Console:
                 ensure_pool(category_path,self.root)
                 self.stage3_key=key;self.stage3_phase='本机Agent并行看图已启动'
                 return {'ok':True,'phase':self.stage3_phase,'provider':provider}
-            self.stage3_busy=True; self.stage3_key=key; self.stage3_phase='持续分析新增候选'
+            self.stage3_busy=True; self.stage3_key=key
+            self.stage3_phase=(f"本地模型 {provider['model']}：持续分析新增候选" if provider['mode']=='local_model' else '持续分析新增候选')
             try:self.launch_stage3_controller(key,category_path,api_key)
             except Exception:
                 self.stage3_busy=False;selection.save(folder/'STOP',{'time':time.time()});raise
@@ -1612,7 +1623,9 @@ class Console:
                 from selection_automation.stage3_runtime import resume_dispatch
                 from selection_automation.stage3_provider import from_category
                 provider=from_category(selection.read(folder.parent/'category.json',{}))
-                check_stage3_local_service(provider)
+                check_stage3_local_service(provider,self.root)
+                if provider!=from_category(selection.read(folder.parent/'category.json',{})):
+                    return self.start_stage3({'provider':provider})
                 value=resume_dispatch(folder,provider['agent_ids'] if provider['mode']=='local_agent' else ())
             else:value=update_control(folder,paused=True,switch_error=None)
             if action=='resume':
@@ -1996,7 +2009,7 @@ class Handler(BaseHTTPRequestHandler):
             body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
             if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market',
-                    '/api/local-agents/models','/api/local-agents/refresh','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
+                    '/api/local-agents/models','/api/local-agents/refresh','/api/local-models/repair','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)
@@ -2014,6 +2027,17 @@ class Handler(BaseHTTPRequestHandler):
                 from selection_automation.stage3_provider import settings
                 from selection_automation.analysis_concurrency import recommendation
                 return self.send_json({'ok':True,**recommendation(settings(body),self.server.console.root)})
+            if self.path=='/api/local-models/repair':
+                from selection_automation.stage3_provider import settings
+                from selection_automation.local_model_service import repair_provider
+                if set(body)!={'provider'} or not isinstance(body['provider'],dict):
+                    raise ConsoleError('INVALID_INPUT','本地模型检测参数无效')
+                try:provider=settings(body['provider'])
+                except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
+                if provider['mode']!='local_model':raise ConsoleError('INVALID_INPUT','请选择本地模型服务')
+                result=repair_provider(self.server.console.root,provider,
+                    allow_default=not bool(body['provider'].get('model','').strip()))
+                return self.send_json({'ok':True,**result})
             if self.path=='/api/local-agents/models':
                 from selection_automation.agent_models import catalogs
                 from selection_automation.local_agents import IDS

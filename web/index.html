@@ -95,6 +95,7 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
 <div><label for="stage3-api-key">该服务的 API key</label><input id="stage3-api-key" type="password" autocomplete="new-password" placeholder="本地服务无需 Key 时可留空"></div></div>
 <label for="stage3-protocol">服务接口</label><select id="stage3-protocol"><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option><option value="decisions" selected>D1 决策接口</option></select></div>
 <div id="stage3-model-field"><label for="stage3-model">模型 ID</label><input id="stage3-model" value="d1" maxlength="200" autocomplete="off"></div>
+<div id="stage3-local-tools" hidden><label for="stage3-local-model">本机已安装的看图模型</label><select id="stage3-local-model"><option value="">等待自动识别</option></select><div class="actions"><button type="button" id="stage3-local-repair">重新检测并修复连接</button></div><p id="stage3-local-status" class="small" role="status"></p></div>
 <div id="stage3-confidence-field" hidden><label for="stage3-confidence">决策确认概率（%）</label><input id="stage3-confidence" type="number" value="90" min="50" max="100"><p class="small">仅供决策接口分流，尚未按当前品类校准；中间区间保留证据不足。</p></div>
 
 <p id="stage3-provider-hint" class="small">服务地址、Key 与模型必须来自同一服务商；提交后清空 Key。</p></details>
@@ -113,6 +114,7 @@ function stage3ProviderSettings(){
  return {mode,base_url:$('stage3-base-url').value.trim(),model:$('stage3-model').value.trim(),protocol:$('stage3-protocol').value,workers:Number($('stage3-workers').value),confidence:Number($('stage3-confidence').value)/100,concurrency_mode:$('stage3-auto')?.checked?'auto':'manual',agent_ids:ids,agent_models:models};
 }
 function stage3ProviderFields(){
+ if($('stage3-local-tools'))$('stage3-local-tools').hidden=$('stage3-mode').value!=='local_model';
  const mode=$('stage3-mode').value,local=mode==='local_agent';$('stage3-api-fields').hidden=local;$('stage3-confidence-field').hidden=local||$('stage3-protocol').value!=='decisions';$('stage3-agents').hidden=!local;if($('stage3-model-field'))$('stage3-model-field').hidden=local;if($('configure-stage3'))$('configure-stage3').textContent=local?'保存方案（不启动）':'保存方案与 Key（不启动）';
  if($('stage3-auto')){$('stage3-workers').disabled=$('stage3-auto').checked;if($('stage3-workers-field'))$('stage3-workers-field').hidden=$('stage3-auto').checked;}
  $('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取。默认并发优先复用此前稳定且吞吐量最高的记录，可取消自动后手动修改。':mode==='local_model'?'连接已启动的本地看图模型服务。':local?'默认只使用你选中的一个 Agent；它可以按并发数同时处理多组商品。需要多个 Agent 分担时，在下方展开添加。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';
@@ -128,10 +130,29 @@ async function refreshConcurrencyDefault(){
  }catch{} // A missing history record never blocks manual configuration.
 }
 function chooseStage3Mode(){
- const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:18181/v1/systemone','d1-3b','decisions',2],local_agent:['','gpt-6.1-sol','responses',6]};
+ const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:11434/v1','','chat_completions',2],local_agent:['','gpt-6.1-sol','responses',6]};
  const [url,model,protocol,workers]=values[$('stage3-mode').value];$('stage3-base-url').value=url;$('stage3-model').value=model;$('stage3-protocol').value=protocol;$('stage3-workers').value=workers;$('stage3-api-key').value='';if($('stage3-auto'))$('stage3-auto').checked=true;
  stage3ManualConcurrency=false;stage3SettingsDirty=true;stage3ProviderFields();if($('stage3-mode').value==='local_agent'){stage3AgentSelection=[];refreshLocalAgents();}refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);
+ if($('stage3-mode').value==='local_model'){localModelLoadedFor=lastStatus?.category_key||'';repairLocalModelConnection();}
 }
+let localModelReadGeneration=0,localModelLoadedFor=null,localModelOptions=[];
+async function repairLocalModelConnection(){
+ if($('stage3-mode').value!=='local_model')return;
+ const generation=++localModelReadGeneration,identity=()=>JSON.stringify([$('stage3-base-url').value,$('stage3-model').value,$('stage3-protocol').value]),before=identity(),status=$('stage3-local-status');
+ status.textContent='正在识别本机服务和已安装的看图模型…';
+ try{
+  const {response,data}=await boundedAgentRead('/api/local-models/repair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:stage3ProviderSettings()})});
+  if(generation!==localModelReadGeneration||$('stage3-mode').value!=='local_model')return;
+  if(before!==identity()){status.textContent='配置已修改，保留你填写的值；需要时重新检测。';return;}
+  if(!response.ok)throw Error(data.error?.message||'本地服务检测失败');
+  localModelOptions=(data.models||[]).filter(model=>model.vision===true);const select=$('stage3-local-model');select.replaceChildren();
+  const empty=document.createElement('option');empty.value='';empty.textContent=localModelOptions.length?'选择本机已安装的模型':'尚未发现已安装的看图模型';select.append(empty);
+  localModelOptions.forEach((model,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=model.name+' · '+model.source;select.append(option);});
+  if(data.provider){for(const [id,key] of [['stage3-base-url','base_url'],['stage3-model','model'],['stage3-protocol','protocol']])$(id).value=data.provider[key];const index=localModelOptions.findIndex(model=>model.id===data.provider.model&&model.base_url===data.provider.base_url);select.value=index<0?'':String(index);stage3SettingsDirty=true;refreshConcurrencyDefault();}
+  status.textContent=data.message||'本地服务检测完成';stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);
+ }catch(error){if(generation===localModelReadGeneration&&$('stage3-mode').value==='local_model')status.textContent=error.message||'本地服务暂未就绪，请重试检测。';}
+}
+function chooseLocalModel(){const option=localModelOptions[Number($('stage3-local-model').value)];if($('stage3-local-model').value===''||!option)return;for(const [id,key] of [['stage3-base-url','base_url'],['stage3-model','id'],['stage3-protocol','protocol']])$(id).value=option[key];stage3SettingsDirty=true;refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);}
 function localAgentSettingsLocked(){return Boolean(lastStatus?.stage3_runtime?.switch_pending);}
 function stage3AgentInputsReady(){return stage3AgentSelection.length>0&&stage3AgentSelection.every(id=>{
  const catalog=stage3AgentCatalogs[id],model=stage3AgentModels[id];return catalog?.status==='ready'&&(!model||catalog.models.some(m=>m.id===model&&m.vision!==false));
@@ -146,6 +167,8 @@ function renderStage3Settings(data){
   if(before!==JSON.stringify([stage3AgentSelection,stage3AgentModels])||changedRun)renderAgentControls();
  }
  stage3ProviderFields();const locked=Boolean(data.stage3_runtime?.switch_pending);
+ for(const id of ['stage3-local-repair','stage3-local-model'])if($(id))$(id).disabled=locked;
+ if(p?.mode==='local_model'&&$('stage3-mode').value==='local_model'&&localModelLoadedFor!==(data.category_key||'')){localModelLoadedFor=data.category_key||'';repairLocalModelConnection();}
  for(const id of ['stage3-mode','stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-api-key','stage3-auto'])if($(id))$(id).disabled=locked||(id==='stage3-workers'&&Boolean($('stage3-auto')?.checked));
  for(const select of document.querySelectorAll('[data-agent-select]'))select.disabled=locked;
  for(const select of document.querySelectorAll('[data-agent-model]'))select.disabled=locked||select.dataset.available!=='true';
@@ -405,7 +428,7 @@ function stage3Button(data){
  const active=running||Boolean(state.codex_review?.running),runtime=data?.stage3_runtime||{};
  const blocked=Object.keys(runtime.agent_blocks||{}).some(id=>(data?.stage3_provider?.agent_ids||[]).includes(id));
  $('start-stage3').textContent=runtime.switch_pending?'正在保存断点并切换':active&&providerChanged?'保存断点并切换方案':runtime.paused?'继续第三层':active?'第三层分析中':$('stage3-mode').value==='local_agent'?'开始分析':'启动 / 继续第三层';
- $('start-stage3').disabled=unavailable||!statusFresh||Boolean(data?.release_update?.pending)||runtime.switch_pending||active&&!providerChanged&&!runtime.paused||(!active&&state.can_start===false&&!providerChanged)||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||($('stage3-mode').value==='local_agent'&&!stage3AgentInputsReady());
+ $('start-stage3').disabled=unavailable||!statusFresh||Boolean(data?.release_update?.pending)||runtime.switch_pending||active&&!providerChanged&&!runtime.paused||(!active&&state.can_start===false&&!providerChanged)||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||($('stage3-mode').value==='local_agent'&&!stage3AgentInputsReady())||($('stage3-mode').value==='local_model'&&!$('stage3-model').value.trim());
  $('configure-stage3').disabled=unavailable||active||runtime.switch_pending;
  if($('apply-stage3-concurrency'))$('apply-stage3-concurrency').disabled=unavailable||Boolean(runtime.switch_pending);
  let pause=$('pause-stage3');if(!pause){pause=document.createElement('button');pause.type='button';pause.id='pause-stage3';$('stop-stage3').before(pause);pause.addEventListener('click',()=>action('/api/control-stage3',{action:stage3ResumeRequired(lastStatus)?'resume':'pause'}));}
@@ -517,6 +540,8 @@ $('apply-stage3-concurrency').addEventListener('click',()=>action('/api/stage3/c
 $('configure-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()};if(body.provider.mode==='local_agent'&&!stage3AgentInputsReady()){$('stage3-agent-message').textContent='请先选择一个 Agent，并等待读取可用模型。';return;}const key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/configure-stage3',body);});
 $('start-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()};if(body.provider.mode==='local_agent'&&!stage3AgentInputsReady()){$('stage3-agent-message').textContent='请先选择一个 Agent，并等待读取可用模型。';return;}const key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/start-stage3',body);});
 $('stage3-mode').addEventListener('change',chooseStage3Mode);
+$('stage3-local-repair').addEventListener('click',repairLocalModelConnection);
+$('stage3-local-model').addEventListener('change',chooseLocalModel);
 $('stage3-agents-refresh').addEventListener('click',refreshLocalAgents);
 $('stage3-agent').addEventListener('change',choosePrimaryAgent);
 $('stage3-agent-model').addEventListener('change',()=>setAgentModel(stage3AgentSelection[0],$('stage3-agent-model').value));

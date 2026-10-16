@@ -265,7 +265,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
     try: key=request_key(provider)
     except ValueError as exc: raise SystemExit(str(exc)) from None
     endpoint = provider['base_url']
-    from openai import OpenAI, DefaultHttpxClient
+    from selection_automation.stage3_transport import create_transport
     from httpx2 import Timeout, Limits
     lock = threading.Lock()
     stop = threading.Event()
@@ -460,7 +460,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
     with ExitStack() as resources:
         try:
             api_timeout=Timeout(timeout_seconds,connect=30,pool=30)
-            transport=resources.enter_context(DefaultHttpxClient(trust_env=False,timeout=api_timeout,
+            transport=resources.enter_context(create_transport(provider,timeout=api_timeout,
                 limits=Limits(max_connections=capacity,max_keepalive_connections=min(capacity,256))))
             client=resources.enter_context(VisualClient(provider,transport,key,api_timeout))
         except Exception as exc:

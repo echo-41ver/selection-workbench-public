@@ -23,7 +23,7 @@ for (const [status,kind,scrolled=true] of [['WAITING_LOGIN','LOGIN'], ['WAITING_
       isCategoryRelated:()=>true, atomic:async (file,text)=>{writes.set(file,text);calls.push(file);},
       PRODUCTS:'products', PENDING_PRODUCTS:'pending', UNCLASSIFIED_PRODUCTS:'unclassified', FILTERED_OFF_TOPIC:'filtered', IMAGE_BACKFILL_QUEUE:'images',
       NETWORK_USAGE:'network', PROGRESS:'progress', networkUsageSnapshot:()=>({}),
-      QUERY:'mouse', salesSort:{requested:'sales'}, round:2, clicks:3, consecutiveNoNewRounds:0,
+      QUERY:'mouse', salesSort:{requested:'sales'}, localWarehouseFilter:{state:'UI_CONFIRMED'},round:2, clicks:3, consecutiveNoNewRounds:0,
       IDLE_REQUIRED:10, clicksSinceRecovery:3, seeMoreBottomOffset:20, bidiStatus:'ACTIVE', imageBlocked:0,
       imageCancelRaces:0, trafficSavingMode:true, nonEssentialBlocked:0, httpBlock:null,
       bootstrapFromSafeTab:false, startedAt:'fixture', now:()=> 'fixture', OUT:'fixture',
@@ -84,7 +84,7 @@ test('collection scroll marker is set after a successful scroll, never by an ini
       const page={scrollY:0,scrollHeight:2000,innerHeight:700};
       let scans=0;
       const context=vm.createContext({scrollingCollectionStarted:false,seeMoreBottomOffset:learned?300:null,
-        QUERY:'mouse',SORT_REQUEST:'sales',scan:async()=>({blocked}),
+        QUERY:'mouse',SORT_REQUEST:'sales',EKEY:'element',findSeeMoreFromCurrentDom:async()=>null,scan:async()=>({blocked}),
         classify:s=>s.blocked,lightPageState:async()=>({...page,blocked:scans++>0}),
         execute:async()=>calls.push('scroll'),sleep:async()=>{},rand:()=>300,
         appendEvent:async event=>calls.push(event),writeSnapshot:async status=>calls.push(status)});

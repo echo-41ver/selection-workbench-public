@@ -44,7 +44,7 @@ test('four provider modes bind endpoint model protocol and concurrency without r
  const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:get,lastStatus:null,fetch:async()=>({ok:true,json:async()=>({agents:[]})})});vm.runInContext(code,context);
  const cases=[['liquid_d1','https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],
  ['multimodal_api','https://api.deepseek.com','deepseek-flash','responses',4],
- ['local_model','http://127.0.0.1:18181/v1/systemone','d1-3b','decisions',2],['local_agent','','gpt-6.1-sol','responses',6]];
+ ['local_model','http://127.0.0.1:11434/v1','','chat_completions',2],['local_agent','','gpt-6.1-sol','responses',6]];
  get('stage3-confidence').value='90';
  for(const [mode,url,model,protocol,workers] of cases){get('stage3-mode').value=mode;get('stage3-api-key').value='TEST_ONLY_OLD_KEY';vm.runInContext('chooseStage3Mode()',context);const p=vm.runInContext('stage3ProviderSettings()',context);assert.equal(p.mode,mode);assert.equal(p.base_url,url);assert.equal(p.model,model);assert.equal(p.protocol,protocol);assert.equal(p.workers,workers);assert.equal(get('stage3-api-key').value,'');assert.equal(get('stage3-api-fields').hidden,mode==='local_agent');}
 });
