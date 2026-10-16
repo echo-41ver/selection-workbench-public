@@ -22,7 +22,7 @@ test('next keyword reuses current results; fresh environment enters empty search
     const context=vm.createContext({URL,Date,Number,Boolean,QUERY:'new keyword',ENTRY_MODE:'empty_search',bootstrapEntryPlan,bootstrapFromSafeTab:true,bidiStatus:'ACTIVE',
       TEMU_EMPTY_SEARCH:'https://www.temu.com/search_result.html',
       bootstrapPageState:async()=>({url:existing?'https://www.temu.com/search_result.html?search_key=old':'about:newtab'}),
-      classify:()=>null,guardInitialProducts:async()=>({manual:false}),
+      classify:()=>null,guardInitialProducts:async()=>({manual:false}),readLocalWarehouse:async()=>({}),
       execute:async script=>actions.push(script),
       bootstrapThroughEmptySearch:async options=>actions.push(options||{navigate:true}),
       appendEvent:async type=>events.push(type),sleep:async()=>{},rand:()=>0,ensurePageGuards:async()=>{},

@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {parseProductCardMetrics} from '../scripts/product_card_metrics.mjs';
+import {inspectSearchReadiness} from '../scripts/temu_search_readiness.mjs';
 
 const source=fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs',import.meta.url),'utf8');
 const start=source.indexOf('const extractScript = `')+'const extractScript = '.length;
 const end=source.indexOf('`;',start)+1;
-const script=vm.runInNewContext(source.slice(start,end),{parseProductCardMetrics});
+const script=vm.runInNewContext(source.slice(start,end),{parseProductCardMetrics,inspectSearchReadiness});
 
 function node({tag='DIV',text='',attrs={},children=[]}={}) {
   const item={tagName:tag,innerText:text,attributes:[],children,parentElement:null,
