@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL_PROGRESS_REPORTER=None
 sys.path.insert(0, str(ROOT / 'src'))
 from selection_automation.category_contract import category_contract
+from selection_automation.stage1_authoring import compile_stage1_rules
+from selection_automation.stage2_authoring import generated_threshold
 from selection_automation.rules import validate
 from selection_automation.identity_policy import compile_policy
 from selection_automation.identity_profiles import reviewed_profile
@@ -361,6 +363,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         cached['temu']['max_products_per_keyword']=temu_count
         cached['approved_rule_source']={'kind':'VERIFIED_EXISTING_CATEGORY','category_key':cached['category_key']}
         cached=ensure_subject_rules(cached,evidence)
+        cached=compile_stage1_rules(cached)
         validate(cached)
         return cached
     if not os.environ.get('DEEPSEEK_API_KEY', '').strip():
@@ -405,6 +408,9 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         raise CategoryGenerationError('自动定位尚未找到准确榜单，请填写榜单链接后重试', 'CATEGORY_UNRESOLVED')
     report(stage='generating', message='榜单已核实，正在生成本品类文字和视觉规则')
     config = model_json('Generate category configuration following this contract. Return configuration object itself, no wrapper. '
+        'In this SAME configuration response, generate stage2.candidate_threshold for this particular category and a concise Chinese stage2.threshold_reason_zh. '
+        'Prioritize high recall: tolerate more candidates rather than reject true same products with different camera angles, backgrounds, crops or permitted variants. '
+        'This is a provisional cosine-similarity candidate cutoff, not a probability or a calibrated optimum. Do not copy a universal 60-point template. '
         'Use declarative rules only, literal aliases, no code, no keys or credentials. All fields must be complete. '
         'Populate temu.category_aliases with English, Simplified Chinese, Traditional Chinese and common regional names for the same product body; exclude accessories, compatible hosts and different product forms. '
         'Populate temu.subject_filter with mode TARGET_BODY_ONLY, reject_mixed_subjects true and exclude_subject_terms naming clearly different sold products in English and Chinese. A compatible host mentioned after for/适用于 is not the sold product; never exclude shared feature adjectives. '
@@ -431,6 +437,8 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         config = compile_generated_policy(config)
         config = apply_reviewed_recall_aliases(config)
         config = ensure_subject_rules(config,evidence,allow_model=False)
+        config = compile_stage1_rules(config)
+        config = generated_threshold(config)
         validate(config)
     except CategoryGenerationError:
         raise

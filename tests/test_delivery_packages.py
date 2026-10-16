@@ -14,6 +14,13 @@ builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
 
+def test_delivery_excludes_historical_report_but_preserves_workbench():
+    _, files = builder.committed_files(ROOT)
+    assert "web/accuracy_benchmark.html" not in files
+    assert "web/index.html" in files
+    assert "scripts/web_console.py" in files
+
+
 def ps(script, tmp_path, **extra):
     path = tmp_path / 'test.ps1'
     path.write_text(script, encoding='utf-8-sig')
