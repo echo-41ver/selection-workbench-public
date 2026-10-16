@@ -192,7 +192,7 @@ test('third layer starts during collection and displays live queue and stop cont
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const a=html.indexOf('function stage3Button(data)'),b=html.indexOf('\n}',a)+2;
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,Math,Number,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
+ const context=vm.createContext({$:get,statusFresh:true,busy:false,Math,Number,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined,stage3ResumeRequired:()=>false});
  vm.runInContext(html.slice(a,b),context);
  context.data={active:true,category_key:'task',scope:{execution_mode:'full'},stage3_control:{can_start:true,running:false,progress:{total:100,completed:40,pending:60,percent:40,rate_per_hour:60,eta_seconds:3600,rate_source:'history'}}};
  vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,false);assert.match(get('stage3-count').textContent,/100/);assert.equal(get('stage3-progress-fill').style.width,'40%');assert.match(get('stage3-speed').textContent,/1 小时 0 分钟/);

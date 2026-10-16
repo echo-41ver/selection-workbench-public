@@ -17,6 +17,7 @@ from selection_workflow.excel_delivery import data_workbook_path, publish_view_c
 from selection_workflow.excel_images import cache_amazon_images, cached_thumbnail
 from selection_workflow.commercial_excel import add_report
 from selection_workflow.excel_verdict_style import LEGEND, verdict_formats, verdict_kind
+from selection_automation.selection_delivery import display_parameter
 
 
 from selection_automation.jsonl_records import read_jsonl as jsonl
@@ -96,28 +97,15 @@ def _formats(book):
 
 
 def _display_details(value, fallback='未展示'):
-    if not value:
-        return fallback
-    if not isinstance(value, list):
-        return str(value)
-    lines = []
-    for item in value:
-        if isinstance(item, dict):
-            label = str(item.get('label') or item.get('dimension') or '').strip()
-            fact = str(item.get('value') or '').strip()
-            asin = str(item.get('asin') or '').strip()
-            line = f'{label}：{fact}' if label and fact else fact or label
-            if asin: line += f'（{asin}）'
-            if line: lines.append(line)
-        elif item is not None:
-            lines.append(str(item))
-    return '\n'.join(lines) or fallback
+    return display_parameter(value) or fallback
 
 
 def _write_value(sheet, row, col, value, fmt, formats, header, *, native_links=False):
     from urllib.parse import urlparse
-    if isinstance(value, (list, dict)):
-        value = json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (list, dict)) or header in (
+            '页面月销量文本','销量文本','展示销量原文','来源','上架时间来源','销量口径','排序确认',
+            '前台库存提示','原始榜单卡片文本'):
+        value = display_parameter(value)
     if isinstance(value, str):
         parsed = urlparse(value)
         if parsed.scheme == 'https' and parsed.netloc and ('链接' in header or 'URL' in header or header in ('Amazon主图', 'TEMU主图')):
@@ -236,7 +224,7 @@ def export_temu_book(destination, rows, category_name, max_per_keyword, union_su
     if union_summary.get('unique_goods_id') is not None and int(union_summary['unique_goods_id']) != len(rows):
         raise ValueError('TEMU并集汇总与明细行数不一致')
     headers = ['序号', 'TEMU商品ID', '标题', '价格(USD)', '销量文本', '商品链接', '主图链接',
-               '全部图片链接(JSON)', '命中搜索词', '首次发现轮次', '观测时间(UTC)', '来源']
+               '全部图片链接', '命中搜索词', '首次发现轮次', '观测时间(UTC)', '来源']
     headers += ['规格最低价(USD)','规格最高价(USD)','价格区间口径','商品评分','上架时间','上架时间来源','销量口径','真实差评原文','差评来源链接']
     def build(book):
         f = _formats(book)

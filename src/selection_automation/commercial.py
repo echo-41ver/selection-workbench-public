@@ -295,6 +295,14 @@ def current_report(root, category):
     path = Path(root)/'runs'/category['category_key']/'commercial_report.json'
     report = read_json(path)
     if report and report.get('evidence_signature') == report_signature(root,category):
+        # A long-lived analysis process can write a fresh report using an older
+        # display formatter. Refresh only presentation from the frozen source.
+        from .selection_delivery import collected_parameters
+        source=read_json(path.parent/'amazon/amazon_frontend_latest.json')
+        records={str(row['asin']):row for row in source.get('records',[])}
+        for entry in report.get('products',[]):
+            raw=records.get(str(entry.get('asin')))
+            if raw is not None:entry['amazon_parameters']=collected_parameters(raw)
         return report
     report = build_report(root,category)
     from .merge_temu_snapshots import atomic_write

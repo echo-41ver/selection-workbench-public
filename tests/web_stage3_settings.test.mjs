@@ -33,6 +33,24 @@ test('third-layer click submits a dedicated key and clears the input',()=>{
  assert.equal(submitted.path,'/api/start-stage3');assert.equal(submitted.body.api_key,'TEST_ONLY_VISUAL_KEY');assert.equal(submitted.body.provider.mode,'liquid_d1');assert.equal(nodes['stage3-api-key'].value,'');
 });
 
+test('concurrency click submits only width and mode without model selection or API keys',()=>{
+ let click,submitted;const nodes={'apply-stage3-concurrency':{addEventListener:(_e,cb)=>click=cb},'stage3-workers':{value:'400'},'stage3-auto':{checked:false}};
+ const context=vm.createContext({$:id=>nodes[id],action:(path,body)=>submitted={path,body}});
+ vm.runInContext(html.split('\n').find(line=>line.startsWith("$('apply-stage3-concurrency').addEventListener")),context);click();
+ assert.equal(submitted.path,'/api/stage3/concurrency');assert.equal(submitted.body.workers,400);
+ assert.deepEqual(Object.keys(submitted.body),['workers','concurrency_mode']);
+});
+
+test('temporary catalog refresh failure retains actual models and the chosen model',async()=>{
+ const context=vm.createContext({lastStatus:null,fetch:async()=>({ok:false,json:async()=>({error:{message:'服务暂忙'}})})});
+ vm.runInContext(code,context);
+ vm.runInContext("renderAgentControls=()=>{};stage3AgentSelection=['doubao'];stage3DetectedAgents=[{id:'doubao',installed:true}];stage3AgentModels={doubao:'actual-expert'};stage3AgentCatalogs={doubao:{status:'ready',models:[{id:'actual-expert'}]}}",context);
+ await vm.runInContext('refreshAgentModels()',context);
+ assert.equal(vm.runInContext('stage3AgentCatalogs.doubao.models[0].id',context),'actual-expert');
+ assert.equal(vm.runInContext('stage3AgentModels.doubao',context),'actual-expert');
+ assert.equal(vm.runInContext('stage3AgentCatalogs.doubao.refresh_error',context),'服务暂忙');
+});
+
 test('first render before status arrives preserves the initialization flow',()=>{
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',hidden:false,replaceChildren(){},append(){}});return nodes.get(id);};
  const context=vm.createContext({$:get,document:{querySelectorAll:()=>[]}});vm.runInContext(code,context);

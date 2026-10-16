@@ -43,8 +43,8 @@ def test_temu_dual_sort_sheets_keep_separate_sales_observations(tmp_path):
     book = load_workbook(destination)
     try:
         assert book['商品明细'].max_row == 5
-        assert book['销量最高样本']['D4'].value == '100+ sold'
-        assert book['最近上架样本']['D4'].value == '120+ sold'
+        assert book['销量最高样本']['D4'].value == '页面已售：100+ 件'
+        assert book['最近上架样本']['D4'].value == '页面已售：120+ 件'
     finally:
         book.close()
 
@@ -55,7 +55,8 @@ def test_amazon_reference_headers_and_real_embedded_image(tmp_path):
     source = {'source_url': 'https://amazon.example/bestsellers', 'observed_at': '2026-09-25T00:00:00Z',
               'records': [{'rank': 1, 'asin': 'A1', 'title': 'electric drill', 'local_image_path': str(picture),
                            'main_image_url': 'https://images.example/a1.jpg', 'product_url': 'https://amazon.example/dp/A1',
-                           'price_usd': 19.99, 'specifications': [{'label': 'voltage', 'value': '20V'}]}]}
+                           'price_usd': 19.99, 'specifications': [{'label': 'Color', 'value': 'Black'}],
+                           'variants': [{'label': 'Keyboard /* Temporary CSS */', 'asin': 'A1'}]}]}
     output = tmp_path / 'excel' / 'Amazon.xlsx'
     export_amazon_book(output, source, '电钻')
     workbook = load_workbook(output)
@@ -66,6 +67,8 @@ def test_amazon_reference_headers_and_real_embedded_image(tmp_path):
     # Formula links retain clickability without Excel's relationship-count limit.
     assert sheet['H5'].value == '=HYPERLINK("https://images.example/a1.jpg","查看图片")'
     assert sheet['M5'].value == 19.99
+    assert sheet['R5'].value == '键盘：A1'
+    assert sheet['S5'].value == '颜色：黑色'
     assert sheet.freeze_panes == 'E5'
     assert sheet.auto_filter.ref.startswith('A4:')
     assert workbook['采集说明']['B7'].value == '1/1件'

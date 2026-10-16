@@ -1,10 +1,9 @@
 """Selection summary and matching detail, with clickable embedded photographs."""
 from __future__ import annotations
-import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
-from selection_automation.selection_delivery import build_delivery,conclusion_label,short_reason,collected_parameters
+from selection_automation.selection_delivery import build_delivery,conclusion_label,short_reason,collected_parameters,display_parameter
 from selection_automation.commercial import jsonl
 from selection_automation.model_labels import model_label
 from selection_workflow.excel_images import cached_thumbnail
@@ -17,11 +16,11 @@ def export(root,category,report):
     destination=base/'excel'/f'{name}_选品结果.xlsx'
     note=(f"选品结论仅保留同款＋类似款严格小于 {data['limit']} 的 Amazon，每商品一行；明细包含全部最终同款和类似款。"
           '无法判断表示证据不足，未分析表示尚未完成。点击图片可打开原图。')
-    parameter_headers=['当前价(USD)','最低价(USD)','最高价(USD)','价格带口径','评分','评论数','销量原文','销量口径','真实上架时间','上架时间来源','采集时间','采集来源']
+    parameter_headers=['当前价(USD)','最低价(USD)','最高价(USD)','价格带口径','评分','评论数','页面销量','销量口径','真实上架时间','上架时间来源','采集时间','采集来源']
     amazon_raw={i['asin']:i['raw'] for i in data['products']}
     amazon_raw.update({p['asin']:p['amazon_raw'] for p in data['pairs']})
     temu_raw={p['goods_id']:p['temu_raw'] for p in data['pairs'] if p['temu_raw'] is not None}
-    standard={'评分','评论数','销量原文','销量口径','采集时间','当前价格(USD)','上架时间','上架时间来源'}
+    standard={'评分','评论数','页面销量','近一月页面销量','销量口径','采集时间','采集来源','当前价格(USD)','上架时间','上架时间来源'}
     extras={side:list(dict.fromkeys(k for r in records.values() for k in collected_parameters(r) if k not in standard)) for side,records in [('Amazon',amazon_raw),('TEMU',temu_raw)]}
     summary_headers=['Amazon ASIN','Amazon标题','Amazon图片','同款数','类似款数','不同款数','无法判断数','未分析数','同款+类似款数量']+['Amazon'+h for h in parameter_headers]+['Amazon'+h for h in extras['Amazon']]+['Amazon商品链接']
     prefix=['Amazon ASIN','Amazon标题','Amazon图片','TEMU图片','同款+类似款数量','Amazon商品链接','TEMU商品链接']
@@ -41,7 +40,7 @@ def export(root,category,report):
     def fields(card):
         if card is None:return [None]*len(parameter_headers)
         p,s=card['price'],card['sales']
-        return [p['observed_price'],p['min'],p['max'],p['basis'],card['rating'],card['review_count'],s['text'],s['basis'],card['listed_at'],card['listed_at_source'],card['observed_at'],card['source']]
+        return [display_parameter(value) for value in [p['observed_price'],p['min'],p['max'],p['basis'],card['rating'],card['review_count'],s['text'],s['basis'],card['listed_at'],card['listed_at_source'],card['observed_at'],card['source']]]
     def extra_values(side,raw):
         values=collected_parameters(raw)
         return [values.get(k) for k in extras[side]]
@@ -83,9 +82,8 @@ def export(root,category,report):
         headers=['平台','商品ID','采集字段','已采集内容','内容分段','商品来源链接'];extra=sheet('商品完整字段',headers);extra.hide();count=0
         for side,records in [('Amazon',amazon_raw),('TEMU',temu_raw)]:
             for identity,raw in records.items():
-                for k,v in raw.items():
-                    if any(w in k.lower() for w in ('api_key','password','access_token','cookie','secret')):continue
-                    text=json.dumps(v,ensure_ascii=False) if isinstance(v,(dict,list)) else str(v) if v is not None else '未取得'
+                for k,v in collected_parameters(raw,include_core=True).items():
+                    text=str(v) if v is not None else '未取得'
                     chunks=[text[i:i+32000] for i in range(0,len(text),32000)] or ['']
                     for part,chunk in enumerate(chunks,1):emit(extra,count+4,headers,[side,identity,k,chunk,f'{part}/{len(chunks)}',raw.get('product_url')]);count+=1
         extra.set_column(3,3,90);extra.autofilter(3,0,max(3,count+3),len(headers)-1)

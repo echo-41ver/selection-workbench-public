@@ -14,6 +14,60 @@ from selection_automation.rules import score
 from selection_automation.operations import price_range
 
 
+def test_collected_parameters_are_readable_chinese_and_do_not_mutate_sources():
+    from copy import deepcopy
+    from selection_automation.selection_delivery import collected_parameters,display_parameter,SPECIFICATION_NAMES
+    raw={'detail_price_text':'$11.11','brand':'Blue','monthly_sales_text':'10K+ bought in past month',
+         'specifications':[{'label':'Color','value':'Black'},{'label':'Brand','value':'Blue'},
+                           {'label':'Number of Keys','value':105}],
+         'variants':[{'label':'Keyboard /* Temporary CSS */ .broken { color:red; }','asin':'A1'}],
+         'image_candidates':[{'url':'https://example.com/raw.png'}],
+         'primary_observation':{'snapshot':r'D:\internal\products.jsonl'},
+         'merge_policy':'LATEST_COMPLETE_OBSERVATION_WITH_CONFLICT_PROVENANCE',
+         'category_relevance':{'state':'RELEVANT'},'detail_quality':{'schema_version':'internal'}}
+    original=deepcopy(raw);values=collected_parameters(raw)
+    assert values['详情页价格']=='$11.11' and values['品牌']=='Blue'
+    assert values['近一月页面销量']=='近一月购买：10,000+ 件'
+    assert values['规格参数']=='颜色：黑色\n品牌：Blue\n按键数：105'
+    assert values['已采集变体']=='键盘：A1'
+    assert len(values)==5 and raw==original
+    assert SPECIFICATION_NAMES['Water Resistance Level']=='防水等级'
+    assert display_parameter({'min':0,'max':12,'currency':'USD','api_key':'TEST_ONLY_SECRET'})=='最低价：0\n最高价：12\n币种：美元'
+    assert display_parameter('In Stock {"isInternal":false,"merchantId":"fixture"}')=='有货'
+    assert display_parameter("4.4 4.4 out of 5 stars (3,828) var dpAcr; P.when('A').execute(function() {});")=='评分：4.4（满分5星），3,828条评价'
+
+
+def test_export_does_not_expose_collector_columns_or_json_blobs(tmp_path):
+    cat,report=setup(tmp_path)
+    path=tmp_path/'runs/fixture/amazon/amazon_frontend_latest.json'
+    source=json.loads(path.read_text('utf8'));source['records'][0].update(
+        detail_price_text='$12.00',image_candidates=[{'url':'https://example.com/image.png'}],
+        variants=[{'label':'Keyboard /* Temporary CSS */ bad{}','asin':'TEST_ASIN'}])
+    path.write_text(json.dumps(source),encoding='utf8')
+    result=export(tmp_path,cat,report);book=load_workbook(result['固定查看副本'])
+    for sheet in book:
+        headers=[c.value for c in sheet[4]]
+        assert not any(isinstance(h,str) and any(k in h for k in ('detail_price_text','image_candidates','primary_observation')) for h in headers)
+        strings=[str(c.value) for row in sheet.iter_rows(min_row=5) for c in row if c.value is not None]
+        assert not any('Temporary CSS' in value or '"label"' in value or '"value"' in value or 'schema_version' in value for value in strings)
+    book.close()
+
+
+def test_current_report_refreshes_legacy_display_without_reanalysing(tmp_path,monkeypatch):
+    from selection_automation import commercial
+    cat,report=setup(tmp_path)
+    report.update(evidence_signature='same-evidence')
+    report['products'][0]['amazon_parameters']={'detail_quality':'legacy JSON'}
+    path=tmp_path/'runs/fixture/commercial_report.json'
+    path.write_text(json.dumps(report),encoding='utf8')
+    monkeypatch.setattr(commercial,'report_signature',lambda *a:'same-evidence')
+    monkeypatch.setattr(commercial,'build_report',lambda *a:pytest.fail('Cached analysis recomputed'))
+    result=commercial.current_report(tmp_path,cat)
+    assert result['products'][0]['match']==report['products'][0]['match']
+    assert result['products'][0]['amazon_parameters']['规格参数']=='材质：棉'
+    assert 'detail_quality' not in result['products'][0]['amazon_parameters']
+
+
 def setup(root, n=2):
     base=root/'runs/fixture'
     (base/'amazon').mkdir(parents=True)
@@ -58,7 +112,7 @@ def test_reopen_focused_excel_and_full_fields(tmp_path):
     assert detail.cell(5,headers.index('TEMU评论数')+1).value==0
     link=detail.cell(5,headers.index('TEMU商品链接')+1)
     assert link.hyperlink and link.hyperlink.target.startswith('https://www.temu.com/') or link.data_type=='f' and 'https://www.temu.com/' in link.value
-    text=''.join(row[3] for row in book['商品完整字段'].iter_rows(min_row=5,values_only=True) if row[0]=='TEMU' and row[1]=='1' and row[2]=='long_detail')
+    text=''.join(row[3] for row in book['商品完整字段'].iter_rows(min_row=5,values_only=True) if row[0]=='TEMU' and row[1]=='1' and row[2]=='补充说明')
     assert text=='证据'*18000
     assert book['选品结论'].freeze_panes=='D5'
     book.close()
@@ -88,7 +142,7 @@ def test_summary_has_five_counts_and_visible_collected_parameters(tmp_path):
     assert [sheet.cell(row,headers.index('同款数')+1).value for row in (5,6,7)]==[1,0,0]
     assert sheet.cell(6,headers.index('不同款数')+1).value==2
     assert sheet.cell(7,headers.index('未分析数')+1).value==2
-    assert all(h in headers for h in ['类似款数','无法判断数','Amazon规格参数','Amazon销量原文','Amazon评分'])
+    assert all(h in headers for h in ['类似款数','无法判断数','Amazon规格参数','Amazon页面销量','Amazon评分'])
     assert not sheet.column_dimensions[get_column_letter(headers.index('Amazon评分')+1)].hidden
     assert len(book['同款商品明细'].cell(5,12-1).value)<=140
     assert book['商品完整字段'].sheet_state=='hidden'

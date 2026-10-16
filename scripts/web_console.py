@@ -1326,6 +1326,48 @@ class Console:
                 with self._switch_lock:self._switch_threads.discard(key)
         threading.Thread(target=complete,daemon=True).start()
 
+    def set_stage3_concurrency(self,body):
+        """Change dispatch width without probing models or releasing pause gates."""
+        from selection_automation.stage3_provider import from_category,settings
+        from selection_automation.stage3_runtime import read_control,update_control
+        from selection_automation.stage3_progress import controller_alive
+        if set(body)-{'workers','concurrency_mode'} or 'workers' not in body:
+            raise ConsoleError('INVALID_INPUT','请填写并发路数')
+        with self.lock:
+            if self.busy:raise ConsoleError('ALREADY_RUNNING','请等待当前操作完成',409)
+            key,_=self.current_run_key()
+            if not isinstance(key,str) or not re.fullmatch('[a-z][a-z0-9_]{0,63}',key):
+                raise ConsoleError('NO_TASK','当前没有任务',409)
+            base=self.root/'runs'/key;path=base/'category.json';folder=base/'stage123'
+            category=selection.read(path,{})
+            if category.get('category_key')!=key or category.get('execution_mode')=='collection' or not isinstance(category.get('stage3'),dict):
+                raise ConsoleError('NO_TASK','当前任务未启用第三层分析',409)
+            control=read_control(folder)
+            if control.get('switch_pending'):raise ConsoleError('ALREADY_RUNNING','正在保存断点并切换方案，请稍后调整并发',409)
+            current=from_category(category)
+            try:provider=settings({**current,**body})
+            except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
+            if provider['concurrency_mode']=='auto':
+                from selection_automation.analysis_concurrency import recommended
+                provider['workers']=recommended(provider['mode'],len(provider['agent_ids']) or 1)
+            if provider['mode']!='local_agent' and controller_alive(base) and provider!=current:
+                paused=bool(control.get('paused'))
+                update_control(folder,paused=True,switch_pending=True,switch_cancelled=False,
+                    pending_provider=provider,pending_configure_only=paused)
+                selection.save(folder/'STOP',{'time':time.time(),'reason':'concurrency-change'})
+                self.queue_stage3_switch(key,base,provider,configure_only=paused)
+                return {'ok':True,'provider':provider,'switch_pending':True,
+                    'message':f"并发已保存为 {provider['workers']} 路；当前请求保存后按新路数接续。"}
+            category['stage3'].update(provider=provider,max_concurrency=provider['workers'])
+            selection.save(path,category)
+            pool_path=folder/'codex_pool_config.json'
+            if provider['mode']=='local_agent' and pool_path.exists():
+                pool=selection.read(pool_path,{})
+                pool.update(workers=provider['workers'],concurrency_mode=provider['concurrency_mode'])
+                pool['agent_backends']=[{**agent,'max_parallel':provider['workers']} for agent in pool.get('agent_backends',[])]
+                selection.save(pool_path,pool)
+            return {'ok':True,'provider':provider,'message':f"并发已设置为 {provider['workers']} 路；后续分组按新设置派发，已发送的组正常保存。"}
+
     def start_stage3(self, body, configure_only=False):
         from selection_automation.stage3_progress import controller_alive
         if set(body)-{'api_key','provider'}: raise ConsoleError('INVALID_INPUT','第三层启动参数无效')
@@ -1844,7 +1886,8 @@ class Handler(BaseHTTPRequestHandler):
             body=json.loads(self.rfile.read(length))
             body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
-            if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market'):
+            if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market',
+                    '/api/local-agents/models','/api/local-agents/refresh','/api/stage3/concurrency','/api/control-stage3'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)
@@ -1857,6 +1900,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/run': return self.send_json(self.server.console.run_draft(body),202)
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
             if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))
+            if self.path=='/api/stage3/concurrency': return self.send_json(self.server.console.set_stage3_concurrency(body))
             if self.path=='/api/local-agents/models':
                 from selection_automation.agent_models import catalogs
                 from selection_automation.local_agents import IDS

@@ -28,6 +28,49 @@ def test_manual_provider_concurrency_has_no_fixed_ceiling():
         assert provider['workers']==1024 and provider['concurrency_mode']=='manual'
 
 
+def test_live_concurrency_does_not_require_model_catalog_or_release_pause(tmp_path,monkeypatch):
+    import web_console as web
+    from selection_automation import local_agents,agent_models
+    category={'category_key':'fixture','stage3':{'modules':{'design':100}}}
+    provider=settings({'mode':'local_agent','agent_ids':['doubao'],'agent_models':{'doubao':'豆包 专家'},'workers':2,'concurrency_mode':'manual'})
+    apply(category,provider);base=tmp_path/'runs/fixture';base.mkdir(parents=True)
+    web.selection.save(base/'category.json',category)
+    web.selection.save(base/'stage123/codex_pool_config.json',{'workers':2,'enabled':True,'agent_ids':['doubao'],
+        'agent_models':provider['agent_models'],'group_size':12,'agent_backends':[{'id':'doubao','max_parallel':2}]})
+    update_control(base/'stage123',paused=True,paused_agents=['acciowork'],agent_blocks={'doubao':{'code':'HUMAN_VERIFICATION_REQUIRED'}})
+    original=read_control(base/'stage123')
+    console=web.Console(tmp_path);monkeypatch.setattr(console,'current_run_key',lambda:('fixture',True))
+    monkeypatch.setattr(local_agents,'ready_agents',lambda *a,**kw:pytest.fail('Model probe started'))
+    monkeypatch.setattr(agent_models,'validate_selection',lambda *a:pytest.fail('Model catalog required'))
+    for width in (400,1):
+        result=console.set_stage3_concurrency({'workers':width,'concurrency_mode':'manual'})
+        assert result['provider']['workers']==width
+        pool=web.selection.read(base/'stage123/codex_pool_config.json')
+        assert pool['enabled'] and pool['workers']==pool['agent_backends'][0]['max_parallel']==width
+        assert pool['agent_ids']==['doubao'] and pool['agent_models']==provider['agent_models'] and pool['group_size']==12
+        assert read_control(base/'stage123')==original and not (base/'stage123/STOP').exists()
+
+
+@pytest.mark.parametrize('mode',['liquid_d1','multimodal_api','local_model'])
+@pytest.mark.parametrize('paused',[False,True])
+def test_live_api_concurrency_drains_known_requests_and_preserves_pause(tmp_path,monkeypatch,mode,paused):
+    import web_console as web
+    from selection_automation import stage3_progress
+    category={'category_key':'fixture','stage3':{'modules':{'design':100}}}
+    apply(category,settings({'mode':mode,'workers':2,'concurrency_mode':'manual'}))
+    base=tmp_path/'runs/fixture';base.mkdir(parents=True);web.selection.save(base/'category.json',category)
+    update_control(base/'stage123',paused=paused)
+    console=web.Console(tmp_path);monkeypatch.setattr(console,'current_run_key',lambda:('fixture',True))
+    monkeypatch.setattr(stage3_progress,'controller_alive',lambda base:True)
+    calls=[];monkeypatch.setattr(console,'queue_stage3_switch',lambda key,base,p,**kw:calls.append((p,kw)))
+    result=console.set_stage3_concurrency({'workers':400,'concurrency_mode':'manual'})
+    assert result['switch_pending'] and calls[0][0]['workers']==400
+    assert calls[0][1]['configure_only']==paused
+    assert (base/'stage123/STOP').exists()
+    assert web.selection.read(base/'category.json')['stage3']['provider']['workers']==2
+    assert read_control(base/'stage123')['pending_provider']['model']==category['stage3']['model']
+
+
 def test_explicit_continue_clears_selected_verification_but_preserves_manual_pauses(tmp_path):
     from selection_automation.stage3_runtime import block_agent,resume_dispatch
     update_control(tmp_path,paused=True,paused_agents=['acciowork','codex'])

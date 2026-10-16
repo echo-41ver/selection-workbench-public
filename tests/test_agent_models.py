@@ -117,6 +117,22 @@ def test_vision_receipt_for_one_model_does_not_authorize_another(tmp_path,monkey
     assert not local_agents._probe_cli(tmp_path,'codex','two')['ready']
 
 
+def test_busy_doubao_uses_recent_native_catalog_without_interrupting_upload(tmp_path,monkeypatch):
+    import os,time
+    executable=tmp_path/'doubao.exe';executable.touch()
+    agent={'id':'doubao','name':'豆包','installed':True,'executable':str(executable)}
+    path=tmp_path/'runtime/agent-config/model-catalogs/doubao.json';path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'id':'doubao','status':'ready','models':[{'id':'actual-expert'}]}))
+    def busy(*args):raise RuntimeError('Another supervisor owns this installation')
+    monkeypatch.setattr(models,'_doubao',busy)
+    result=models.catalog(tmp_path,'doubao',refresh=True,agent=agent)
+    assert result['status']=='ready' and result['cached'] and result['models'][0]['id']=='actual-expert'
+    os.utime(path,(time.time()-901,time.time()-901))
+    assert models.catalog(tmp_path,'doubao',refresh=True,agent=agent)['status']=='unavailable'
+    path.write_text(json.dumps({'id':'doubao','status':'ready','models':[{'id':'actual-expert'}],'native_identity':['other-installation']}))
+    assert models.catalog(tmp_path,'doubao',refresh=True,agent=agent)['status']=='unavailable'
+
+
 def test_accio_selected_model_is_sent_to_the_native_gateway(tmp_path,monkeypatch):
     import websocket
     monkeypatch.setattr(native,'accio_gateway',lambda:{'url':'http://localhost:4097'})

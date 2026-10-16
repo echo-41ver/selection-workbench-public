@@ -209,6 +209,7 @@ def catalog(root,agent_id,refresh=False,agent=None):
     if agent.get('authenticated') is False:return {**result,'message':'请先在该 Agent 中登录'}
     stamp=Path(agent['executable']).stat()
     key=(str(Path(root).resolve()),agent_id,agent['executable'],stamp.st_mtime_ns,stamp.st_size)
+    cache_path=Path(root)/'runtime/agent-config/model-catalogs'/f'{agent_id}.json'
     with _lock:
         cached=_cache.get(key)
         if not refresh and cached and time.monotonic()-cached[0]<300:return dict(cached[1])
@@ -222,12 +223,26 @@ def catalog(root,agent_id,refresh=False,agent=None):
         result.update(models=models,default=default,source=source,status='ready',message='已从本机 Agent 读取')
     except (OSError,ValueError,RuntimeError,subprocess.TimeoutExpired,queue.Empty) as error:
         from .agent_blockers import AgentActionRequired
+        if agent_id=='doubao' and type(error) is RuntimeError and str(error)=='Another supervisor owns this installation':
+            # Model menus share the native upload composer. Never interrupt it;
+            # retain recently observed models, labelled as cached rather than
+            # claiming another live menu read. Runtime caches are not deployed.
+            try:
+                prior=json.loads(cache_path.read_text(encoding='utf-8'))
+                if (time.time()-cache_path.stat().st_mtime<900 and prior.get('id')==agent_id
+                        and prior.get('status')=='ready' and prior.get('models')
+                        and prior.get('native_identity',list(key[1:]))==list(key[1:])):
+                    return {**prior,'cached':True,'message':'豆包发送队列忙，暂用本机最近读取的模型列表；可稍后刷新。'}
+            except (OSError,ValueError):pass
+            result['message']='豆包发送队列忙，请稍后刷新模型列表'
+            return result
         result['message']=str(error) if type(error) is RuntimeError or isinstance(error,AgentActionRequired) else '模型读取失败，请检查客户端与网络'
         if isinstance(error,AgentActionRequired):result.update(status='action_required',action_required=True,code=error.code)
     if result['status']=='ready':
+        result['native_identity']=list(key[1:])
         with _lock:_cache[key]=time.monotonic(),dict(result)
         from .merge_temu_snapshots import atomic_write
-        atomic_write(Path(root)/'runtime/agent-config/model-catalogs'/f'{agent_id}.json',json.dumps(result,ensure_ascii=False))
+        atomic_write(cache_path,json.dumps(result,ensure_ascii=False))
     return result
 
 

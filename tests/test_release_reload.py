@@ -52,19 +52,24 @@ def test_idle_check_blocks_each_task_type_and_unknown_status():
     assert not idle_for_reload({},console)
 
 
-def test_old_service_rejects_new_tasks_but_still_accepts_stop(tmp_path):
+def test_old_service_rejects_new_tasks_but_still_accepts_stop(tmp_path,monkeypatch):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
     import web_console as web
+    from selection_automation import agent_models,local_agents
+    monkeypatch.setattr(agent_models,'catalogs',lambda *a,**kw:[{'id':'doubao','status':'ready','models':[{'id':'actual-native-model'}]}])
+    monkeypatch.setattr(local_agents,'discover',lambda *a,**kw:[])
     server=web.LocalConsoleServer(('127.0.0.1',0),web.Handler)
     called=[]
-    server.console=SimpleNamespace(start=lambda body:called.append('start'),
+    server.console=SimpleNamespace(root=tmp_path,start=lambda body:called.append('start'),
         action=lambda action,body:called.append(action) or {'ok':True},
+        set_stage3_concurrency=lambda body:called.append('concurrency') or {'ok':True},
         refresh_market=lambda body:called.append('market') or {'ok':True})
     server.release=ReleaseReload(tmp_path,{'commit':'old','source_sha256':'old'},
         read_version=lambda root:{'commit':'new','source_sha256':'new'})
     thread=threading.Thread(target=server.serve_forever);thread.start()
     try:
-        for endpoint,expected in (('/api/generate',409),('/api/resume',409),('/api/stop',200),('/api/refresh-market',202)):
+        for endpoint,expected in (('/api/generate',409),('/api/resume',409),('/api/stop',200),('/api/refresh-market',202),
+                ('/api/local-agents/models',200),('/api/local-agents/refresh',200),('/api/stage3/concurrency',200)):
             conn=http.client.HTTPConnection(*server.server_address,timeout=3)
             conn.request('POST',endpoint,'{}',{'Content-Type':'application/json',
                 'Origin':f'http://127.0.0.1:{server.server_port}'})
@@ -72,7 +77,7 @@ def test_old_service_rejects_new_tasks_but_still_accepts_stop(tmp_path):
             assert response.status==expected
             if expected==409:assert payload['error']['code']=='UPDATE_PENDING'
             conn.close()
-        assert called==['stop','market']
+        assert called==['stop','market','concurrency']
     finally:server.shutdown();server.server_close();thread.join(3)
 
 
