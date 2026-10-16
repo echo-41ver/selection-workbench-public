@@ -67,9 +67,6 @@ def settings(value=None):
             protocol='responses'
             if not urlsplit(address).path:address+='/v1'
     from .analysis_concurrency import recommended
-    workers = value.get('workers', recommended(mode))
-    if type(workers) is not int or workers < 1:
-        raise ValueError('分析并发数须为正整数')
     concurrency_mode = value.get('concurrency_mode', 'manual' if 'workers' in value else 'auto')
     if concurrency_mode not in {'auto', 'manual'}:
         raise ValueError('并发方式无效')
@@ -81,6 +78,10 @@ def settings(value=None):
     if not isinstance(agent_models,dict) or any(k not in IDS or not isinstance(v,str) or not v.strip() or len(v)>200 or any(ord(c)<32 for c in v) for k,v in agent_models.items()):
         raise ValueError('本机 Agent 模型选择无效')
     agent_models={k:v.strip() for k,v in agent_models.items()}
+    workers = value['workers'] if 'workers' in value else recommended(mode,provider={
+        'mode':mode,'base_url':address,'model':model,'protocol':protocol,'agent_ids':agent_ids,'agent_models':agent_models})
+    if type(workers) is not int or workers < 1:
+        raise ValueError('分析并发数须为正整数')
     confidence = value.get('confidence', .90)
     if type(confidence) not in (int, float) or not math.isfinite(confidence) or not .5 <= confidence <= 1:
         raise ValueError('决策确认概率须为 0.5–1')

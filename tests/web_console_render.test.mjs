@@ -176,7 +176,7 @@ test('current lane evidence clears stale alerts and still displays real verifica
   assert.equal(recovered.className,'progress-card success lane-card');
   assert.equal(recovered.children.some(n=>n.className==='advice'),false);
   const waiting=card(stale,running);
-  assert.equal(waiting.className,'progress-card warning lane-card');
+  assert.equal(waiting.className,'progress-card danger lane-card');
   assert.equal(waiting.children.find(n=>n.className==='advice').textContent,stale['建议动作']);
   const post=card({...running,'状态':'验证后等待搜索页就绪','采集状态':'WAITING_POST_VERIFICATION_SEARCH_BOX','阻断':true});
   assert.equal(post.children.some(n=>n.className==='advice'),false);

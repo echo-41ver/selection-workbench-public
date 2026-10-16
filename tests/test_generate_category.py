@@ -64,6 +64,7 @@ def fixture_config():
     c['temu'].update(category_aliases=['电钻','電鑽','power drill'],
         subject_filter={'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,'exclude_subject_terms':['nail drill','磨甲机']})
     c['stage1'].update(rule_version='v1', attributes=[{'name':'power','hard_conflict':True,'values':{'corded':['corded'], 'cordless':['cordless']}}])
+    c['stage2'].update(candidate_threshold=54,threshold_reason_zh='电钻拍摄角度和背景变化较大，采用较低门槛减少漏检。')
     c['stage3'].update(modules={'identity':100}, module_descriptions={'identity':'双边外观'}, visual_instructions='缺失为UNKNOWN', rule_version='v1', prompt_version='v1', schema_version='v1')
     c['stage3']['identity_policy']={'version':'category-identity-policy-v2-effects','product_scope':'比较电钻本体',
         'features':[{'id':'power','label':'供电结构','role':'identity','evidence':'both','scope':'机身与供电接口',
@@ -139,6 +140,27 @@ def test_verified_configuration_overrides_model_endpoint_and_counts(monkeypatch)
     assert result['amazon']['target_count']==3
     assert result['temu']['max_products_per_keyword']==40
     assert result['amazon']['verification']['rank_count']==50
+
+
+@pytest.mark.parametrize('threshold',[43,58])
+def test_rules_and_recall_threshold_share_one_configured_api_generation(monkeypatch,threshold):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only-generic-key')
+    monkeypatch.setenv('SELECTION_RULES_BASE_URL','https://configured.example/v1')
+    monkeypatch.setenv('SELECTION_RULES_MODEL','configured-model')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda url:evidence)
+    calls=[]
+    def model(prompt,**kwargs):
+        calls.append(prompt)
+        config=fixture_config();config['stage2']['candidate_threshold']=threshold
+        return config
+    monkeypatch.setattr(generator,'model_json',model)
+    out=generator.generate_category('电钻',3,40,bestsellers_url=evidence['url'])
+    assert len(calls)==1 and 'SAME configuration response' in calls[0]
+    assert out['stage2']['candidate_threshold']==threshold
+    assert out['stage2']['threshold_source']=='configured_rule_api'
+    assert out['stage1']['attributes']
 
 
 @pytest.mark.parametrize('change', ['empty_attributes','bad_weights','python'])

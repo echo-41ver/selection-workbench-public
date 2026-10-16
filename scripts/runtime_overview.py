@@ -1,0 +1,43 @@
+"""Read-only presentation of the actual third-layer controller and its gates."""
+
+
+def stage3_display(control, runtime, provider):
+    progress = control.get('progress') or {}
+    review = control.get('codex_review') or {}
+    pool = review.get('pool') or {}
+    selected = provider.get('agent_ids') or []
+    blocks = [block for agent, block in (runtime.get('agent_blocks') or {}).items()
+              if agent in selected]
+    completed = int(progress.get('completed') or 0)
+    if progress.get('api_completed') is None:
+        completed += int(progress.get('codex_completed') or 0)
+    total = progress.get('total')
+    pending = progress.get('pending_after_codex', progress.get('pending'))
+    row = {'completed': completed, 'total': total, 'remaining': pending,
+           'scope_label': '当前候选版本；已保存的实际分析结果',
+           '分析方式': provider.get('mode'), '动态快照': bool(progress.get('refreshing'))}
+    if blocks:
+        message = '；'.join(str(block.get('message') or block.get('code') or 'Agent 已阻塞') for block in blocks)
+        row.update(状态=message, 阻断=True, 需人工介入=True,
+                   建议动作='请在对应 Agent 完成验证码、登录或提示要求，再点击继续此 Agent；不会自动绕过验证。')
+    elif runtime.get('switch_error'):
+        row.update(状态='第三层切换失败，需要处理', 阻断=True, 需人工介入=True, 建议动作=runtime['switch_error'])
+    elif progress.get('billing_hold_fail_closed') or progress.get('billing_unknown_pairs'):
+        row.update(状态='第三层有发送或费用记录待核对', 阻断=True, 需人工介入=True,
+                   建议动作='已有结果继续保留，状态不明的请求不会自动重发。请核对原会话和费用记录。')
+    elif runtime.get('switch_pending'):
+        row['状态'] = '正在保存断点并切换分析方案'
+    elif runtime.get('paused') or (provider.get('mode') == 'local_agent' and selected
+                                   and all(agent in runtime.get('paused_agents', []) for agent in selected)):
+        row['状态'] = '已暂停第三层派发，已发出的结果继续保存'
+    elif control.get('running') or review.get('running'):
+        row['状态'] = pool.get('phase') or review.get('phase') or control.get('phase') or '第三层分析运行中'
+        row['running'] = True
+        row['并发组数'] = pool.get('running_groups')
+    elif total and pending == 0 and not progress.get('refreshing'):
+        row['状态'] = '当前第三层候选已全部处理'
+    elif progress.get('counting') or progress.get('refreshing'):
+        row['状态'] = '正在核对第三层进度快照'
+    else:
+        row['状态'] = '等待点击启动第三层分析' if not control.get('enabled') else control.get('phase') or '等待第三层调度'
+    return row

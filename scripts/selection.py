@@ -881,7 +881,8 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                         api_stamp=refresh_saved_api_key(api_stamp)
                         if not hold_provider_block(base,children=children,finished=finished,attempts=attempts,next_at=next_at,state=state):
                             service('stage3',py('run_category_layer3.py','--category',category_path,'--candidates',candidates,'--results',base/'stage123'/'results.jsonl'),repeat=True,interval=30)
-                elif not only_collection: state['stage3']={'状态':'等待候选' if stage3_authorized else '等待点击网页按钮启动付费分析；API请求数为0'}
+                elif not only_collection and stage3_marker.get('controller')!='independent':
+                    state['stage3']={'状态':'等待候选' if stage3_authorized else '等待点击网页按钮启动第三层分析'}
                 if time.monotonic()-last_export>=60 and 'excel' not in children:
                     launch('excel',py('publish_all.py','--category',category_path)); last_export=time.monotonic()
                 if 'excel' in children and children['excel'].poll() is not None:

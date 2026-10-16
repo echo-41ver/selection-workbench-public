@@ -118,6 +118,20 @@ def collection_host(port, category, *, paid=False, preserve_prepared=True):
         time.sleep(delay)
 
 
+def healthy(port):
+    """Probe the HTTP handler, not report generation or external Agents."""
+    import http.client
+    connection=http.client.HTTPConnection('127.0.0.1',port,timeout=2)
+    try:
+        connection.request('GET','/api/health')
+        response=connection.getresponse()
+        value=json.loads(response.read(1024))
+        return response.status==200 and value.get('ok') is True and value.get('service')=='selection-workbench'
+    except (OSError,ValueError,http.client.HTTPException):
+        return False
+    finally:connection.close()
+
+
 def host(port):
     from selection_automation.process_lock import ProcessLock
     from restart_web import listener, validate_console, native_process_active
@@ -151,8 +165,10 @@ def host(port):
                     except psutil.NoSuchProcess:break
                 current=listener(port)
                 if current:
-                    validate_console(current,ROOT);missing_since=None
-                    continue
+                    validate_console(current,ROOT)
+                    if healthy(port):
+                        missing_since=None
+                        continue
                 if missing_since is None:missing_since=time.monotonic()
                 if time.monotonic()-missing_since>=60:
                     from restart_web import stop_console

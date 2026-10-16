@@ -1,0 +1,12 @@
+{
+  "source_commit": "412915ebbd3e6d2aba5f942c265653ae6466c175",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/deployment-412915e",
+  "artifacts": [
+    {
+      "name": "selection-workbench-412915e-public.zip",
+      "bytes": 1384847712,
+      "sha256": "342b4512738fe0474987349c2149f0d9ab7b141126474817a7cb6b4c88852e39",
+      "contains_company_credentials": false
+    }
+  ]
+}

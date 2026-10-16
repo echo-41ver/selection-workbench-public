@@ -56,6 +56,8 @@ def edit_rules(category, edits, *, compile_model=model_json):
                 if not isinstance(value,str) or not isinstance(phrases,list) or not phrases or any(not isinstance(p,str) or not p.strip() for p in phrases): raise ValueError('文字规则必须为字面短语列表')
             if not isinstance(attr.get('ambiguous_phrases',[]),list) or any(not isinstance(p,str) for p in attr.get('ambiguous_phrases',[])): raise ValueError('歧义短语格式无效')
         result['stage1']['attributes']=attrs
+        from selection_automation.stage1_authoring import compile_stage1_rules
+        result=compile_stage1_rules(result)
     if 'stage3_modules_json' in edits:
         modules=json.loads(edits['stage3_modules_json'])
         if not isinstance(modules,dict) or set(modules)!=set(MODULE_FIELDS): raise ValueError('视觉模块JSON字段不完整')
@@ -66,7 +68,8 @@ def edit_rules(category, edits, *, compile_model=model_json):
                 raise ValueError('模块说明、冲突代码和变体字段本次只读；请编辑完整视觉提示词')
         result['stage3'].update(modules)
     result['human_stage1_text']=edits['stage1_text']
-    result['stage2']['candidate_threshold']=threshold
+    from selection_automation.stage2_authoring import manual_threshold
+    manual_threshold(result['stage2'],threshold)
     result['stage3']['prompt_override']=edits['stage3_text']
     version=hashlib.sha256(json.dumps({k:v for k,v in edits.items() if k not in ('commercial','draft_id','worker_count')},sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:16]
     result['stage1']['rule_version']='human-reviewed-'+version

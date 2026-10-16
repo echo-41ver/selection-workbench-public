@@ -278,8 +278,18 @@ def enrich_progress(base:Path,details:dict,*,watch_running=True,asynchronous=Fal
             if isinstance(current,dict):current.update(deepcopy(metrics))
         amazon=stages.get('amazon',{})
         union=stages.get('temu_union',{})
+        if not union.get('阻断'):
+            for flag in ('recovery_exhausted','需人工介入','自动恢复'):
+                union.pop(flag,None)
+        if union.get('recovery_exhausted') and union.get('阻断'):
+            # A cached heartbeat must not promise a restart that the task's
+            # supervisor has already stopped attempting.
+            union.update(状态='汇总自动恢复已停止，需要处理',需人工介入=True,
+                         自动恢复=False,建议动作='原始快照和已有结果已保留。请查看汇总错误；修复文件占用或权限后继续任务。')
         if not watch_running and union.get('stale') and not union.get('source_failed'):
             union.update(状态='汇总已停止，保留最近快照',stale=False,阻断=False)
+            for flag in ('recovery_exhausted','需人工介入','自动恢复'):
+                union.pop(flag,None)
         if stages.get('temu_union',{}).get('阻断'):
             result['状态']='存在阻断'
             result['阻断阶段']=list(dict.fromkeys([*result.get('阻断阶段',[]),'temu_union']))

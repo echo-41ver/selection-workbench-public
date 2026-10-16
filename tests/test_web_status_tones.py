@@ -1,4 +1,4 @@
-"""Status colours must describe real tasks rather than label manual waits as faults."""
+"""Status colours must describe real tasks and put human-action waits in red."""
 import json
 from pathlib import Path
 import sys
@@ -8,8 +8,8 @@ import web_console as web
 
 @pytest.mark.parametrize('worker,expected',[
  ({'status':'RUNNING'},'green'),
- ({'status':'WAITING_CAPTCHA','manual_action_required':True},'yellow'),
- ({'status':'STOPPED_LOGIN_REQUIRED','manual_action_required':True},'yellow'),
+ ({'status':'WAITING_CAPTCHA','manual_action_required':True},'red'),
+ ({'status':'STOPPED_LOGIN_REQUIRED','manual_action_required':True},'green'),
  ({'status':'BINDING_FAILED'},'red'),
  ({'status':'REPLACING_LOGIN_ENVIRONMENT','manual_action_required':True},'green'),
  ({'status':'RUNNING','live_snapshot':{'状态':'等待首屏商品','采集状态':'WAITING_INITIAL_PRODUCTS','阻断':True}},'green'),

@@ -37,6 +37,9 @@ def load_category(path: Path, *, compile_authored_policy: bool = False) -> dict[
         from .identity_policy import compile_policy
         value = compile_policy(value)
         value.setdefault('visual_decision', 'visible_core_binary_v1')
+    if compile_authored_policy:
+        from .stage1_authoring import compile_stage1_rules
+        value=compile_stage1_rules(value)
     from .rules import validate
     validate(value)
     from .commercial import settings
