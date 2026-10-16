@@ -564,7 +564,7 @@ def test_stale_running_state_red_and_actual_worker(tmp_path,monkeypatch):
     (base/'status.json').write_text(json.dumps({'状态':'运行中'}))
     (base/'temu/supervisors/worker-01.json').write_text(json.dumps({'status':'WAITING_HUMAN_VERIFICATION'}))
     result=console.status()
-    assert not result['active'] and result['severity']=='yellow'
+    assert not result['active'] and result['severity']=='red'
     assert '已退出' in result['phase']
     assert len(result['workers'])==1
 
@@ -936,7 +936,7 @@ def test_normal_worker_flags_not_red_and_identity_whitelisted(tmp_path,monkeypat
     monkeypatch.setattr(web.selection,'worker_snapshot',lambda *args:({}, {'状态':'等待首屏商品','阻断':True,'需人工介入':False,'采集状态':'WAITING_INITIAL_PRODUCTS'},None))
     assert console.status()['severity']=='green'
     monkeypatch.setattr(web.selection,'worker_snapshot',lambda *args:({}, {'状态':'等待验证码','需人工介入':True},None))
-    assert console.status()['severity']=='yellow'
+    assert console.status()['severity']=='red'
 
 
 def test_restore_draft_has_no_key_and_plain_failure_preserves(tmp_path,monkeypatch):
