@@ -17,10 +17,16 @@ spec.loader.exec_module(builder)
 def ps(script, tmp_path, **extra):
     path = tmp_path / 'test.ps1'
     path.write_text(script, encoding='utf-8-sig')
-    result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(path)],
-                            cwd=ROOT, env={**os.environ, **extra}, capture_output=True, timeout=30)
-    assert result.returncode == 0, result.stderr.decode('utf-8', errors='replace')
-    return result.stdout.decode('utf-8-sig').strip()
+    environment = {**os.environ, **extra}
+    modules = Path(environment['WINDIR']) / 'System32/WindowsPowerShell/v1.0/Modules'
+    environment['PSModulePath'] = str(modules) + ';' + environment.get('PSModulePath', '')
+    # Files wait only for PowerShell, even if a descendant retains its stdio.
+    stdout_path, stderr_path = tmp_path / 'stdout.log', tmp_path / 'stderr.log'
+    with stdout_path.open('wb') as stdout, stderr_path.open('wb') as stderr:
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(path)],
+                                cwd=ROOT, env=environment, stdout=stdout, stderr=stderr, timeout=120)
+    assert result.returncode == 0, stderr_path.read_text('utf-8', errors='replace')
+    return stdout_path.read_text('utf-8-sig').strip()
 
 
 def test_private_paths_and_secrets_blocked_without_printing_values():
