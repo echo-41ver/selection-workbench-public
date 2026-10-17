@@ -89,6 +89,9 @@ def test_local_consumer_retries_once_as_twelve_then_saves_or_stops(tmp_path,monk
     if always_bad:
         with pytest.raises(SystemExit,match='不合格结果'):runner.consume(args,cat,tmp_path/'blocked.json','fixture',iter(rows))
         assert json.loads((tmp_path/'local_model_error.json').read_text('utf-8'))['code']==ERROR_CODE
+        assert json.loads((tmp_path/'runtime_control.json').read_text('utf-8'))['paused'] is True
+        assert json.loads((tmp_path/'STOP').read_text('utf-8'))['reason']==ERROR_CODE
+        runner.consume(args,cat,tmp_path/'blocked.json','fixture',iter(rows))  # A supervisor cannot replay the failed group.
     else:runner.consume(args,cat,tmp_path/'blocked.json','fixture',iter(rows))
     assert requests==[[f'C{i:02}' for i in range(12)]]*2
     assert active_counts==[1,1]

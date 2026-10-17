@@ -444,6 +444,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 atomic_write(args.results.with_name('local_model_error.json'),json.dumps(
                     {'code':ERROR_CODE,'message':ERROR_MESSAGE,'time':time.time(),
                      'request_id':request_id,'response_id':response_id,'model':provider['model']},ensure_ascii=False))
+                from selection_automation.stage3_runtime import update_control
+                update_control(args.results.parent,paused=True)
+                atomic_write(args.results.with_name('STOP'),json.dumps({'time':time.time(),'reason':ERROR_CODE}))
             if received and not isinstance(exc, LocalVisualFormatError) and isinstance(exc, (ValueError, KeyError, TypeError)) and len(batch) > 1:
                 middle = len(batch)//2
                 call(batch[:middle], effort); call(batch[middle:], effort)
