@@ -5,7 +5,8 @@ def stage3_display(control, runtime, provider):
     progress = control.get('progress') or {}
     review = control.get('codex_review') or {}
     pool = review.get('pool') or {}
-    selected = provider.get('agent_ids') or []
+    agent_mode = provider.get('mode', 'local_agent') == 'local_agent'
+    selected = (provider.get('agent_ids') or []) if agent_mode else []
     blocks = [block for agent, block in (runtime.get('agent_blocks') or {}).items()
               if agent in selected]
     completed = int(progress.get('completed') or 0)
@@ -30,10 +31,11 @@ def stage3_display(control, runtime, provider):
     elif runtime.get('paused') or (provider.get('mode') == 'local_agent' and selected
                                    and all(agent in runtime.get('paused_agents', []) for agent in selected)):
         row['状态'] = '已暂停第三层派发，已发出的结果继续保存'
-    elif control.get('running') or review.get('running'):
-        row['状态'] = pool.get('phase') or review.get('phase') or control.get('phase') or '第三层分析运行中'
+    elif control.get('running') or (agent_mode and review.get('running')):
+        agent_running = agent_mode and review.get('running')
+        row['状态'] = ((pool.get('phase') or review.get('phase')) if agent_running else control.get('phase')) or '第三层分析运行中'
         row['running'] = True
-        row['并发组数'] = pool.get('running_groups')
+        row['并发组数'] = pool.get('running_groups') if agent_running else progress.get('inflight_requests', 0)
     elif total and pending == 0 and not progress.get('refreshing'):
         row['状态'] = '当前第三层候选已全部处理'
     elif progress.get('counting') or progress.get('refreshing'):

@@ -197,6 +197,7 @@ class VisualClient:
 
     def create(self, **request):
         prepared=request.pop('_prepared_data',None)
+        on_progress=request.pop('_on_progress',None)
         protocol = self.provider['protocol']
         if protocol == 'responses':
             if urlsplit(self.provider['base_url']).hostname=='api.daitu.cc':
@@ -217,10 +218,12 @@ class VisualClient:
                 # The existing local decoder still checks every fact field.
                 output_format={'type':'json_object'}
                 instructions+='\n只输出一个JSON对象，必须符合以下JSON Schema：\n'+json.dumps(format_['schema'],ensure_ascii=False,separators=(',',':'))
-            response = self.openai.chat.completions.create(model=request['model'],
+            arguments = dict(model=request['model'],
                 messages=[{'role': 'system', 'content': instructions}, {'role': 'user', 'content': blocks}],
-                response_format=output_format,
-                max_tokens=request['max_output_tokens'])
+                response_format=output_format, max_tokens=request['max_output_tokens'])
+            if self.provider.get('mode') == 'local_model':
+                return self.stream_local_chat(arguments,on_progress=on_progress)
+            response = self.openai.chat.completions.create(**arguments)
             choice = response.choices[0]
             return SimpleNamespace(id=response.id, usage=response.usage,
                 output_text=choice.message.content or '', status='incomplete' if choice.finish_reason == 'length' else 'completed',
@@ -270,6 +273,43 @@ class VisualClient:
         if len(data) >= 4_500_000:
             raise ValueError('决策 API 图片与文字请求超过 4.5 MB，请补采适当尺寸图片')
         return data
+
+    def stream_local_chat(self, arguments, on_progress=None):
+        """Read an active local decoder incrementally; never retry its POST.
+
+        Read timeouts still bound a silent service. Receiving tokens keeps a
+        long CPU inference alive, and only an explicit terminal chunk permits
+        the existing strict decoder to inspect the assembled JSON.
+        """
+        parts = []
+        size = 0
+        response_id = None
+        usage = None
+        finish = None
+        with self.openai.chat.completions.create(**arguments, stream=True,
+                                               stream_options={'include_usage': True}) as stream:
+            for chunk in stream:
+                response_id = getattr(chunk, 'id', None) or response_id
+                usage = getattr(chunk, 'usage', None) or usage
+                for choice in chunk.choices:
+                    if choice.index != 0:
+                        continue
+                    value = getattr(choice.delta, 'content', None)
+                    if isinstance(value, str) and value:
+                        size += len(value)
+                        if size > 1_500_000:
+                            raise ValueError('本地模型输出超过大小上限，未导入部分结果')
+                        parts.append(value)
+                        if on_progress and len(parts) == 1:
+                            on_progress(status='receiving',received_chars=size)
+                    finish = choice.finish_reason or finish
+        if finish not in ('stop', 'length'):
+            raise ValueError('本地模型响应中断，未收到完成标记；部分内容未导入')
+        if on_progress:
+            on_progress(status='incomplete' if finish=='length' else 'completed',received_chars=size)
+        return SimpleNamespace(id=response_id, usage=usage, output_text=''.join(parts),
+            status='incomplete' if finish == 'length' else 'completed',
+            incomplete_details={'reason':'max_output_tokens'} if finish == 'length' else None)
 
     def stream_responses(self,request):
         """Reuse the task form's completed-only SSE parser and request metadata."""

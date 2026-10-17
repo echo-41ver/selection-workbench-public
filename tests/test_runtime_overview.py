@@ -32,3 +32,21 @@ def test_user_pause_is_distinct_from_human_block():
 def test_unknown_billing_is_held_and_never_presented_as_ready():
     row=stage3_display({'progress':{'billing_unknown_pairs':12}}, {}, {})
     assert row['需人工介入'] and '不会自动重发' in row['建议动作']
+
+
+def test_local_model_and_api_ignore_stopped_agent_state_and_show_actual_inflight_groups():
+    control={'running':True,'phase':'分析中','progress':{'inflight_requests':2},
+             'codex_review':{'running':False,'phase':'旧复核已暂停',
+                             'pool':{'running':False,'phase':'已停止，结果保留','running_groups':0}}}
+    for mode in ('local_model','openai_compatible'):
+        row=stage3_display(control,{}, {'mode':mode})
+        assert row['状态']=='分析中' and row['running'] and row['并发组数']==2
+        control['codex_review']['running']=True
+        assert stage3_display(control,{}, {'mode':mode})['状态']=='分析中'
+
+
+def test_unselected_agent_block_does_not_override_local_model():
+    row=stage3_display({'running':True,'phase':'分析中'},
+        {'agent_blocks':{'doubao':{'message':'请完成验证码'}}},
+        {'mode':'local_model','agent_ids':['doubao']})
+    assert row['状态']=='分析中' and not row.get('阻断')

@@ -331,7 +331,7 @@ function runtimeUnion(row={}){
  return {...row,状态:'汇总自动恢复已停止，需要处理',需人工介入:true,建议动作:'原始快照和已有结果已保留。请查看汇总错误；修复文件占用或权限后继续任务。'};
 }
 function runtimeStage3(data={}){
- const c=data.stage3_control||{},p=c.progress||{},r=data.stage3_runtime||{},review=c.codex_review||{},provider=data.stage3_provider||{},selected=provider.agent_ids||[];
+ const c=data.stage3_control||{},p=c.progress||{},r=data.stage3_runtime||{},review=c.codex_review||{},provider=data.stage3_provider||{},agentMode=(provider.mode||'local_agent')==='local_agent',selected=agentMode?(provider.agent_ids||[]):[];
  const blocks=Object.entries(r.agent_blocks||{}).filter(([id])=>selected.includes(id));
  const completed=p.api_completed!=null?Number(p.completed||0):Number(p.completed||0)+Number(p.codex_completed||0);
  let row={...(data.details?.['阶段']?.stage3||{}),completed,total:p.total,remaining:p.pending_after_codex??p.pending};
@@ -341,7 +341,7 @@ function runtimeStage3(data={}){
  else if(p.billing_hold_fail_closed||p.billing_unknown_pairs)Object.assign(row,{状态:'发送或费用记录待核对',需人工介入:true,阻断:true,建议动作:'请核对原会话和费用记录；状态不明的请求不会自动重发。'});
  else if(r.switch_pending)row['状态']='正在保存断点并切换方案';
  else if(r.paused||(provider.mode==='local_agent'&&selected.length&&selected.every(id=>(r.paused_agents||[]).includes(id))))row['状态']='已暂停派发，已发出的结果继续保存';
- else if(c.running||review.running){row['状态']=review.pool?.phase||review.phase||'第三层分析运行中';row.running=true;}
+ else if(c.running||(agentMode&&review.running)){row['状态']=(agentMode&&review.running?(review.pool?.phase||review.phase):c.phase)||'第三层分析运行中';row.running=true;row['并发组数']=agentMode&&review.running?(review.pool?.running_groups||0):(p.inflight_requests||0);}
  else if(p.total&&row.remaining===0&&!p.refreshing)row['状态']='当前候选已全部处理';
  else row['状态']=p.counting||p.refreshing?'正在核对第三层进度':c.phase||'等待点击启动第三层分析';
  return row;
@@ -441,7 +441,7 @@ function stage3Button(data){
  if($('stage3-current')){const provider=data?.stage3_provider||{},pool=state.codex_review?.pool||{},names={liquid_d1:'D1 API',multimodal_api:'外部 API',local_model:'本地模型',local_agent:'本机 Agent'};const engine=provider.mode==='local_agent'?(provider.agent_ids||[]).map(id=>{const agent=(pool.agents||[]).find(a=>a.id===id);return (agent?.name||id)+' / '+(provider.agent_models?.[id]||'当前默认模型');}).join('、'):provider.model||'';$('stage3-current').textContent=data?.category_key?'当前方案：'+(names[provider.mode]||'等待读取')+' · '+engine+' · '+(data?.stage3_concurrency?.workers||pool.workers||provider.workers||'—')+' 路 · '+(!operationalFresh?'运行状态待确认':provider.mode==='local_agent'?(active?Number(pool.running_groups||0)+' 组处理中':'未派发新组'):active?'请求处理中':'未派发请求')+' · 每组最多 12 个 TEMU':'';}
 
  $('stage3-phase').textContent=refreshing?'最近核验快照；新增输入核对中，当前待处理尚未确认':p.counting?(p.message||state.phase||'正在核对已处理候选，请等待进度读取完成'):state.phase||'等待手动启动';
- if(state.codex_review?.running)$('stage3-phase').textContent=state.codex_review.pool?.phase||state.codex_review.phase||'本机 Agent 正在分析';
+ if(data?.stage3_provider?.mode==='local_agent'&&state.codex_review?.running)$('stage3-phase').textContent=state.codex_review.pool?.phase||state.codex_review.phase||'本机 Agent 正在分析';
  if(runtime.switch_pending)$('stage3-phase').textContent='正在保存已发送的结果，随后自动切换；已完成商品不重跑。';else if(runtime.switch_error)$('stage3-phase').textContent=runtime.switch_error;else if(runtime.paused)$('stage3-phase').textContent='已暂停派发新组；已发送结果继续保存。可更改上方方案后点击“保存断点并切换方案”。';
  const blockedAgentNotices=Object.entries(runtime.agent_blocks||{}).filter(([id])=>(data?.stage3_provider?.agent_ids||[]).includes(id)).map(([,b])=>b.message||'Agent 需要人工处理');
  if(data?.stage3_provider?.mode==='local_agent'&&blockedAgentNotices.length)$('stage3-phase').textContent=blockedAgentNotices.join('；');

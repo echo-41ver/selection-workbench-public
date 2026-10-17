@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 import json
+from contextlib import nullcontext
 import pytest
 import openai
 
@@ -38,6 +39,8 @@ def test_invalid_request_stops_before_consuming_next_candidate(tmp_path,monkeypa
         def __init__(self,**kw):pass
         def __enter__(self):return self
         def __exit__(self,*args):pass
+        def stream(self,*args,**kwargs):return nullcontext()
+        def close(self):pass
     class Client:
         def __init__(self,**kw):self.responses=self
         def __enter__(self):return self

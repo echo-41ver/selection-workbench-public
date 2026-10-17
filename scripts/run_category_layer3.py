@@ -347,7 +347,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
             response = client.responses.create(model=stage.get('model', 'deepseek-flash'), instructions=prompt,
                 input=[{'role': 'user', 'content': content}], reasoning={'effort': effort},
                 text={'format': {'type': 'json_schema', 'name': 'category_facts', 'strict': True, 'schema': schema}},
-                max_output_tokens=budget,_prepared_data=prepared_data)
+                max_output_tokens=budget,_prepared_data=prepared_data,
+                _on_progress=lambda **fields:append(args.results.with_name('local_stream_progress.jsonl'),
+                    {'request_id':request_id,'time':time.time(),**fields}))
             usage = response.usage.model_dump() if response.usage else {}
             received = True
             response_id = response.id

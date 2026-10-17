@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +54,8 @@ def test_two_real_twelve_candidate_payloads_run_concurrently(tmp_path,monkeypatc
     monkeypatch.setattr(runner,'ThreadPoolExecutor',create_executor)
     class Transport:
         def __init__(self,**kwargs):connections.append(kwargs['limits'].max_connections)
+        def stream(self,*args,**kwargs):return nullcontext()
+        def close(self):pass
         def __enter__(self):return self
         def __exit__(self,*args):pass
     class Client:

@@ -81,3 +81,19 @@ test('page scripts parse after moving controls without duplicate IDs',()=>{
  const ids=Array.from(html.matchAll(/\bid="([^"]+)"/g),match=>match[1]);
  assert.equal(ids.length,new Set(ids).size);
 });
+
+test('local model and API overview retain their active controller instead of old Agent state',()=>{
+ const {context}=setup();context.data={stage3_control:{running:true,phase:'分析中',progress:{inflight_requests:2},codex_review:{running:true,pool:{phase:'已停止，结果保留',running_groups:0}}},stage3_runtime:{agent_blocks:{doubao:{message:'请完成验证码'}}}};
+ for(const mode of ['local_model','multimodal_api','liquid_d1']){
+  context.data.stage3_provider={mode,agent_ids:['doubao']};
+  assert.equal(vm.runInContext('runtimeStage3(data)["状态"]',context),'分析中');
+  assert.equal(vm.runInContext('runtimeStage3(data)["并发组数"]',context),2);
+  assert.equal(vm.runInContext('attentionItems(data).length',context),0);
+ }
+});
+
+test('stopped local controller ignores another running Agent review',()=>{
+ const {context}=setup();context.data={stage3_provider:{mode:'local_model'},stage3_control:{running:false,phase:'分析暂停，请查看错误记录',codex_review:{running:true,pool:{phase:'旧Agent运行中'}}}};
+ assert.equal(vm.runInContext('runtimeStage3(data)["状态"]',context),'分析暂停，请查看错误记录');
+ assert.notEqual(vm.runInContext('runtimeStage3(data).running',context),true);
+});
