@@ -28,6 +28,9 @@ def stage3_display(control, runtime, provider):
                    建议动作='已有结果继续保留，状态不明的请求不会自动重发。请核对原会话和费用记录。')
     elif runtime.get('switch_pending'):
         row['状态'] = '正在保存断点并切换分析方案'
+    elif not agent_mode and control.get('error') and not control.get('running'):
+        row.update(状态=control.get('phase') or '第三层分析异常，已暂停',阻断=True,需人工介入=True,
+                   建议动作='原返回与已完成结果已保留；请检查错误提示，更换可用模型或修复服务后继续。')
     elif runtime.get('paused') or (provider.get('mode') == 'local_agent' and selected
                                    and all(agent in runtime.get('paused_agents', []) for agent in selected)):
         row['状态'] = '已暂停第三层派发，已发出的结果继续保存'

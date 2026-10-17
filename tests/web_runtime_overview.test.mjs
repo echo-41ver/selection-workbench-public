@@ -97,3 +97,14 @@ test('stopped local controller ignores another running Agent review',()=>{
  assert.equal(vm.runInContext('runtimeStage3(data)["状态"]',context),'分析暂停，请查看错误记录');
  assert.notEqual(vm.runInContext('runtimeStage3(data).running',context),true);
 });
+
+test('a failed local controller is red instead of idle; a resumed controller clears the alert',()=>{
+ const {context,nodes}=setup();context.data={stage3_provider:{mode:'local_model'},stage3_control:{running:false,error:true,phase:'本地模型连续返回不合格结果，已暂停'}};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ assert.equal(nodes.get('human-attention').hidden,false);
+ assert.match(nodes.get('run-overview').children[5].className,/danger/);
+ assert.match(nodes.get('human-attention').children[1].textContent,/不合格/);
+ context.data.stage3_control={running:true,error:false,phase:'分析中'};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ assert.equal(nodes.get('human-attention').hidden,true);
+});

@@ -327,6 +327,7 @@ class Console:
         review=live['review']
         # Validated pair totals retain their independent result snapshot.
         control.update(running=live['running'],enabled=live['enabled'],
+            error=bool(live['controller'].get('error')),error_code=live['controller'].get('error_code'),
             can_stop=live['enabled'] or live['running'] or bool(review.get('running')),
             codex_review={**old_review,**{k:review[k] for k in ('available','running','phase','pid','created') if k in review},
                           'pool':review.get('pool',{})})
@@ -1863,7 +1864,8 @@ class Console:
         provider=__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)
         stage3_control={'enabled':stage3_enabled,'can_start':stage3_ready,'running':stage3_running,
                        'can_stop':stage3_enabled or stage3_running or bool(codex_control.get('running')),
-                       'progress':stage3_progress,'phase':stage3_phase,'codex_review':codex_control}
+                       'progress':stage3_progress,'phase':stage3_phase,'codex_review':codex_control,
+                       'error':bool(stage3_state.get('error')),'error_code':stage3_state.get('error_code')}
         if key and category.get('execution_mode')!='collection':
             live_stage3=stage3_display(stage3_control,runtime_control,provider)
             details.setdefault('阶段',{})['stage3']=live_stage3

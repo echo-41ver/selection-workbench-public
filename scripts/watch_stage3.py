@@ -16,6 +16,19 @@ from selection_automation.stage3_progress import candidate_path, snapshot
 from watch_stage3_excel import ensure_publisher
 
 
+def failure_state(folder, launched_at, provider):
+    result={'phase':'分析暂停，请查看错误记录','error':True}
+    if provider.get('mode')!='local_model':return result
+    try:
+        row=json.loads((folder/'local_model_error.json').read_text('utf-8'))
+        from selection_automation.local_visual_wire import ERROR_CODE, ERROR_MESSAGE
+        if (row.get('code')==ERROR_CODE and row.get('model')==provider.get('model')
+                and type(row.get('time')) in (int,float) and row['time']>=launched_at):
+            return {'phase':ERROR_MESSAGE,'error':True,'error_code':ERROR_CODE}
+    except (OSError,ValueError,AttributeError):pass
+    return result
+
+
 def watch(category_path):
     import psutil
     category=json.loads(category_path.read_text(encoding='utf-8'))
@@ -39,7 +52,8 @@ def watch(category_path):
                     state('已暂停派发，结果和断点已保存');time.sleep(2);continue
                 category=json.loads(category_path.read_text(encoding='utf-8'))
                 from selection_automation.stage3_provider import from_category
-                if from_category(category)['mode']=='local_agent':
+                provider=from_category(category)
+                if provider['mode']=='local_agent':
                     state('已切换至本机 Agent，断点保留');return
                 progress=snapshot(base,category,history=False)
                 if progress.get('billing_hold_fail_closed'):
@@ -50,6 +64,7 @@ def watch(category_path):
                     state('当前候选已处理，等待新增候选' if progress['total'] else '等待前两层产生候选')
                     time.sleep(2); continue
                 state('分析中')
+                launched_at=time.time()
                 child=subprocess.Popen([sys.executable,str(ROOT/'scripts/run_category_layer3.py'),
                     '--category',str(category_path),'--candidates',str(candidate_path(base)),
                     '--results',str(folder/'results.jsonl'),'--independent'],cwd=ROOT)
@@ -60,7 +75,8 @@ def watch(category_path):
                     except subprocess.TimeoutExpired:
                         maintain_publisher()
                 if returncode:
-                    state('分析暂停，请查看错误记录',error=True); return
+                    failure=failure_state(folder,launched_at,provider)
+                    state(failure.pop('phase'),**failure); return
                 maintain_publisher()
                 time.sleep(1)
             state('已停止，结果和断点已保留')

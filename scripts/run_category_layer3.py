@@ -24,6 +24,7 @@ from selection_automation.process_lock import ProcessLock
 from selection_automation.rules import score
 from selection_automation.stage3_admission import admitted, concurrency
 from selection_automation.visual_text_evidence import evidence_block
+from selection_automation.local_visual_wire import LocalVisualFormatError
 from selection_automation.stage3_billing import billing_hold, retry_authorizations, authorized_retry_attempt
 from selection_workflow.bath_towel_deepseek import _data_url
 from selection_automation.visual_batch import data_url, grid_data_url, amazon_key
@@ -272,6 +273,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
     fatal_stop = threading.Event()
     incomplete_stop = threading.Event()
     local_service_stop = threading.Event()
+    local_format_stop = threading.Event()
     requests = 0
     sent_requests = 0
     ledger = args.results.with_name('requests.jsonl')
@@ -283,7 +285,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
             f.flush()
             os.fsync(f.fileno())
 
-    def call(batch, effort):
+    def call(batch, effort, format_retry=0):
         nonlocal requests, sent_requests
         if stop.is_set() or not authorized():
             stop.set()
@@ -328,6 +330,11 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     {'type':'input_image','image_url':grid}]
             from selection_automation.vision import GROUP_WIRE_VERSION
             wire_version = 'product-choice-v2' if provider['protocol']=='decisions' else GROUP_WIRE_VERSION if 'amazon' in schema.get('properties', {}) else 'independent-candidates-v1'
+            local_wire = provider['mode']=='local_model' and provider['protocol'] in ('chat_completions','responses')
+            if local_wire:
+                from selection_automation.local_visual_wire import prepare, VERSION
+                prompt, schema = prepare(prompt, schema, ids)
+                wire_version = VERSION
             budget = output_token_budget(stage, len(batch))
             with lock:
                 if stop.is_set() or not authorized() or (args.max_requests and requests >= args.max_requests):
@@ -359,11 +366,18 @@ def consume(args, cat, fatal_file, key_identity, pending):
             append(ledger, {'request_id': request_id, 'time': time.time(), 'pairs': len(batch), 'usage': usage, 'response_id': response.id, 'status': 'received', 'effort': effort, 'max_output_tokens': budget, 'wire_version': wire_version, 'response_status': response_status, 'incomplete_reason': incomplete_reason if response_status == 'incomplete' else None})
             if response_status == 'incomplete':
                 raise IncompleteVisualResponse(incomplete_reason)
-            parsed, format_repairs = parse_visual_response_compatible(response.output_text, allow_preamble=True)
-            facts = (parsed['decision_facts_by_id'] if len(batch)>1 else {ids[0]:parsed['decision_facts']}) if provider['protocol']=='decisions' else decode(cat, parsed, ids)
+            try:
+                parsed, format_repairs = parse_visual_response_compatible(response.output_text, allow_preamble=True)
+                if local_wire:
+                    from selection_automation.local_visual_wire import unpack
+                    parsed = unpack(parsed, ids)
+                facts = (parsed['decision_facts_by_id'] if len(batch)>1 else {ids[0]:parsed['decision_facts']}) if provider['protocol']=='decisions' else decode(cat, parsed, ids)
+            except (ValueError, KeyError, TypeError) as error:
+                if local_wire:raise LocalVisualFormatError(str(error)) from error
+                raise
             for i, (identity, row) in enumerate(zip(ids, batch)):
                 scored = score(cat, facts[identity])
-                if effort == 'low' and scored['hard_conflicts'] and facts[identity].get('overall_confidence',1) < .65:
+                if provider['mode']!='local_model' and effort == 'low' and scored['hard_conflicts'] and facts[identity].get('overall_confidence',1) < .65:
                     call([row], 'high')
                     continue
                 append(args.results, {**{k: row[k] for k in ('asin','goods_id','pair_revision','vision_revision_key','attempt')},
@@ -418,7 +432,19 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 fatal_stop.set()
                 with lock:
                     fatal_file.write_text(json.dumps({'status':status,'key_identity':key_identity,'provider':provider_identity,'provider_error':provider_error},ensure_ascii=False),encoding='utf-8')
-            if received and isinstance(exc, (ValueError, KeyError, TypeError)) and len(batch) > 1:
+            if isinstance(exc, LocalVisualFormatError) and received:
+                # One whole-group retry at most. Settle the parent first so it
+                # cannot masquerade as another concurrent request.
+                if format_retry == 0:
+                    settle_intent()
+                    return call(batch, effort, format_retry=1)
+                from selection_automation.local_visual_wire import ERROR_CODE, ERROR_MESSAGE
+                local_format_stop.set();stop.set()
+                reason = ERROR_CODE + ': ' + str(exc)
+                atomic_write(args.results.with_name('local_model_error.json'),json.dumps(
+                    {'code':ERROR_CODE,'message':ERROR_MESSAGE,'time':time.time(),
+                     'request_id':request_id,'response_id':response_id,'model':provider['model']},ensure_ascii=False))
+            if received and not isinstance(exc, LocalVisualFormatError) and isinstance(exc, (ValueError, KeyError, TypeError)) and len(batch) > 1:
                 middle = len(batch)//2
                 call(batch[:middle], effort); call(batch[middle:], effort)
                 settle_intent()
@@ -497,6 +523,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
         raise SystemExit('未结算视觉请求：请求被拒绝或传输结果不明，费用待核对，已阻止付费重发；请按交付说明核对供应商用量，部分结果仍可导出')
     if incomplete_stop.is_set():
         raise SystemExit('模型输出被截断，已保存请求编号与用量并暂停；可能已计费，不自动重复请求。请调整输出预算后手动继续')
+    if local_format_stop.is_set():
+        from selection_automation.local_visual_wire import ERROR_MESSAGE
+        raise SystemExit(ERROR_MESSAGE)
     if local_service_stop.is_set():
         raise SystemExit('本地模型服务未返回有效响应，已暂停；没有远程费用，请启动或修复本地服务后手动继续')
     print(json.dumps({'API请求数': sent_requests, '暂停': stop.is_set(), '费用待核对商品对':len(after['pairs'])}, ensure_ascii=False))

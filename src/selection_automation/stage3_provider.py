@@ -1,6 +1,7 @@
 """Explicit, key-free third-layer configuration and native decision API support."""
 from __future__ import annotations
 
+import time
 import json
 import math
 import os
@@ -222,6 +223,7 @@ class VisualClient:
                 messages=[{'role': 'system', 'content': instructions}, {'role': 'user', 'content': blocks}],
                 response_format=output_format, max_tokens=request['max_output_tokens'])
             if self.provider.get('mode') == 'local_model':
+                arguments['temperature']=0
                 return self.stream_local_chat(arguments,on_progress=on_progress)
             response = self.openai.chat.completions.create(**arguments)
             choice = response.choices[0]
@@ -286,6 +288,7 @@ class VisualClient:
         response_id = None
         usage = None
         finish = None
+        last_progress = 0.0
         with self.openai.chat.completions.create(**arguments, stream=True,
                                                stream_options={'include_usage': True}) as stream:
             for chunk in stream:
@@ -300,8 +303,11 @@ class VisualClient:
                         if size > 1_500_000:
                             raise ValueError('本地模型输出超过大小上限，未导入部分结果')
                         parts.append(value)
-                        if on_progress and len(parts) == 1:
-                            on_progress(status='receiving',received_chars=size)
+                        if on_progress:
+                            now=time.monotonic()
+                            if len(parts)==1 or now-last_progress>=15:
+                                on_progress(status='receiving',received_chars=size)
+                                last_progress=now
                     finish = choice.finish_reason or finish
         if finish not in ('stop', 'length'):
             raise ValueError('本地模型响应中断，未收到完成标记；部分内容未导入')

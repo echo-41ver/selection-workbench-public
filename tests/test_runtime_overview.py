@@ -50,3 +50,11 @@ def test_unselected_agent_block_does_not_override_local_model():
         {'agent_blocks':{'doubao':{'message':'请完成验证码'}}},
         {'mode':'local_model','agent_ids':['doubao']})
     assert row['状态']=='分析中' and not row.get('阻断')
+
+
+def test_current_controller_failure_is_red_and_running_recovery_clears_it():
+    control={'running':False,'error':True,'phase':'本地模型连续返回不合格结果，已暂停'}
+    row=stage3_display(control,{}, {'mode':'local_model'})
+    assert row['需人工介入'] and row['阻断'] and '不合格' in row['状态']
+    control.update(running=True,phase='分析中')
+    assert not stage3_display(control,{}, {'mode':'local_model'}).get('需人工介入')

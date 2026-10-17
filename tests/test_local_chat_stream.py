@@ -96,3 +96,13 @@ def test_real_sdk_accepts_a_local_stream_whose_total_duration_exceeds_read_timeo
             assert len(calls)==1 and calls[0]['stream'] is True
     finally:
         server.shutdown();server.server_close();worker.join()
+
+
+def test_long_stream_emits_count_heartbeats_without_recording_model_text(monkeypatch):
+    from selection_automation import stage3_provider
+    times=iter([0,16,17]);monkeypatch.setattr(stage3_provider.time,'monotonic',lambda:next(times))
+    instance,stream,calls=client([chunk('{'),chunk('"a":'),chunk('1}'),chunk(finish='stop')])
+    progress=[];response=instance.stream_local_chat({},lambda **row:progress.append(row))
+    assert response.output_text=='{"a":1}'
+    assert [r['received_chars'] for r in progress]==[1,5,7]
+    assert [r['status'] for r in progress]==['receiving','receiving','completed']
