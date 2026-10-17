@@ -330,6 +330,18 @@ function runtimeUnion(row={}){
  if(row.automatic_recovery||!row['阻断']||!row.recovery_exhausted)return row;
  return {...row,状态:'汇总自动恢复已停止，需要处理',需人工介入:true,建议动作:'原始快照和已有结果已保留。请查看汇总错误；修复文件占用或权限后继续任务。'};
 }
+function stage3Heartbeat(data={}){
+ if(data.stage3_provider?.mode==='local_model')return {label:data.stage3_activity?.status==='waiting'?'模型请求开始':'本地模型响应更新',time:data.stage3_activity?.updated_at};
+ if(data.stage3_provider?.mode&&data.stage3_provider.mode!=='local_agent')return {label:'第三层状态采样',time:data.live_sample?.sampled_at};
+ return {label:'队列心跳',time:data.stage3_control?.codex_review?.pool?.updated_at};
+}
+function stage3ActivityText(data={},now=Date.now()/1000){
+ if(data.stage3_provider?.mode!=='local_model'||!data.stage3_control?.running)return '';
+ const a=data.stage3_activity;if(!a)return '';
+ if(a.status==='waiting')return '等待本地模型首段响应（'+Math.max(0,Math.floor(now-a.updated_at))+' 秒）';
+ if(a.status==='receiving')return '本地模型已返回 '+Number(a.received_chars||0).toLocaleString()+' 个字符，整组结束后校验入库';
+ return '';
+}
 function runtimeStage3(data={}){
  const c=data.stage3_control||{},p=c.progress||{},r=data.stage3_runtime||{},review=c.codex_review||{},provider=data.stage3_provider||{},agentMode=(provider.mode||'local_agent')==='local_agent',selected=agentMode?(provider.agent_ids||[]):[];
  const blocks=Object.entries(r.agent_blocks||{}).filter(([id])=>selected.includes(id));
@@ -342,7 +354,7 @@ function runtimeStage3(data={}){
  else if(r.switch_pending)row['状态']='正在保存断点并切换方案';
  else if(!agentMode&&c.error&&!c.running)Object.assign(row,{状态:c.phase||'第三层分析异常，已暂停',需人工介入:true,阻断:true,建议动作:'原返回与已完成结果已保留；请检查错误提示，更换可用模型或修复服务后继续。'});
  else if(r.paused||(provider.mode==='local_agent'&&selected.length&&selected.every(id=>(r.paused_agents||[]).includes(id))))row['状态']='已暂停派发，已发出的结果继续保存';
- else if(c.running||(agentMode&&review.running)){row['状态']=(agentMode&&review.running?(review.pool?.phase||review.phase):c.phase)||'第三层分析运行中';row.running=true;row['并发组数']=agentMode&&review.running?(review.pool?.running_groups||0):(p.inflight_requests||0);}
+ else if(c.running||(agentMode&&review.running)){row['状态']=(agentMode&&review.running?(review.pool?.phase||review.phase):c.phase)||'第三层分析运行中';const activity=stage3ActivityText(data);if(activity)row['状态']='分析中 · '+activity;row.running=true;row['并发组数']=agentMode&&review.running?(review.pool?.running_groups||0):(p.inflight_requests||0);}
  else if(p.total&&row.remaining===0&&!p.refreshing)row['状态']='当前候选已全部处理';
  else row['状态']=p.counting||p.refreshing?'正在核对第三层进度':c.phase||'等待点击启动第三层分析';
  return row;
@@ -446,6 +458,7 @@ function stage3Button(data){
  if(runtime.switch_pending)$('stage3-phase').textContent='正在保存已发送的结果，随后自动切换；已完成商品不重跑。';else if(runtime.switch_error)$('stage3-phase').textContent=runtime.switch_error;else if(runtime.paused)$('stage3-phase').textContent='已暂停派发新组；已发送结果继续保存。可更改上方方案后点击“保存断点并切换方案”。';
  const blockedAgentNotices=Object.entries(runtime.agent_blocks||{}).filter(([id])=>(data?.stage3_provider?.agent_ids||[]).includes(id)).map(([,b])=>b.message||'Agent 需要人工处理');
  if(data?.stage3_provider?.mode==='local_agent'&&blockedAgentNotices.length)$('stage3-phase').textContent=blockedAgentNotices.join('；');
+ const activityText=stage3ActivityText(data);if(activityText)$('stage3-phase').textContent+=' · '+activityText;
  const reviewed=p.api_completed!=null?Number(p.completed||0):Number(p.completed||0)+Number(p.codex_completed||0),remaining=p.pending_after_codex??p.pending??0;
  $('stage3-count').textContent=`已进入第三层 ${(p.total||0).toLocaleString()} 对 · 已处理 ${reviewed.toLocaleString()} 对 · ${refreshing?'快照待处理':'待处理'} ${Number(remaining).toLocaleString()} 对${p.failed?` · 失败 ${p.failed} 对`:''}${p.billing_unknown_pairs?` · ${p.billing_unknown_pairs.toLocaleString()} 对费用待核对，继续时不会重发`:''}${p.billing_hold_fail_closed?' · 费用记录无法对应，已暂停付费请求':''}`;
  if(p.counting&&!Number.isInteger(p.total)){$('stage3-count').textContent=(p.message||'正在核对候选')+'；完整候选、已处理和待处理数量核对后显示';}
@@ -688,7 +701,7 @@ let polling=false;async function poll(){if(polling)return;polling=true;if(typeof
  const warning=$('connection-warning');if(warning){warning.hidden=statusFresh&&(!data.live_sample||liveFresh);warning.textContent=!statusFresh?'显示 '+Math.round(data.status_sample?.age_seconds||0)+' 秒前的完整统计，正在后台更新；'+(liveFresh?'第三层运行控制已单独同步。':'当前运行状态待确认，请勿重复启动。'):'第三层运行状态正在重新读取；下方运行组数和人工提醒暂为上次记录，请勿重复启动。';}
  if(!statusFresh){updateControls();$('connection').textContent='本地服务已连接，状态汇总延迟';$('overview').textContent='显示 '+Math.round(data.status_sample?.age_seconds||0)+' 秒前的统计，正在后台更新；'+(liveFresh?'第三层运行状态已同步。':'当前进度待确认。');$('overview').className='notice warning';}
  if(data.status_sample?.sampled_at)$('updated').textContent='页面同步：'+new Date().toLocaleTimeString('zh-CN')+' · 自动刷新中';
- const time=value=>value?new Date(value*1000).toLocaleTimeString('zh-CN'):'等待读取';if($('sync-detail'))$('sync-detail').textContent='运行状态：'+time(data.live_sample?.sampled_at||data.status_sample?.sampled_at)+' · 队列心跳：'+time(data.stage3_control?.codex_review?.pool?.updated_at)+' · 结果核验：'+time(data.stage3_control?.progress?.updated_at)+'。已处理数量以保存并核验的结果为准。';
+ const time=value=>value?new Date(value*1000).toLocaleTimeString('zh-CN'):'等待读取';if($('sync-detail'))$('sync-detail').textContent='运行状态：'+time(data.live_sample?.sampled_at||data.status_sample?.sampled_at)+' · '+stage3Heartbeat(data).label+'：'+time(stage3Heartbeat(data).time)+' · 结果核验：'+time(data.stage3_control?.progress?.updated_at)+'。已处理数量以保存并核验的结果为准。';
  }catch(error){statusFresh=false;if(typeof lastStatus!=='undefined'&&lastStatus)lastStatus.live_loading=true;updateControls();$('connection').textContent=received?'本地服务已连接，页面显示异常':error.name==='AbortError'?'本地服务连接超时，正在自动重试':'本地服务未连接';$('overview').textContent=received?'已收到任务状态，但页面显示失败。后台任务可能仍在运行，请勿重复启动。':'无法取得最新状态，将自动重试；后台任务和断点不会因此停止。当前进度未知。';$('overview').className='notice warning';if($('connection-warning')){$('connection-warning').hidden=false;$('connection-warning').textContent='连接中断，正在自动重连。下方保留的是上次记录，不代表当前状态；请勿重复启动任务。';}console.error('工作台状态刷新失败',error);}finally{clearTimeout(timeout);polling=false;}}
 function showPage(page){
  if(!['create','monitor','results','history'].includes(page))page='create';

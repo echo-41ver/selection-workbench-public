@@ -351,6 +351,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
             with lock:
                 sent_requests += 1
                 sent = True
+            if provider['mode']=='local_model' and provider['protocol']=='chat_completions':
+                append(args.results.with_name('local_stream_progress.jsonl'),
+                    {'request_id':request_id,'time':time.time(),'status':'waiting','received_chars':0})
             response = client.responses.create(model=stage.get('model', 'deepseek-flash'), instructions=prompt,
                 input=[{'role': 'user', 'content': content}], reasoning={'effort': effort},
                 text={'format': {'type': 'json_schema', 'name': 'category_facts', 'strict': True, 'schema': schema}},

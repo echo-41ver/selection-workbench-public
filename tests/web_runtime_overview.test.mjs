@@ -108,3 +108,19 @@ test('a failed local controller is red instead of idle; a resumed controller cle
  vm.runInContext('renderRuntimeOverview(data)',context);
  assert.equal(nodes.get('human-attention').hidden,true);
 });
+
+test('local activity shows real characters and uses its own heartbeat instead of an old Agent',()=>{
+ const {context}=setup();context.data={stage3_provider:{mode:'local_model'},stage3_control:{running:true,phase:'分析中',codex_review:{pool:{updated_at:1}}},stage3_activity:{status:'receiving',received_chars:1234,updated_at:100}};
+ assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),100);
+ assert.match(vm.runInContext('runtimeStage3(data)["状态"]',context),/1,234.*整组/);
+ context.data.stage3_activity={status:'waiting',updated_at:110};
+ assert.equal(vm.runInContext('stage3Heartbeat(data).label',context),'模型请求开始');
+ assert.match(vm.runInContext('stage3ActivityText(data,130)',context),/20 秒/);
+ context.data.stage3_control.running=false;
+ assert.equal(vm.runInContext('stage3ActivityText(data)',context),'');
+ context.data.stage3_provider.mode='local_agent';
+ assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),1);
+ context.data.stage3_provider.mode='liquid_d1';context.data.live_sample={sampled_at:77};
+ assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),77);
+ assert.match(vm.runInContext('stage3Heartbeat(data).label',context),/采样/);
+});

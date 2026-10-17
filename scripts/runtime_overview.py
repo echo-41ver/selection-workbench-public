@@ -46,3 +46,26 @@ def stage3_display(control, runtime, provider):
     else:
         row['状态'] = '等待点击启动第三层分析' if not control.get('enabled') else control.get('phase') or '等待第三层调度'
     return row
+
+
+def local_stream_activity(folder, since=0, now=None):
+    """Read count-only receipts, bounded independently of the result journal."""
+    import json,math,time
+    from pathlib import Path
+    now=time.time() if now is None else now
+    try:
+        with (Path(folder)/'local_stream_progress.jsonl').open('rb') as stream:
+            stream.seek(0,2);size=stream.tell();stream.seek(max(0,size-8192))
+            lines=stream.read(8192).decode('utf-8',errors='replace').splitlines()
+    except OSError:return {}
+    for line in reversed(lines):
+        try:
+            row=json.loads(line);at=row['time'];chars=row['received_chars']
+            if (type(at) not in (int,float) or not math.isfinite(at) or not since<=at<=now+5
+                    or type(chars) is not int or not 0<=chars<=1500000
+                    or row['status'] not in ('waiting','receiving','completed','incomplete')
+                    or not isinstance(row['request_id'],str) or len(row['request_id'])>128):continue
+            return {'request_id':row['request_id'],'status':row['status'],
+                    'received_chars':chars,'updated_at':at}
+        except (ValueError,KeyError,TypeError):continue
+    return {}

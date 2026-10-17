@@ -332,7 +332,10 @@ class Console:
             codex_review={**old_review,**{k:review[k] for k in ('available','running','phase','pid','created') if k in review},
                           'pool':review.get('pool',{})})
         control['phase']=live['controller'].get('phase') or '等待手动启动'
-        from runtime_overview import stage3_display
+        from runtime_overview import stage3_display,local_stream_activity
+        state['stage3_activity']=(local_stream_activity(self.root/'runs'/live['category_key']/'stage123',
+            live['controller'].get('created',0)) if live['running'] and
+            state['stage3_provider'].get('mode')=='local_model' else {})
         state.setdefault('details',{}).setdefault('阶段',{})['stage3']=stage3_display(
             control,state['stage3_runtime'],state['stage3_provider'])
         return state

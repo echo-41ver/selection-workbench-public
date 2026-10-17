@@ -1,8 +1,6 @@
 {
-  "commit": "891651982508dd0122964b9b12bedb42d92c5dac",
-  "source_exported_at_utc": "2026-10-17T22:02:37.853870+00:00",
+  "commit": "da7559bd945981b487fe4ec8ec89df3ace94ebf2",
+  "built_at_utc": "2026-10-17T22:25:42.005961+00:00",
   "channel": "public",
-  "contains_company_credentials": false,
-  "distribution_kind": "source-only",
-  "full_package_status": "waiting-real-batch-validation"
+  "contains_company_credentials": false
 }

@@ -58,3 +58,25 @@ def test_current_controller_failure_is_red_and_running_recovery_clears_it():
     assert row['需人工介入'] and row['阻断'] and '不合格' in row['状态']
     control.update(running=True,phase='分析中')
     assert not stage3_display(control,{}, {'mode':'local_model'}).get('需人工介入')
+
+
+def test_local_activity_uses_only_current_count_receipts_and_ignores_partial_tail(tmp_path):
+    import json
+    from runtime_overview import local_stream_activity
+    path=tmp_path/'local_stream_progress.jsonl'
+    path.write_text('x'*20000+'\n'+json.dumps({'request_id':'old','time':50,'status':'receiving','received_chars':9})+'\n'+
+        json.dumps({'request_id':'current','time':100,'status':'receiving','received_chars':1234,'output_text':'DO NOT EXPOSE'})+'\n{"partial":',encoding='utf-8')
+    assert local_stream_activity(tmp_path,90,120)=={'request_id':'current','updated_at':100,'status':'receiving','received_chars':1234}
+    assert local_stream_activity(tmp_path,101,120)=={}
+    path.write_text(json.dumps({'request_id':'future','time':200,'status':'receiving','received_chars':1}),encoding='utf-8')
+    assert local_stream_activity(tmp_path,90,120)=={}
+
+
+def test_malformed_activity_never_breaks_monitor_or_looks_like_real_output(tmp_path):
+    import json
+    from runtime_overview import local_stream_activity
+    path=tmp_path/'local_stream_progress.jsonl'
+    for value in ([],{'time':100,'request_id':'r','received_chars':True,'status':'receiving'},
+                  {'time':100,'request_id':'r','received_chars':-1,'status':'receiving'}):
+        path.write_text(json.dumps(value),encoding='utf-8')
+        assert local_stream_activity(tmp_path,90,120)=={}
