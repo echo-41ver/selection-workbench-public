@@ -127,3 +127,21 @@ class ThroughputTuner:
     def snapshot(self):
         return {'workers': self.width, 'best_width': self.best_width,
                 'best_rate': self.best_rate, 'samples': self.samples[-20:], 'exploring': self.exploring}
+
+
+def restore_tuner(initial, maximum, prior=None):
+    """Retain a measured failure backoff instead of probing it again on restart."""
+    prior = prior if isinstance(prior, dict) else {}
+    samples = prior.get('samples', [])
+    samples = samples if isinstance(samples, list) else []
+    tuner = ThroughputTuner(initial, maximum, stable_best(samples))
+    width = prior.get('workers')
+    failed = any(isinstance(row, dict) and type(row.get('failed')) is int
+                 and row['failed'] > 0 for row in samples)
+    if prior.get('exploring') is False and type(width) is int and 1 <= width <= maximum and failed:
+        resumed = min(tuner.width, width)
+        if resumed != tuner.width:
+            tuner.best_rate = 0.0
+        tuner.width = tuner.best_width = resumed
+        tuner.exploring = False
+    return tuner

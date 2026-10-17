@@ -449,7 +449,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
     # per pass; do not mutate client settings while worker calls are active.
     # ExitStack outlives the executor, including exceptional worker exits.
     client=None;client_setup_error=None
-    from selection_automation.analysis_concurrency import ThroughputTuner,stable_best,record_sample
+    from selection_automation.analysis_concurrency import ThroughputTuner,restore_tuner,record_sample
     from selection_automation.merge_temu_snapshots import atomic_write
     auto = provider.get('concurrency_mode')=='auto'
     capacity = max(width,4 if provider['mode']=='local_model' else 16) if auto else width
@@ -457,7 +457,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
     fingerprint = {k:provider[k] for k in ('mode','base_url','model','protocol')}
     try:prior_tuning=json.loads(tuning_path.read_text(encoding='utf-8'))
     except (OSError,ValueError):prior_tuning={}
-    tuner=ThroughputTuner(width,capacity,stable_best(prior_tuning.get('samples',[])) if prior_tuning.get('provider')==fingerprint else None)
+    tuner=(restore_tuner(width,capacity,prior_tuning if prior_tuning.get('provider')==fingerprint else {})
+           if auto else ThroughputTuner(width,capacity))
     if auto:width=tuner.width
     with ExitStack() as resources:
         try:

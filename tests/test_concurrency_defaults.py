@@ -50,3 +50,26 @@ def test_only_saturated_windows_are_used_and_statistics_do_not_change_jobs(tmp_p
     record_sample(provider,999,2000,0,1,saturated=False,root=tmp_path)
     assert not profile_path(provider,tmp_path).exists()
     assert not recommendation(provider,tmp_path)['measured']
+
+
+def test_restart_preserves_failed_auto_width_and_does_not_repeat_exploration():
+    from selection_automation.analysis_concurrency import restore_tuner
+    prior={'workers':1,'best_width':2,'best_rate':999,'exploring':False,
+           'samples':[{'workers':2,'completed':0,'failed':12,'seconds':600,'saturated':True}]}
+    tuner=restore_tuner(2,4,prior)
+    assert tuner.width==1 and tuner.best_width==1 and tuner.best_rate==0
+    assert tuner.observe(12,0,20)==1 and not tuner.exploring
+    assert restore_tuner(2,4,{}).width==2
+
+
+@pytest.mark.parametrize('width',[0,True,'1',999])
+def test_invalid_backoff_state_cannot_change_dispatch_width(width):
+    from selection_automation.analysis_concurrency import restore_tuner
+    tuner=restore_tuner(2,4,{'workers':width,'exploring':False,'samples':[sample(2,failed=1)]})
+    assert tuner.width==2
+
+
+def test_clean_completed_samples_still_choose_the_fastest_stable_width():
+    from selection_automation.analysis_concurrency import restore_tuner
+    tuner=restore_tuner(4,100,{'workers':1,'exploring':False,'samples':[sample(10),sample(10)]})
+    assert tuner.width==10
