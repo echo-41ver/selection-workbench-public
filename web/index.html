@@ -336,7 +336,7 @@ function stage3Heartbeat(data={}){
  return {label:'队列心跳',time:data.stage3_control?.codex_review?.pool?.updated_at};
 }
 function stage3ActivityText(data={},now=Date.now()/1000){
- if(data.stage3_provider?.mode!=='local_model'||!data.stage3_control?.running)return '';
+ if(!data||data.stage3_provider?.mode!=='local_model'||!data.stage3_control?.running)return '';
  const a=data.stage3_activity;if(!a)return '';
  if(a.status==='waiting')return '等待本地模型首段响应（'+Math.max(0,Math.floor(now-a.updated_at))+' 秒）';
  if(a.status==='receiving')return '本地模型已返回 '+Number(a.received_chars||0).toLocaleString()+' 个字符，整组结束后校验入库';
