@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import threading
@@ -64,7 +65,10 @@ class ProxyActivityLease:
             return self._enter_locked()
 
     def _enter_locked(self):
-        self.issued_at = time.time()
+        revoked=_revoked_at(self.directory)
+        if not math.isfinite(revoked):
+            raise RuntimeError('proxy activity revocation marker is invalid')
+        self.issued_at = math.nextafter(max(time.time(),revoked),math.inf)
         if not self._refresh():
             raise RuntimeError('proxy activity was revoked during startup')
         self.thread = threading.Thread(target=self._renew, daemon=True)
@@ -81,7 +85,12 @@ class ProxyActivityLease:
 def revoke_worker_activity(root: Path, worker: int) -> None:
     directory = activity_directory(root, worker)
     # Existing refresh threads cannot restore a lease older than this marker.
-    atomic_write(directory / 'revoked_at', str(time.time()))
+    latest=max(time.time(),_revoked_at(directory))
+    for path in directory.glob('*.json'):
+        try:issued=float(json.loads(path.read_text('utf-8')).get('issued_at',0))
+        except (OSError,ValueError,TypeError):continue
+        if math.isfinite(issued):latest=max(latest,issued)
+    atomic_write(directory / 'revoked_at', str(math.nextafter(latest,math.inf)))
     for path in directory.glob('*.json'):
         try:
             path.unlink(missing_ok=True)

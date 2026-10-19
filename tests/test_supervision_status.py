@@ -54,6 +54,19 @@ def test_stopped_recovery_browser_keeps_network_until_collector_or_stop(tmp_path
             retained.__exit__(None, None, None)
 
 
+def test_proxy_regrant_and_revoke_work_with_equal_or_backwards_clock(tmp_path,monkeypatch):
+    from selection_automation import proxy_activity as activity
+    monkeypatch.setattr(activity.time,'time',lambda:100.0)
+    with activity.ProxyActivityLease(tmp_path,1) as old:
+        activity.revoke_worker_activity(tmp_path,1)
+        assert not old._refresh()
+        with activity.ProxyActivityLease(tmp_path,1) as new:
+            assert new.path.exists() and new.issued_at>old.issued_at
+            monkeypatch.setattr(activity.time,'time',lambda:90.0)
+            activity.revoke_worker_activity(tmp_path,1)
+            assert not new._refresh() and not old._refresh()
+
+
 @pytest.mark.parametrize('status', ['WAITING_CAPTCHA', 'WAITING_SEARCH_VERIFICATION', 'WAITING_LOGIN'])
 def test_live_verification_is_visible_without_killing_or_restarting(tmp_path, status):
     worker_fixture(tmp_path, status, unique_goods=37)
