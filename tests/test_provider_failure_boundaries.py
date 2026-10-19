@@ -34,6 +34,7 @@ def test_provider_error_does_not_include_credentials_or_image_payload():
 
 
 def test_invalid_request_stops_before_consuming_next_candidate(tmp_path,monkeypatch):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_OFFLINE_KEY')
     calls=[]
     class Transport:
         def __init__(self,**kw):pass
