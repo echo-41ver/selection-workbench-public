@@ -92,7 +92,7 @@ def test_first_screen_wait_is_not_reported_as_zero_or_complete(tmp_path):
     assert '首屏' in view['状态']
     assert '唯一商品数' not in view
     assert recovery is None
-    assert selection.supervision_status({'worker1': view})['阻断阶段'] == ['worker1']
+    assert selection.supervision_status({'worker1': view})['阻断阶段'] == []
 
 
 def test_recovered_worker_clears_previous_verification_advice(tmp_path):

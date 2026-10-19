@@ -37,4 +37,14 @@ def test_local_bind_failures_are_bounded(tmp_path,monkeypatch):
     selection.save(base/'temu/supervisors'/f'{name}.json',{'status':'BINDING_FAILED'})
     state={}
     assert selection.hold_blocked_worker(base,{'name':name},children={},state=state,attempts={},next_at={},finished=set(),bind_launch=lambda *a: (_ for _ in ()).throw(AssertionError('must not launch')))
-    assert state[name]['需人工介入']
+    assert not state[name]['需人工介入']
+    assert '自动重连' in state[name]['状态']
+
+
+def test_rebound_lane_resets_exhausted_supervisor_attempts(tmp_path):
+    name='worker-04-new';path=tmp_path/'temu/supervisors'/f'{name}.json'
+    selection.save(path,{'status':'RESUMING'})
+    finished={name};attempts={name:3};next_at={name:float('inf')};state={}
+    assert not selection.hold_blocked_worker(tmp_path,{'name':name},children={},finished=finished,
+        attempts=attempts,next_at=next_at,state=state)
+    assert not finished and attempts[name]==0 and next_at[name]==0

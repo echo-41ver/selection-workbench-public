@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {hasLocalWarehouseLabel,selectLocalWarehouse,confirmsLocalWarehouse,inspectLocalWarehouse} from '../scripts/temu_local_warehouse.mjs';
+import {hasLocalWarehouseLabel,selectLocalWarehouse,confirmsLocalWarehouse,inspectLocalWarehouse,loadLocalWarehouseEvidence} from '../scripts/temu_local_warehouse.mjs';
 import vm from 'node:vm';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const card=text=>({source:'VISIBLE_TEMU_FRONTEND',card_text:text});
 test('only explicit Chinese or English local warehouse badges qualify',()=>{
@@ -82,4 +85,26 @@ test('shipping claims and warehouse wording in titles do not qualify',()=>{
   assert.equal(hasLocalWarehouseLabel(card(text)),false);
  assert.equal(hasLocalWarehouseLabel({title:'Local Warehouse'}),false);
  assert.equal(hasLocalWarehouseLabel({...card('Local Warehouse'),source:'SEARCH_RESPONSE_JSON'}),false);
+});
+
+test('resumed filter proof is accepted only while its exact query and URL filter remain applied',async()=>{
+ const evidence={state:'UI_CONFIRMED',query,filter_item:'400:1'};
+ const state={...selected(),url:url+'&filter_items=400%3A1%7C1%3A1',selected:false,explicit:false,menu:'menu'};
+ const result=await selectLocalWarehouse({query,initialEvidence:evidence,inspect:async()=>state,guard:async()=>{},sleep:async()=>{},
+  click:async()=>assert.fail('already applied filter must not be clicked again')});
+ assert.equal(result.state,'UI_CONFIRMED');assert.equal(result.filter_item,'400:1');
+ const reset=await selectLocalWarehouse({query,initialEvidence:evidence,maxChecks:3,
+  inspect:async()=>({...state,url,menu:null}),guard:async()=>{},sleep:async()=>{},click:async()=>{}});
+ assert.equal(reset.state,'UNCONFIRMED');
+});
+
+test('legacy filter proof is recovered from its own query events without inventing filter values',async()=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'warehouse-proof-'));
+ try{
+  const proof={type:'LOCAL_WAREHOUSE_FILTER_RESULT',state:'UI_CONFIRMED',query,filter_item:'400:1'};
+  await fs.writeFile(path.join(directory,'progress.json'),'{"local_warehouse_filter":{"state":"PENDING"}}');
+  await fs.writeFile(path.join(directory,'events.jsonl'),JSON.stringify(proof)+'\n{"type":"LOCAL_WAREHOUSE_FILTER_RESULT","state":"UNCONFIRMED"}\n{partial');
+  assert.equal((await loadLocalWarehouseEvidence(directory,query)).filter_item,'400:1');
+  assert.equal((await loadLocalWarehouseEvidence(directory,'different query')).state,'PENDING');
+ }finally{await fs.rm(directory,{recursive:true,force:true});}
 });

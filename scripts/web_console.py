@@ -1905,7 +1905,7 @@ class Console:
         key,_=self.current_run_key()
         preparing_new=self.key is None and self.pending_scope is not None
         if preparing_new: key=None
-        details={}; workers=[]
+        details={}; workers=[];preparing_environment=False
         if key and re.fullmatch('[a-z][a-z0-9_]{0,63}',key):
             base=self.root/'runs'/key
             details=selection.read(base/'status.json',{})
@@ -1931,6 +1931,7 @@ class Console:
                 try:
                     live=selection.worker_snapshot(base,path.stem)[1]
                     value['live_snapshot']=live
+                    if isinstance(live,dict):details.setdefault('阶段',{})[path.stem]=live
                     value['status_updated_at']=live.get('采集更新时间') or path.stat().st_mtime
                 except Exception: pass
                 name=value.get('worker',path.stem)
@@ -1940,6 +1941,8 @@ class Console:
                 if control and control['status'] in ('QUEUED','RUNNING') and not owner:
                     control={**control,'status':'INTERRUPTED','message':'监督器已退出，此请求未完成'}
                 workers.append({**value,**identity,'name':name,'rotation_control':control})
+        if owner and not self.busy and not preparing_environment:
+            details.update(selection.supervision_status(details.get('阶段',{})))
         phase=(self.phase if self.busy or (self.key is None and self.phase!='尚未启动') or
                (self.draft and not self.draft_used) else details.get('状态') or self.phase)
         generation=self.generation_progress()
@@ -2028,6 +2031,13 @@ class Console:
             live_stage3=stage3_display(stage3_control,runtime_control,provider)
             details.setdefault('阶段',{})['stage3']=live_stage3
             if live_stage3.get('需人工介入'):red=True
+            if owner and not self.busy and not preparing_environment:
+                details.update(selection.supervision_status(details['阶段']))
+                if not collection_complete:phase=details['状态']
+                current_tones=[tone({'状态':phase})]+[tone(current_worker(worker)) for worker in workers]
+                current_tones.extend(tone(value) for value in details['阶段'].values() if isinstance(value,dict))
+                red=(generation_failed or business_error or market_state.get('status') in ('FAILED','CATEGORY_UNRESOLVED')
+                     or 'red' in current_tones)
         from selection_automation.network_readiness import describe
         network_readiness=selection.read(self.root/'runtime/network-readiness.json',{}) or describe(selection.read(self.root/'runtime/secrets/proxyshare.settings.json',{}))
         return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,'api_reasoning_supported':True,

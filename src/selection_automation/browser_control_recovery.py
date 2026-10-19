@@ -7,7 +7,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-READY_SCRIPT = r"""
+_VERIFY_HELPER=(Path(__file__).resolve().parents[2]/"scripts/temu_verification.mjs").read_text(encoding="utf-8").replace("export function", "function")
+
+READY_SCRIPT = _VERIFY_HELPER+r"""
 const url = new URL(location.href);
 const visible = e => {const r=e.getBoundingClientRect(),s=getComputedStyle(e);
   return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden';};
@@ -15,7 +17,9 @@ if (location.protocol!=='https:' || !/^(?:www\.)?temu\.com$/.test(url.hostname)
     || !['/','/search_result.html'].includes(url.pathname)) return false;
 if (!['interactive','complete'].includes(document.readyState)) return false;
 const text=(document.body?.innerText||'').slice(0,10000);
-if (/access denied|verify (?:that )?you are human|security verification|验证码|安全验证|unusual traffic|too many requests|proxyconnectfailure|no connection|please check your network connection/i.test(text)) return false;
+if(inspectHumanVerification())return false;
+const hasProducts=document.querySelectorAll('[data-goods-id],a[href*="-g-"]').length>0;
+if (!hasProducts && /access denied|verify (?:that )?you are human|security verification|验证码|安全验证|unusual traffic|too many requests|proxyconnectfailure|no connection|please check your network connection/i.test(text)) return false;
 if ([...document.querySelectorAll('[role="dialog"],iframe[src*="captcha"],input[type="password"]')]
     .some(e=>visible(e) && (e.tagName==='IFRAME'||e.tagName==='INPUT'||/captcha|verify|verification|sign in|log in|access denied/i.test(e.innerText||'')))) return false;
 if ([...document.querySelectorAll('button,a,[role="button"]')]
@@ -27,10 +31,11 @@ const goods=[...document.querySelectorAll('[data-goods-id],a[href*="-g-"]')].som
 return Boolean(usableInput || (target && goods));
 """
 
-GATE_SCRIPT = r"""
+GATE_SCRIPT = _VERIFY_HELPER+r"""
 const path=location.pathname, text=(document.body?.innerText||'').slice(0,10000);
 const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};
-if (/bgn_verification|captcha|security[-_]?verification/i.test(path) || /security verification|verify (?:that )?you are human|验证码|安全验证/i.test(text)) return 'WAITING_HUMAN_VERIFICATION';
+const hasProducts=document.querySelectorAll('[data-goods-id],a[href*="-g-"]').length>0;
+if (/bgn_verification|captcha|security[-_]?verification/i.test(path) || inspectHumanVerification() || (!hasProducts && /security verification|verify (?:that )?you are human|验证码|安全验证/i.test(text))) return 'WAITING_HUMAN_VERIFICATION';
 if (/\/login(?:\.html)?\/?$/i.test(path) || [...document.querySelectorAll('input[type=password],[role=dialog] input[type=email]')].some(visible)) return 'STOPPED_LOGIN_REQUIRED';
 if (/access denied|request blocked|unusual traffic/i.test(text)) return 'STOPPED_ACCESS_DENIED';
 return null;

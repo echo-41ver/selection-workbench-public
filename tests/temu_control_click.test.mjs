@@ -19,11 +19,11 @@ test('off-screen text is centered and the actual button is hit-tested',()=>{
 
 test('pointer coordinates are remeasured and obscured controls are never forced',async()=>{
   const calls=[];let reads=0;
-  await clickVisibleControl({element:{},sleep:async()=>{},execute:async()=>({ready:true,x:10,y:++reads===1?20:40}),
+  await clickVisibleControl({element:{'element-6066-11e4-a52e-4f735466cecf':'control'},sleep:async()=>{},execute:async()=>({ready:true,x:10,y:++reads===1?20:40}),
     wd:async(method,endpoint,body)=>calls.push({method,endpoint,body})});
   assert.equal(reads,2);
-  assert.equal(calls[0].body.actions[0].actions[0].y,40);
-  assert.equal(calls[1].method,'DELETE');
+  assert.equal(calls[0].endpoint,'/element/control/click');
+  assert.equal(calls.length,1);
   await assert.rejects(()=>clickVisibleControl({element:{},sleep:async()=>{},execute:async()=>({ready:false,reason:'OBSCURED'}),
     wd:async()=>assert.fail('must not click overlay')}),/OBSCURED/);
 });
@@ -33,6 +33,14 @@ test('expansion requires additional cards or new visible product IDs, not height
   assert.equal(expansionObserved(before,{...before,scrollHeight:2000,unique_goods:100}),false);
   assert.equal(expansionObserved(before,{...before,visibleGoodsCount:60}),true);
   assert.equal(expansionObserved(before,{...before,visibleGoodsIds:['2','3']}),true);
+});
+
+test('native click uses the freshly resolved parent and never replays an uncertain timeout',async()=>{
+ const calls=[];
+ await assert.rejects(()=>clickVisibleControl({element:{'element-6066-11e4-a52e-4f735466cecf':'span'},
+  sleep:async()=>{},execute:async()=>({ready:true,x:1,y:1,target:{'element-6066-11e4-a52e-4f735466cecf':'button'}}),
+  wd:async(method,path)=>{calls.push([method,path]);throw Error('BROWSER_COMMAND_TIMEOUT');}}),/BROWSER_COMMAND_TIMEOUT/);
+ assert.deepEqual(calls,[['POST','/element/button/click']]);
 });
 
 test('unsuccessful expansion retries never count as completed or saturated rounds',async()=>{

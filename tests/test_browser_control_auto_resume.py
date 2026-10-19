@@ -319,12 +319,12 @@ def test_pipeline_control_timeout_or_budget_stops_and_restart_preserves_data(con
     assert progress['status']==expected
     worker=json.loads((base/'temu/supervisors/worker1.json').read_text(encoding='utf-8'))
     assert worker['query_status']==expected and worker['browser_preserved']
-    assert worker['unique_goods']==1 and not worker['automatic_resume_pending']
+    assert worker['unique_goods']==1 and worker['automatic_resume_pending']
     assert (output/'products.jsonl').read_text()=='{"goods_id":"saved"}\n'
     import selection
     _,view,blocked=selection.worker_snapshot(base,'worker1')
-    assert view['采集状态']==expected and view['需人工介入']
-    assert blocked and not blocked['verify_to_resume']
+    assert view['采集状态']=='BINDING_LOCAL' and not view['需人工介入']
+    assert blocked is None
 
 
 @pytest.mark.parametrize('started',[False,True])

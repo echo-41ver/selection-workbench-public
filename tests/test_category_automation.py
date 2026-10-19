@@ -199,7 +199,8 @@ def test_temu_scroll_restores_learned_zone_with_live_control_fallback():
     assert "getBoundingClientRect" in live_probe
     assert "scrollIntoView" not in live_probe
     assert "enforceConfiguredProductLimit();" in source
-    assert "ordered.slice(MAX_PRODUCTS)" in source
+    assert "rawCounter.count < MAX_PRODUCTS" in source
+    assert "products.size < MAX_PRODUCTS" not in source
 
 
 def test_amazon_bestsellers_collector_uses_latest_detail_standard():

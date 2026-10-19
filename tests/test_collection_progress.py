@@ -18,7 +18,7 @@ def fixture(base):
 
 def snapshot(base, folder, q, n, status='RUNNING', order='sales'):
     put(base / f'temu/workers/w1/{folder}/progress.json', {
-        'search_query': q, 'unique_goods': n, 'status': status,
+        'search_query': q, 'unique_goods': n, 'raw_collected_count':n, 'status': status,
         'sales_sort': {'requested': order},
         'started_at': '2026-10-01T00:00:00Z', 'updated_at': '2026-10-01T01:00:00Z'})
 
@@ -32,6 +32,19 @@ def test_quantity_target_is_not_completion_until_both_passes_finish(tmp_path):
     for order in ('sales','recent'):snapshot(tmp_path,order,'one',1000,'KEYWORD_LIMIT_REACHED',order)
     result=collection_total(tmp_path,{})
     assert result['percent']==100 and result['all_passes_complete'] is True
+
+
+def test_raw_counts_are_independent_of_unique_goods_and_keep_triple_category_budget(tmp_path):
+    put(tmp_path/'temu/supervisors/assignments.json',{'lanes':['w1'],'jobs':[
+        {'query':'ordinary','max_products':400},{'query':'category','max_products':1200}]})
+    for q,n in [('ordinary',400),('category',1200)]:
+        for mode in ('sales','recent'):
+            snapshot(tmp_path,q+mode,q,n,'KEYWORD_LIMIT_REACHED',mode)
+            path=tmp_path/f'temu/workers/w1/{q+mode}/progress.json'
+            row=json.loads(path.read_text());row['unique_goods']=17;put(path,row)
+    result=collection_total(tmp_path,{})
+    assert result['completed']==result['actual_count']==result['planned_total']==3200
+    assert result['all_passes_complete'] and result['count_basis']=='RAW_FRONTEND_CARDS'
 
 
 def test_weighted_total_counts_each_sort_and_does_not_add_retry_duplicates(tmp_path):

@@ -10,7 +10,8 @@ export function classifyPageState(data = {}) {
   let pathname = '';
   try { pathname = new URL(url).pathname; } catch {}
   if (/\/(?:bgn_verification|captcha|challenge|security[-_]?verification)/i.test(pathname)
-      || /security verification|verify (?:that )?you are human|complete the verification|安全验证|安全驗證|验证码|驗證碼|人机验证|人機驗證|请完成验证|請完成驗證|拖动滑块|拖動滑塊/i.test(text)) {
+      || data.verificationVisible === true
+      || (!hasVisibleProducts && /security verification|verify (?:that )?you are human|complete the verification|安全验证|安全驗證|验证码|驗證碼|人机验证|人機驗證|请完成验证|請完成驗證|拖动滑块|拖動滑塊/i.test(text))) {
     return 'HUMAN_VERIFICATION';
   }
   if (/\/login(?:\.html)?\/?$/i.test(pathname)

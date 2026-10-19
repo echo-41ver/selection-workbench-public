@@ -1,3 +1,4 @@
+import {inspectHumanVerification} from '../scripts/temu_verification.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import {inspectSearchReadiness} from '../scripts/temu_search_readiness.mjs';
 import {confirmedEmptyQueryResults,decideEmptyQueryResults} from '../scripts/temu_initial_wait_policy.mjs';
 const source=fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs',import.meta.url),'utf8');
 const template=source.match(/const extractScript = `([\s\S]*?)`;/)[1];
-const script=new Function('parseProductCardMetrics','inspectSearchReadiness','return `'+template+'`;')(parseProductCardMetrics,inspectSearchReadiness);
+const script=new Function('parseProductCardMetrics','inspectSearchReadiness','inspectHumanVerification','return `'+template+'`;')(parseProductCardMetrics,inspectSearchReadiness,inspectHumanVerification);
 const query='magic keyboard touch id numeric';
 function scan(loading=false){
  const input={value:query,closest:()=>null,getBoundingClientRect:()=>({width:300,height:40,top:0,bottom:40})};

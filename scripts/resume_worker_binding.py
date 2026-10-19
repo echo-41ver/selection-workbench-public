@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import os
+from concurrent.futures import ThreadPoolExecutor
 import urllib.error
 import urllib.request
 import replace_proxyshare_worker_environment as r
@@ -12,13 +14,17 @@ from selection_automation.process_lock import ProcessLock
 from selection_automation.worker_runtime import replacement_guard
 
 
-def resume(worker, allow_rebind=False):
+def resume(worker, allow_rebind=False, expected_task=None, expected_profile=None):
     name=f'worker-{worker:02d}-new'
     manifest=json.loads(r.SESSIONS.read_text('utf-8'))
     from selection import identity
     if manifest.get('machine_id')!=identity():
         raise RuntimeError('Browser manifest belongs to another computer')
     row=next(x for x in manifest['workers'] if x['name']==name)
+    if expected_task and (manifest.get('task_key')!=expected_task or (r.ROOT/'runs'/expected_task/'STOP').exists()):
+        raise RuntimeError('Task changed or stopped before local binding recovery')
+    if expected_profile and row.get('profile_id')!=expected_profile:
+        raise RuntimeError('Profile changed before local binding recovery')
     path=r.ROOT/'runtime'/'proxyshare-chains'/f'replacement-worker-{worker}.json'
     journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
     if allow_rebind and not journal:journal={'phase':'REPLACED','new_profile_id':row['profile_id']}
@@ -50,11 +56,54 @@ def mark_rebound_worker(row):
     manifest=json.loads(r.SESSIONS.read_text(encoding='utf-8'))
     key=manifest.get('task_key')
     if not key:return
+    if (r.ROOT/'runs'/key/'STOP').exists():return
     path=r.ROOT/'runs'/key/'temu/supervisors'/f"{row['name']}.json"
     if not path.exists():return
     state=json.loads(path.read_text(encoding='utf-8'))
+    output=Path(state['output']).resolve() if state.get('output') else None
+    if output and output.is_relative_to((r.ROOT/'runs'/key).resolve()):
+        progress_path=output/'progress.json'
+        if progress_path.exists():
+            progress=json.loads(progress_path.read_text(encoding='utf-8'))
+            if progress.get('status') in {'STOPPED_BROWSER_COMMAND_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT',
+                                          'STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET','STOPPED_BROWSER_CONTROL_FAILURE'}:
+                r.atomic_json(progress_path,{**progress,'previous_control_stop':progress['status'],'status':'RESUMING',
+                    'manual_action_required':False,'automatic_retry':True,'automatic_resume_pending':True,
+                    'command_execution_unknown':False,'control_recovery_profile_id':row.get('profile_id')})
     r.atomic_json(path,{**state,'status':'RESUMING','query_status':'RESUMING',
-        'manual_action_required':False,'automatic_resume_pending':True,'recovery_budget_exhausted':False})
+        'manual_action_required':False,'automatic_retry':True,'automatic_resume_pending':True,'recovery_budget_exhausted':False})
+
+
+def ensure_collector_resumed(base,row):
+    """A recovered lane must have a collector, even after supervisor retry exhaustion."""
+    from selection import live_owner
+    import psutil
+    owner=live_owner()
+    if not owner or owner.get('category_key')!=base.name or (base/'STOP').exists():return False
+    state_path=base/'temu/supervisors'/f"{row['name']}.json"
+    state=json.loads(state_path.read_text(encoding='utf-8'))
+    if state.get('status')!='RESUMING':return False
+    lease=r.ROOT/'runtime/worker-leases'/f"{row['name']}.owner.json"
+    try:
+        active=json.loads(lease.read_text(encoding='utf-8'));process=psutil.Process(active['pid'])
+        args=process.cmdline()
+        if (process.is_running() and active.get('worker')==row['name'] and active.get('purpose')=='collector'
+                and len(args)>1 and Path(args[1]).resolve()==(r.ROOT/'scripts/pipeline.py').resolve()
+                and '--worker-name' in args and args[args.index('--worker-name')+1]==row['name']
+                and '--category' in args and Path(args[args.index('--category')+1]).resolve()==(base/'category.json').resolve()):return False
+    except (OSError,ValueError,KeyError,IndexError,psutil.Error):pass
+    logs=base/'logs';logs.mkdir(exist_ok=True)
+    command=[sys.executable,str(r.ROOT/'scripts/pipeline.py'),'collect-temu','--category',str(base/'category.json'),
+             '--sessions',str(r.SESSIONS),'--worker-name',row['name']]
+    r.atomic_json(state_path,{**state,'status':'STARTING','manual_action_required':False,'automatic_resume_pending':True})
+    try:
+        with (logs/f"{row['name']}.log").open('ab') as stream:
+            subprocess.Popen(command,cwd=r.ROOT,stdin=subprocess.DEVNULL,stdout=stream,stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+    except OSError:
+        r.atomic_json(state_path,state)
+        raise
+    return True
 
 
 def driver_connected(row):
@@ -101,18 +150,20 @@ def repair_waiting(base, row, last_attempt, now=None):
     now=time.monotonic() if now is None else now
     name=row['name']
     state=json.loads((base/'temu/supervisors'/f'{name}.json').read_text(encoding='utf-8'))
-    if state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED','RUNNING','RESUMING','STARTING'}:return False
-    if state.get('status')=='BINDING_FAILED' and driver_connected(row):
+    if state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED','BINDING_RETRY_WAIT','RUNNING','RESUMING','STARTING'}:return False
+    control_stop=state.get('query_status') in {'STOPPED_BROWSER_COMMAND_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'}
+    urgent=control_stop or state.get('status') in {'BINDING_FAILED','BINDING_RETRY_WAIT'}
+    if urgent and driver_connected(row):
         mark_rebound_worker(row)
         return 'BOUND_EXISTING_PROFILE'
-    if now-last_attempt.get(name,-60)<60 or not invalid_session(row):return False
+    if now-last_attempt.get(name,-60)<60 or (not urgent and not invalid_session(row)):return False
     last_attempt[name]=now
     number=int(name.split('-')[1])
     if profile_closed(row):
         from selection import request_rotation
         request_rotation(base,[number])
         return 'REPLACEMENT_QUEUED'
-    resume(number,allow_rebind=True)
+    resume(number,allow_rebind=True,expected_task=base.name,expected_profile=row.get('profile_id'))
     return 'BOUND_EXISTING_PROFILE'
 
 
@@ -120,8 +171,21 @@ def monitor(category, worker=None):
     from selection import live_owner, identity
     base=Path(category).resolve().parent
     if base!=(r.ROOT/'runs'/base.name).resolve():raise RuntimeError('Task directory mismatch')
-    last_attempt={}
-    with ProcessLock(base/'temu/supervisors/binding-recovery-monitor.lock'):
+    last_attempt={};pending={}
+    def repair_lane(row):
+        try:
+            owner=live_owner()
+            current=json.loads(r.SESSIONS.read_text(encoding='utf-8'))
+            if ((base/'STOP').exists() or not owner or owner.get('category_key')!=base.name
+                    or current.get('task_key')!=base.name
+                    or not any(x.get('name')==row['name'] and x.get('profile_id')==row.get('profile_id') for x in current.get('workers',[]))):return
+            result=repair_waiting(base,row,last_attempt)
+            if result=='BOUND_EXISTING_PROFILE' or not result:ensure_collector_resumed(base,row)
+            if result:
+                r.atomic_json(base/'temu/supervisors'/f"binding-recovery-{row['name']}.json",{'worker':row['name'],'status':result,'updated_at':time.time()})
+        except (OSError,ValueError,RuntimeError,KeyError,subprocess.SubprocessError) as error:
+            r.atomic_json(base/'temu/supervisors'/f"binding-recovery-{row['name']}.json",{'worker':row['name'],'status':'RETRY_PENDING','error_type':type(error).__name__,'error':str(error)[-1000:],'updated_at':time.time()})
+    with ProcessLock(base/'temu/supervisors/binding-recovery-monitor.lock'), ThreadPoolExecutor(max_workers=32) as pool:
         while not (base/'STOP').exists():
             owner=live_owner()
             if not owner or owner.get('category_key')!=base.name:return
@@ -129,12 +193,8 @@ def monitor(category, worker=None):
             if manifest.get('machine_id')!=identity():raise RuntimeError('Browser manifest belongs to another computer')
             for row in manifest.get('workers',[]):
                 if worker and row['name']!=f'worker-{worker:02d}-new':continue
-                try:
-                    result=repair_waiting(base,row,last_attempt)
-                    if result:
-                        r.atomic_json(base/'temu/supervisors/binding-recovery-monitor.json',{'worker':row['name'],'status':result,'updated_at':time.time()})
-                except (OSError,ValueError,RuntimeError) as error:
-                    r.atomic_json(base/'temu/supervisors/binding-recovery-monitor.json',{'worker':row['name'],'status':'RETRY_PENDING','error_type':type(error).__name__,'updated_at':time.time()})
+                previous=pending.get(row['name'])
+                if previous is None or previous.done():pending[row['name']]=pool.submit(repair_lane,row)
             time.sleep(10)
 
 

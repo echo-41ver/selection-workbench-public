@@ -1034,6 +1034,11 @@ def test_normal_worker_flags_not_red_and_identity_whitelisted(tmp_path,monkeypat
     assert result['workers'][0]['profile_id']=='real-profile'
     assert result['workers'][0]['serial_number']=='12'
     assert 'hidden-user' not in json.dumps(result)
+    (base/'status.json').write_text(json.dumps({'状态':'存在阻断','阻断阶段':['worker-01-new'],
+        '阶段':{'worker-01-new':{'状态':'等待人工验证','阻断':True,'需人工介入':True}}}))
+    recovered=console.status()
+    assert recovered['phase']=='运行中' and recovered['severity']=='green'
+    assert recovered['details']['阻断阶段']==[] and recovered['details']['人工介入阶段']==[]
     monkeypatch.setattr(web.selection,'worker_snapshot',lambda *args:({}, {'状态':'等待首屏商品','阻断':True,'需人工介入':False,'采集状态':'WAITING_INITIAL_PRODUCTS'},None))
     assert console.status()['severity']=='green'
     monkeypatch.setattr(web.selection,'worker_snapshot',lambda *args:({}, {'状态':'等待验证码','需人工介入':True},None))

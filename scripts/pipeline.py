@@ -268,7 +268,7 @@ def confirmed_checkpoint_meets_budget(output: Path, progress: dict, query: str, 
     if not confirmed_sales_checkpoint(output,progress,query,sort):
         return False
     # A genuine NoMoreResults checkpoint remains complete at any larger target.
-    return status!='KEYWORD_LIMIT_REACHED' or int(progress.get('unique_goods') or 0)>=int(target)
+    return status!='KEYWORD_LIMIT_REACHED' or int(progress.get('raw_collected_count',progress.get('unique_goods')) or 0)>=int(target)
 
 
 def limit_upgrade_resume_queries(run: Path, keywords: list[dict]) -> set[str]:
@@ -288,7 +288,7 @@ def limit_upgrade_resume_queries(run: Path, keywords: list[dict]) -> set[str]:
             if legacy_relevance_completion(progress):
                 resume.add(job['query']);break
             if (progress.get('status')=='KEYWORD_LIMIT_REACHED'
-                    and int(progress.get('unique_goods') or 0)<target
+                    and int(progress.get('raw_collected_count',progress.get('unique_goods')) or 0)<target
                     and confirmed_sales_checkpoint(output,progress,job['query'],sort)):
                 resume.add(job['query']);break
     return resume
@@ -482,11 +482,11 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                          'control_recovery_profile_id':str(session.get('profile_id') or '')}
                 atomic_write(progress_path,json.dumps(blocked,ensure_ascii=False))
                 write_worker_state(session['name'],{
-                    'status':'HUMAN_ACTION_REQUIRED','query_status':status,
+                    'status':'BINDING_RETRY_WAIT','query_status':status,
                     'current_query':query,'output':str(output),'log':str(log),
                     'unique_goods':progress.get('unique_goods'),'completed_queries':completed_queries,
-                    'browser_preserved':True,'manual_action_required':True,'automatic_retry':False,
-                    'automatic_resume_pending':False,'control_recovery':record,
+                    'browser_preserved':True,'manual_action_required':False,'automatic_retry':True,
+                    'automatic_resume_pending':True,'control_recovery':record,
                     'recovery_budget_exhausted':status.endswith('_BUDGET'),
                     'recovery_action':collector_block(status)['action'],'verify_to_resume':False,
                 })

@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import {sessionRecoveryRequest, captchaNeedsManualVerification} from '../scripts/temu_session_recovery.mjs';
 import {retryAfterSeconds, networkEvidence} from '../scripts/temu_network_evidence.mjs';
 import {createCategoryRelevance,COLLECTION_PROGRESS_VERSION} from '../scripts/category_relevance.mjs';
+import {createRawCounter,RAW_COUNT_VERSION} from '../scripts/temu_raw_count.mjs';
 
 const source = fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs', import.meta.url), 'utf8');
 const snapshotSource = source.slice(source.indexOf('async function writeSnapshot('), source.indexOf('function startBidi()'));
@@ -17,6 +18,7 @@ for (const [status,kind,scrolled=true] of [['WAITING_LOGIN','LOGIN'], ['WAITING_
     const writes = new Map(), calls = [];
     const row = {goods_id:'123', title:'retained', main_image_url:'https://example.com/product.jpg'};
     const context = vm.createContext({sessionRecoveryRequest, captchaNeedsManualVerification,
+      RAW_COUNT_VERSION,rawCounter:createRawCounter(50,{version:RAW_COUNT_VERSION,count:40}),
       categoryRelevance:createCategoryRelevance({temu:{include_terms:['retained'],severe_exclude_terms:[]}}),COLLECTION_PROGRESS_VERSION,
       AUTO_SESSION_RECOVERY:true, scrollingCollectionStarted:scrolled,
       products:new Map([['123',row]]), pendingProducts:new Map(), unclassifiedProducts:new Map(), filteredSevereOffTopic:new Map(),
@@ -33,6 +35,7 @@ for (const [status,kind,scrolled=true] of [['WAITING_LOGIN','LOGIN'], ['WAITING_
     vm.runInContext(snapshotSource,context);
     await vm.runInContext(`writeSnapshot(${JSON.stringify(status)}, {manual_action_required:true, automatic_retry:false})`,context);
     const saved=JSON.parse(writes.get('progress'));
+    assert.equal(saved.raw_collected_count,40);assert.equal(saved.unique_goods,1);
     assert.equal(saved.unique_goods,1);
     assert.equal(saved.scroll_collection_started,scrolled);
     assert.equal(saved.collection_phase,scrolled ? 'SCROLLING' : 'BEFORE_SCROLL');

@@ -375,10 +375,12 @@ def worker_snapshot(base, name):
         return worker,{'状态':'对照诊断中，暂缓本路，断点保留','采集状态':'PAUSED_DIAGNOSTIC',
             '关键词':worker.get('current_query'),'阻断':False,'需人工介入':False,
             '建议动作':'','浏览器保留':True,'采集进程运行中':False},None
-    if worker.get('status') in {'BINDING_LOCAL','BINDING_FAILED'}:
-        failed=worker['status']=='BINDING_FAILED'
-        return worker,{'状态':'浏览器连接失败' if failed else '正在恢复浏览器连接','采集状态':worker['status'],
-            '阻断':failed,'需人工介入':failed,'建议动作':'查看连接日志后重试' if failed else '',
+    if worker.get('status') in {'BINDING_LOCAL','BINDING_FAILED','BINDING_RETRY_WAIT'}:
+        checkpoint=read(Path(worker['output'])/'progress.json',{}) if worker.get('output') else {}
+        return worker,{'状态':'连接中断，正在自动重连','采集状态':'BINDING_LOCAL',
+            '阻断':False,'需人工介入':False,'建议动作':'',
+            '采集条数':checkpoint.get('raw_collected_count'),
+            '当前排序目标':checkpoint.get('max_products'),
             '关键词':worker.get('current_query')},None
     replacing=str(worker.get('status','')).startswith('REPLACING_') and str(worker.get('status','')).endswith('_ENVIRONMENT')
     progress={}; query=worker.get('current_query')
@@ -393,6 +395,8 @@ def worker_snapshot(base, name):
                 progress=read(progress_path,{})
         except OSError: pass
     code=progress.get('status') or worker.get('query_status') or worker.get('status','STARTING')
+    if code in {'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'}:
+        code='WAITING_BROWSER_CONTROL_RECOVERY'
     if worker.get('status')=='WAITING_BROWSER_CONTROL_RECOVERY': code=worker['status']
     if replacing or worker.get('status') in {'SESSION_REPLACED','RESUMING','STARTING','WORKER_COMPLETE','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY','WAITING_INITIAL_PRODUCTS_RETRY'}: code=worker['status']
     recovery=collector_block(code)
@@ -431,9 +435,9 @@ def worker_snapshot(base, name):
     if replacing: label='正在自动更换环境，保留当前关键词断点'
     if not label: label={'WORKER_COMPLETE':'本轮完成','SESSION_REPLACED':'新session已就绪，等待恢复断点','RESUMING':'页面已验证，恢复原关键词','STARTING':'启动中'}.get(code,'运行中')
     view={'状态':label,'采集状态':code,'关键词':query,'排序方式':{'sales':'销量最高','recent':'最近上架'}.get(worker.get('current_sort'),'销量最高'),'输出目录':output,
-          '已完成关键词':worker.get('completed_queries',[]),'阻断':bool(recovery or code in {'WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_TRY_AGAIN','WAITING_SEE_MORE_CLICK','RETRYING_NETWORK'}),'需人工介入':bool(recovery),
+          '已完成关键词':worker.get('completed_queries',[]),'阻断':bool(recovery),'需人工介入':bool(recovery),
           '建议动作':'','浏览器保留':False}
-    for key,label in [('unique_goods','唯一商品数'),('unique_unclassified_goods','未归类商品数'),
+    for key,label in [('raw_collected_count','采集条数'),('unique_goods','唯一商品数'),('unique_unclassified_goods','未归类商品数'),
                       ('filtered_severe_off_topic_goods','明确排除商品数'),
                       ('unique_progress_goods','相关及未归类商品数'),('round','采集轮次'),('updated_at','采集更新时间')]:
         value=progress.get(key,worker.get(key))
@@ -457,6 +461,10 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
     worker=read(worker_path,{})
     child=children.get(name)
     running=child is not None and child.poll() is None
+    if worker.get('status')=='RESUMING' and not running:
+        children.pop(name,None);finished.discard(name);attempts[name]=0;next_at[name]=0
+        state[name]={'状态':'连接已恢复，正在续采','阻断':False,'需人工介入':False}
+        return False
     if worker.get('status')=='BINDING_LOCAL' and not running:
         if child is not None and child.returncode==0:
             children.pop(name,None); attempts[name]=0; next_at[name]=0; finished.discard(name)
@@ -477,7 +485,7 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
             children[name]=bind_launch(name,[sys.executable,str(ROOT/'scripts'/'resume_worker_binding.py'),'--worker',str(number)])
             finished.discard(name)
     worker,view,recovery=worker_snapshot(base,name)
-    if worker.get('status') in {'BINDING_LOCAL','BINDING_FAILED'}:
+    if worker.get('status') in {'BINDING_LOCAL','BINDING_FAILED','BINDING_RETRY_WAIT'}:
         state[name]=view
         return True
     # Old runs may have stopped before automatic site recovery was deployed.
@@ -540,7 +548,10 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
 
 
 def supervision_status(state):
-    blocked=[name for name,info in state.items() if info.get('采集状态') == 'WAITING_INITIAL_PRODUCTS' or info.get('阻断') or info.get('状态') in ('失败，需要处理','换session失败，保留替换进度')]
+    state={name:info for name,info in state.items() if isinstance(info,dict)}
+    blocked=[name for name,info in state.items() if (info.get('阻断') and info.get('采集状态') not in {
+        'WAITING_INITIAL_PRODUCTS','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_TRY_AGAIN',
+        'WAITING_SEE_MORE_CLICK','RETRYING_NETWORK','WAITING_FLEET_SLOT'}) or info.get('状态') in ('失败，需要处理','换session失败，保留替换进度')]
     human=[name for name,info in state.items() if info.get('需人工介入')]
     return {'状态':'等待人工介入' if human else '存在阻断' if blocked else '运行中',
             '阻断阶段':blocked,'需人工介入':bool(human),'人工介入阶段':human,

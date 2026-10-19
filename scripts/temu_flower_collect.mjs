@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import {atomicSnapshot} from './snapshot_atomic.mjs';
+import {createRawCounter,RAW_COUNT_VERSION} from './temu_raw_count.mjs';
+import {inspectHumanVerification} from './temu_verification.mjs';
 import {createCategoryRelevance, COLLECTION_PROGRESS_VERSION, restoreNoNewRounds} from './category_relevance.mjs';
 import {readInitialWindowHandles} from './browser_control_bootstrap.mjs';
 import {parseProductCardMetrics} from './product_card_metrics.mjs';
-import {hasLocalWarehouseLabel,inspectLocalWarehouse,confirmsLocalWarehouse,selectLocalWarehouse} from './temu_local_warehouse.mjs';
+import {hasLocalWarehouseLabel,inspectLocalWarehouse,confirmsLocalWarehouse,selectLocalWarehouse,loadLocalWarehouseEvidence} from './temu_local_warehouse.mjs';
 import {sessionRecoveryRequest, captchaNeedsManualVerification} from './temu_session_recovery.mjs';
 import {createBrowserControlClient} from './browser_control_request.mjs';
 import {clickVisibleControl,expansionObserved} from './temu_control_click.mjs';
@@ -161,6 +163,9 @@ const products = new Map();
 const pendingProducts = new Map();
 const unclassifiedProducts = new Map();
 const filteredSevereOffTopic = new Map();
+localWarehouseFilter=await loadLocalWarehouseEvidence(OUT,QUERY);
+const rawCounter=createRawCounter(MAX_PRODUCTS,await fs.readFile(PROGRESS,'utf8').then(JSON.parse).then(x=>x.raw_sampling).catch(()=>({})));
+let rawLoadRequested=false;
 let round = 0;
 let consecutiveNoNewRounds = 0;
 let clicks = 0;
@@ -180,12 +185,8 @@ let missingSeeMore = null;
 let failedSeeMoreClicks = 0;
 
 function enforceConfiguredProductLimit() {
-  if (products.size <= MAX_PRODUCTS) return 0;
-  const ordered = [...products.entries()].sort(([, a], [, b]) =>
-    Number(a.first_seen_ordinal || Number.MAX_SAFE_INTEGER) - Number(b.first_seen_ordinal || Number.MAX_SAFE_INTEGER));
-  const overflow = ordered.slice(MAX_PRODUCTS);
-  for (const [goodsId] of overflow) products.delete(goodsId);
-  return overflow.length;
+  // The budget applies to raw card positions. Never trim saved unique goods.
+  return 0;
 }
 
 const emptyNetworkTotals = () => ({
@@ -316,6 +317,8 @@ async function writeSnapshot(status, extra = {}) {
     schema_version: 'temu-flower-existing-v2', status, search_query: QUERY, sales_sort: salesSort, local_warehouse_filter:localWarehouseFilter,
     site: 'TEMU_US', currency: 'USD', source: 'VISIBLE_TEMU_FRONTEND',
     unique_goods: rows.length, round, see_more_clicks: clicks,
+    raw_collected_count:rawCounter.count,raw_count_version:RAW_COUNT_VERSION,
+    count_basis:'RAW_FRONTEND_CARDS',raw_sampling:rawCounter.snapshot(),
     stop_logic_version: COLLECTION_PROGRESS_VERSION,
     relevance_policy_version: categoryRelevance.version,
     relevance_policy_fingerprint: categoryRelevance.fingerprint,
@@ -508,12 +511,11 @@ const knownIds=new Set((ctx.knownIds||[]).map(String));
 const repairIds=new Set((ctx.repairIds||[]).map(String));
 const idFrom=v=>(String(v||'').match(/[?&](?:goods_id|goodsId)=(\\d+)(?:[&#]|$)/i)||String(v||'').match(/-g-(\\d+)\\.html(?:[?#]|$)/i)||[])[1]||null;
 const anchors=[...document.querySelectorAll('a[href]')].filter(a=>idFrom(a.href));
-const out=[],seen=new Set();
+const out=[],seen=new Set(),rawCards=[],seenCards=new Set();
 const adObservations=window.__temuAdObservations||(window.__temuAdObservations=new Map());
 const cleanUrl=v=>{try{const u=new URL(v,location.href);u.username='';u.password='';u.hash='';u.search='';return u.href}catch{return null}};
 for(const a of anchors){
- const id=idFrom(a.href); if(!id||seen.has(id))continue; seen.add(id);
- if(knownIds.has(String(id))&&!repairIds.has(String(id)))continue;
+ const id=idFrom(a.href); if(!id||a.closest?.('header,nav,footer,[role="navigation"]'))continue;
  let card=a,cardDepth=0;
  for(let d=0;d<32&&card.parentElement;d++){
   const p=card.parentElement;
@@ -522,8 +524,16 @@ for(const a of anchors){
   const ids=new Set(nodes.flatMap(x=>[idFrom(x.href),x.getAttribute?.('data-goods-id'),x.getAttribute?.('data-goodsid')])
     .filter(value=>/^\\d+$/.test(String(value||''))).map(String));
   if(ids.size!==1||!ids.has(id))break;
+  // Two image links to the same goods can be two separate result cards.
+  if([...p.querySelectorAll('a[href]')].filter(x=>idFrom(x.href)===id&&x.querySelector?.('img')).length>1)break;
   card=p;cardDepth++;
  }
+ const rawRect=card.getBoundingClientRect(),rawStyle=getComputedStyle(card);
+ if(rawRect.width>0&&rawRect.height>0&&rawStyle.display!=='none'&&rawStyle.visibility!=='hidden'&&!seenCards.has(card)){
+  seenCards.add(card);rawCards.push({goods_id:id,position:rawCards.length});
+ }
+ if(seen.has(id))continue;seen.add(id);
+ if(knownIds.has(String(id))&&!repairIds.has(String(id)))continue;
  const fullCardText=(card.innerText||a.innerText||'').trim();
  const text=fullCardText.slice(0,10000);
  // Hidden/lazy or truncated cards cannot certify a negative observation.
@@ -574,7 +584,7 @@ for(const a of anchors){
 function safeNum(v){const n=Number(v);return Number.isFinite(n)?n:null}
 const captured=window.__temuCapturedProducts?[...window.__temuCapturedProducts.values()].filter(x=>!knownIds.has(String(x.goods_id))||repairIds.has(String(x.goods_id))):[];
 const loginFormVisible=[...document.querySelectorAll('input[type="password"], [role="dialog"] input[type="email"], [role="dialog"] input[autocomplete="username"]')].some(e=>{if(typeof e.getBoundingClientRect!=='function')return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'});
-return {...(${inspectSearchReadiness.toString()})(),readyState:document.readyState,loginFormVisible,rows:out,captured,visibleGoodsCount:seen.size,url:location.href,documentURI:document.documentURI,title:document.title,text:(document.body?.innerText||'').slice(0,5000),scrollY,innerHeight,scrollHeight:document.documentElement?.scrollHeight ?? 0};`;
+return {...(${inspectSearchReadiness.toString()})(),readyState:document.readyState,loginFormVisible,verificationVisible:(${inspectHumanVerification.toString()})(),rows:out,rawCards,rawDocumentId:globalThis.performance?.timeOrigin??0,captured,visibleGoodsCount:seen.size,url:location.href,documentURI:document.documentURI,title:document.title,text:(document.body?.innerText||'').slice(0,5000),scrollY,innerHeight,scrollHeight:document.documentElement?.scrollHeight ?? 0};`;
 
 const installResponseCaptureScript = `
 if(window.__temuResponseCaptureVersion!==2){
@@ -705,6 +715,8 @@ async function scan({commit=!(['sales','recent'].includes(SORT_REQUEST) && initi
     }
     for (const row of data.rows || []) row.search_sort={...salesSort};
   }
+  const rawObservation=Array.isArray(data.rawCards)?rawCounter.observe(data.rawCards,data.rawDocumentId,rawLoadRequested):null;
+  if(rawObservation?.loadConsumed)rawLoadRequested=false;
   let added = 0;
   let imageBackfilled = 0;
   let promotedFromPending = 0;
@@ -721,6 +733,7 @@ async function scan({commit=!(['sales','recent'].includes(SORT_REQUEST) && initi
       main_image_url: row.main_image_url || images[0] || null, all_image_urls: images };
   };
   for (const row of data.rows || []) {
+    if(rawObservation&&!rawObservation.allowed.has(String(row.goods_id)))continue;
     if (!hasLocalWarehouseLabel(row)) continue;
     if (isSevereOffTopic(row)) {
       filteredSevereOffTopic.set(String(row.goods_id), row);
@@ -798,7 +811,7 @@ async function lightPageState() {
     const visibleGoodsCount=document.querySelectorAll('a[href*="goods_id="],a[href*="goodsId="],a[href*="-g-"]').length;
     const visibleGoodsIds=[...new Set([...document.querySelectorAll('a[href]')].map(a=>(a.href.match(/[?&](?:goods_id|goodsId)=(\\d+)(?:[&#]|$)/i)||a.href.match(/-g-(\\d+)\\.html/i)||[])[1]).filter(Boolean))];
     const loginFormVisible=[...document.querySelectorAll('input[type="password"], [role="dialog"] input[type="email"], [role="dialog"] input[autocomplete="username"]')].some(e=>{if(typeof e.getBoundingClientRect!=='function')return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'});
-    return {...(${inspectSearchEnd.toString()})(),...(${inspectSearchReadiness.toString()})(),readyState:document.readyState,loginFormVisible,url:location.href,documentURI:document.documentURI,title:document.title,text,rows:visibleGoodsCount?[{}]:[],visibleGoodsCount,visibleGoodsIds,scrollY,innerHeight,scrollHeight:document.documentElement?.scrollHeight ?? 0};
+    return {...(${inspectSearchEnd.toString()})(),...(${inspectSearchReadiness.toString()})(),readyState:document.readyState,loginFormVisible,url:location.href,documentURI:document.documentURI,title:document.title,text,verificationVisible:(${inspectHumanVerification.toString()})(),rows:visibleGoodsCount?[{}]:[],visibleGoodsCount,visibleGoodsIds,scrollY,innerHeight,scrollHeight:document.documentElement?.scrollHeight ?? 0};
   `);
 }
 
@@ -1098,6 +1111,7 @@ async function bootstrapPageState() {
     return {
       ...(${inspectSearchReadiness.toString()})(),
       loginFormVisible,
+      verificationVisible:(${inspectHumanVerification.toString()})(),
       url:location.href,documentURI:document.documentURI,title:document.title,readyState:document.readyState,
       text:(document.body?.innerText||'').slice(0,2000),searchReady:Boolean(input),
       searchEnabled:Boolean(input&&!input.disabled&&!input.readOnly),
@@ -1237,6 +1251,14 @@ async function guardInitialProducts(state, phase) {
   const decision = decideInitialProductsWait({ pageState: state, previous: initialProductsWait,
     nowMs: Date.now(), timeoutMs: INITIAL_PRODUCTS_TIMEOUT_SECONDS * 1000,
     productsReady: targetSearch && (Number(state.visibleGoodsCount) > 0 || state.rows?.length > 0) });
+  if(decision.manual){
+    const evidence={page_url:state.url||null,page_classification:classify(state),
+      visible_verification_control:state.verificationVisible===true,visible_products:Number(state.visibleGoodsCount)||0,
+      text_sample:String(state.text||'').slice(0,300),phase};
+    const fingerprint=JSON.stringify(evidence);
+    if(initialProductsWait?.gate_fingerprint!==fingerprint)await appendEvent('MANUAL_GATE_OBSERVED',evidence);
+    decision.clock.gate_fingerprint=fingerprint;
+  }
   initialProductsWait = decision.clock;
   if(decision.status==='WAITING_INITIAL_PRODUCTS'&&Date.now()-lastInitialWaitingSnapshot>=2000){
     lastInitialWaitingSnapshot=Date.now();
@@ -1645,7 +1667,7 @@ async function prepareLocalWarehouseFilter() {
       await sleep(1000);state=await bootstrapPageState();await guardInitialProducts(state,'local_warehouse');
     }
   };
-  localWarehouseFilter=await selectLocalWarehouse({inspect:readLocalWarehouse,query:QUERY,sleep,guard,
+  localWarehouseFilter=await selectLocalWarehouse({inspect:readLocalWarehouse,query:QUERY,sleep,guard,initialEvidence:localWarehouseFilter,
     onAction:action=>appendEvent('LOCAL_WAREHOUSE_CONTROL_ACTION',action),
     onRetry:retry=>appendEvent('LOCAL_WAREHOUSE_CONTROL_RETRY',retry),
     click:element=>clickSalesSortControl({element,execute,sleep,click:current=>wd('POST',`/element/${current[EKEY]}/click`,{})})});
@@ -1656,6 +1678,7 @@ async function prepareLocalWarehouseFilter() {
       automatic_retry:false,keyword_complete:false,browser_preserved:true,collector_paused:true});
     throw new InitialProductsStopped(finalStatus);
   }
+  await atomicSnapshot(path.join(OUT,'warehouse_filter.json'),JSON.stringify(localWarehouseFilter,null,2));
   await writeSnapshot('本地仓筛选已确认',{local_warehouse_filter:localWarehouseFilter});
 }
 async function waitForInitialProducts() {
@@ -1913,12 +1936,13 @@ if (!finalStatus && !collectionStarted) {
 }
 
 try {
-while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRecovery < IDLE_REQUIRED) && products.size < MAX_PRODUCTS) {
+while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRecovery < IDLE_REQUIRED) && rawCounter.count < MAX_PRODUCTS) {
   await ensurePageGuards(false);
   // A round is exactly one successful See more expansion cycle. The baseline
   // is captured before positioning/scrolling, so late rows from the preceding
   // click are credited to this round and reset the no-new streak.
   const roundBaselineIds = new Set([...products.keys(),...unclassifiedProducts.keys()]);
+  const roundBaselineRaw=rawCounter.count;
   let before = await visibleScrollToLearnedSeeMoreZone();
   const block = classify(before);
 
@@ -2024,6 +2048,7 @@ while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRec
   try { clickEvidence=await clickVisibleControl({element,execute,wd,sleep}); }
   catch (error) { await retrySeeMoreClick(String(error).slice(0,300));continue; }
   clicks += 1;
+  rawLoadRequested=true;
   await appendEvent('SEE_MORE_CLICKED', { round:round+1, click: clicks, unique_before: countBefore,
     expansion_confirmed:false,...clickEvidence,clicks_since_recovery: clicksSinceRecovery,
     see_more_bottom_offset_px: Math.round(seeMoreBottomOffset || 0) });
@@ -2061,7 +2086,7 @@ while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRec
   const newRelevance = categoryRelevance.summarize(roundNewRows);
   const roundNewRelevantCount = newRelevance.relevant;
   const roundNewUnclassifiedCount = newRelevance.unknown;
-  consecutiveNoNewRounds = newRelevance.progress === 0 ? consecutiveNoNewRounds + 1 : 0;
+  consecutiveNoNewRounds = rawCounter.count===roundBaselineRaw ? consecutiveNoNewRounds+1 : 0;
   await appendEvent('ROUND_COMPLETE', {
     round, click: clicks, new_goods: roundNewCount, post_click_new_goods: postClickNewCount,
     new_relevant_goods: roundNewRelevantCount,
@@ -2108,7 +2133,7 @@ await writeSnapshot('RUNNING',{recovered_after_verification:true,query:QUERY,
   http_block_cleared_after_challenge:true,sort_confirmed:true,stable_sort_checks:3});
 continue collectionLifecycle;
 }
-finalStatus ||= products.size >= MAX_PRODUCTS ? 'KEYWORD_LIMIT_REACHED' : 'KEYWORD_COMPLETE';
+finalStatus ||= rawCounter.count >= MAX_PRODUCTS ? 'KEYWORD_LIMIT_REACHED' : 'KEYWORD_COMPLETE';
 if (finalStatus === 'KEYWORD_COMPLETE' || finalStatus === 'KEYWORD_LIMIT_REACHED') {
   const stopReason = finalStatus === 'KEYWORD_LIMIT_REACHED' ? 'CONFIGURED_PRODUCT_LIMIT_REACHED' : noMoreResultsConfirmed ? 'NO_MORE_RESULTS_CONFIRMED' : 'CONFIGURED_COMPLETE_ROUNDS_WITHOUT_NEW_RELEVANT_OR_UNCLASSIFIED_GOODS';
   await appendEvent('KEYWORD_COLLECTION_COMPLETE', { round, clicks, unique_goods: products.size, stop_reason: stopReason, query: QUERY });

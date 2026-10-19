@@ -105,7 +105,10 @@ export async function clickSalesSortControl({element, execute, click, sleep}) {
   // A second pass starts at the bottom of the previous list. Position the
   // actual semantic control before WebDriver hit-testing; never force a click.
   await execute(`const e=arguments[0];if(!e?.isConnected)throw new Error('SORT_CONTROL_DETACHED');
-    e.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});return true;`, [element]);
+    e.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+    const r=e.getBoundingClientRect?.();
+    if(r&&(r.top<0||r.bottom>innerHeight))window.scrollTo({top:0,behavior:'instant'});
+    return true;`, [element]);
   await sleep(250);
   return click(element);
 }

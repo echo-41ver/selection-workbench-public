@@ -153,7 +153,7 @@ def test_current_visual_versions_exclude_stale_success(tmp_path,monkeypatch):
 
 def test_temu_saturation_not_keyword_complete(tmp_path):
     put(tmp_path/'temu/supervisors/worker-01-new.json',{'current_query':'drill','assigned':2})
-    put(tmp_path/'temu/workers/worker-01-new/drill/progress.json',{'search_query':'drill','status':'SESSION_SATURATED','unique_goods':40})
+    put(tmp_path/'temu/workers/worker-01-new/drill/progress.json',{'search_query':'drill','status':'SESSION_SATURATED','unique_goods':40,'raw_collected_count':40})
     worker=dashboard._temu(tmp_path,{'temu':{'max_products_per_keyword':100}})['workers'][0]
     assert worker['completed']==40 and worker['remaining']==60
     assert worker['completed_keywords']==0 and worker['total_keywords']==2
@@ -162,7 +162,7 @@ def test_temu_saturation_not_keyword_complete(tmp_path):
 def test_broad_query_progress_uses_dispatched_triple_budget(tmp_path):
     put(tmp_path/'temu/supervisors/worker-01-new.json',{'current_query':'fuel transfer pump','assigned':2})
     put(tmp_path/'temu/workers/worker-01-new/fuel-transfer-pump/progress.json',
-        {'search_query':'fuel transfer pump','status':'RUNNING','unique_goods':304})
+        {'search_query':'fuel transfer pump','status':'RUNNING','unique_goods':304,'raw_collected_count':304})
     put(tmp_path/'temu/supervisors/assignments.json',{'jobs':[{'query':'fuel transfer pump','max_products':1200}]})
     worker=dashboard._temu(tmp_path,{'temu':{'max_products_per_keyword':400}})['workers'][0]
     assert worker['total']==1200 and worker['completed']==304
@@ -172,8 +172,8 @@ def test_broad_query_progress_uses_dispatched_triple_budget(tmp_path):
 def test_temu_finished_worker_keeps_visible_keyword_progress(tmp_path):
     put(tmp_path/'temu/supervisors/assignments.json',{'workers':[{'name':'worker-01-new','queries':['drill','cordless drill']}]})
     put(tmp_path/'temu/supervisors/worker-01-new.json',{'status':'WORKER_COMPLETE','current_query':None})
-    put(tmp_path/'temu/workers/worker-01-new/drill/progress.json',{'search_query':'drill','status':'KEYWORD_LIMIT_REACHED','unique_goods':100})
-    put(tmp_path/'temu/workers/worker-01-new/cordless-drill/progress.json',{'search_query':'cordless drill','status':'KEYWORD_LIMIT_REACHED','unique_goods':100})
+    put(tmp_path/'temu/workers/worker-01-new/drill/progress.json',{'search_query':'drill','status':'KEYWORD_LIMIT_REACHED','unique_goods':100,'raw_collected_count':100})
+    put(tmp_path/'temu/workers/worker-01-new/cordless-drill/progress.json',{'search_query':'cordless drill','status':'KEYWORD_LIMIT_REACHED','unique_goods':100,'raw_collected_count':100})
     worker=dashboard._temu(tmp_path,{'temu':{'max_products_per_keyword':100}})['workers'][0]
     assert worker['actual_count']==200
     assert (worker['completed'],worker['total'],worker['remaining'])==(2,2,0)

@@ -33,7 +33,7 @@ def test_only_stopped_invalid_session_is_repaired_and_rate_limited(tmp_path,monk
     assert not calls
     invalid[0]=True
     assert binding.repair_waiting(tmp_path,row,attempts,100)
-    assert calls==[(2,{'allow_rebind':True})]
+    assert calls==[(2,{'allow_rebind':True,'expected_task':tmp_path.name,'expected_profile':None})]
     assert not binding.repair_waiting(tmp_path,row,attempts,110)
     path.write_text(json.dumps({'status':'RUNNING'}))
     assert binding.repair_waiting(tmp_path,row,attempts,200) == 'BOUND_EXISTING_PROFILE'
@@ -50,3 +50,59 @@ def test_closed_profile_queues_only_its_lane_instead_of_reopening(tmp_path,monke
     monkeypatch.setattr(binding,'resume',lambda *args,**kwargs:(_ for _ in ()).throw(AssertionError('closed profile reopened')))
     assert binding.repair_waiting(tmp_path,{'name':'worker-02-new'},{},100)=='REPLACEMENT_QUEUED'
     assert calls==[[2]]
+
+
+def test_hung_control_driver_is_rebound_even_without_invalid_session_error(tmp_path,monkeypatch):
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    (folder/'worker-04-new.json').write_text(json.dumps({'status':'HUMAN_ACTION_REQUIRED',
+        'query_status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT'}))
+    monkeypatch.setattr(binding,'invalid_session',lambda row:False)
+    monkeypatch.setattr(binding,'driver_connected',lambda row:False)
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    calls=[];attempts={};row={'name':'worker-04-new'}
+    monkeypatch.setattr(binding,'resume',lambda *args,**kwargs:calls.append((args,kwargs)))
+    assert binding.repair_waiting(tmp_path,row,attempts,100)=='BOUND_EXISTING_PROFILE'
+    assert len(calls)==1
+    assert not binding.repair_waiting(tmp_path,row,attempts,110)
+
+
+def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_path,monkeypatch):
+    monkeypatch.setattr(binding.r,'ROOT',tmp_path)
+    manifest=tmp_path/'sessions.json';manifest.write_text('{"task_key":"task"}')
+    monkeypatch.setattr(binding.r,'SESSIONS',manifest)
+    base=tmp_path/'runs/task';folder=base/'temu/supervisors';folder.mkdir(parents=True)
+    output=base/'temu/workers/worker-04-new/portable-washer';output.mkdir(parents=True)
+    path=folder/'worker-04-new.json'
+    path.write_text(json.dumps({'status':'HUMAN_ACTION_REQUIRED','query_status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT',
+        'current_query':'portable washer','output':str(output),'current_sort':'sales'}))
+    (output/'progress.json').write_text(json.dumps({'status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT',
+        'raw_collected_count':40,'unique_goods':8,'raw_sampling':{'count':40}}))
+    checkpoint=output/'products.jsonl';checkpoint.write_text('saved');before=checkpoint.read_bytes()
+    monkeypatch.setattr(binding,'driver_connected',lambda row:True)
+    monkeypatch.setattr(binding,'resume',lambda *a,**k:(_ for _ in ()).throw(AssertionError('responsive driver must not restart')))
+    assert binding.repair_waiting(base,{'name':'worker-04-new','profile_id':'same-profile'},{},100)=='BOUND_EXISTING_PROFILE'
+    progress=json.loads((output/'progress.json').read_text())
+    assert progress['status']=='RESUMING' and progress['raw_collected_count']==40 and progress['unique_goods']==8
+    assert progress['raw_sampling']=={'count':40} and checkpoint.read_bytes()==before
+    assert json.loads(path.read_text())['current_sort']=='sales'
+
+
+def test_recovered_lane_restarts_only_current_task_without_a_live_collector(tmp_path,monkeypatch):
+    import selection,psutil
+    monkeypatch.setattr(binding.r,'ROOT',tmp_path)
+    monkeypatch.setattr(selection,'live_owner',lambda:{'category_key':'task'})
+    base=tmp_path/'runs/task';folder=base/'temu/supervisors';folder.mkdir(parents=True)
+    path=folder/'worker-04-new.json';path.write_text('{"status":"RESUMING"}')
+    row={'name':'worker-04-new'};calls=[]
+    monkeypatch.setattr(binding.subprocess,'Popen',lambda command,**kwargs:calls.append(command) or SimpleNamespace(pid=123))
+    lease=tmp_path/'runtime/worker-leases/worker-04-new.owner.json';lease.parent.mkdir(parents=True)
+    lease.write_text(json.dumps({'pid':123,'worker':row['name'],'purpose':'collector'}))
+    args=['python',str(tmp_path/'scripts/pipeline.py'),'collect-temu','--worker-name',row['name'],'--category',str(base/'category.json')]
+    monkeypatch.setattr(psutil,'Process',lambda _:SimpleNamespace(is_running=lambda:True,cmdline=lambda:args))
+    assert not binding.ensure_collector_resumed(base,row) and not calls
+    lease.unlink()
+    assert binding.ensure_collector_resumed(base,row) and len(calls)==1
+    assert '--worker-name' in calls[0] and calls[0][-1]==row['name']
+    assert not binding.ensure_collector_resumed(base,row)
+    path.write_text('{"status":"RESUMING"}');(base/'STOP').touch()
+    assert not binding.ensure_collector_resumed(base,row) and len(calls)==1

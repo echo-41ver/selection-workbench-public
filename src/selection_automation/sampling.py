@@ -5,6 +5,8 @@ from .merge_temu_snapshots import atomic_write
 
 
 def prepare(run, output, item, plan, mode, enabled=True):
+    # Sampling budgets are frontend positions; overlap cannot reduce user caps.
+    enabled=False
     path=Path(output)/'sampling_policy.json'
     if path.exists(): return path
     sources=set(item.get('source_asins',[]))

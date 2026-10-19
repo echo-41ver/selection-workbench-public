@@ -1,4 +1,4 @@
-// Only dispatch a normal pointer click after viewport hit-testing the control.
+// Only dispatch an element click after viewport hit-testing the control.
 export function controlClickPoint(element) {
   const label=e=>/^\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多)\s*$/i.test(e?.textContent||'');
   if(!element?.isConnected||!label(element))return {ready:false,reason:'STALE_CONTROL'};
@@ -16,7 +16,7 @@ export function controlClickPoint(element) {
     return {ready:false,reason:'NOT_INTERACTABLE'};
   const top=document.elementFromPoint(x,y);
   if(!top||!(top===target||target.contains(top)))return {ready:false,reason:'OBSCURED'};
-  return {ready:true,x,y};
+  return {ready:true,x,y,target};
 }
 
 export async function clickVisibleControl({element,execute,wd,sleep}) {
@@ -26,14 +26,12 @@ export async function clickVisibleControl({element,execute,wd,sleep}) {
   await sleep(200);
   const stable=await execute(`return (${controlClickPoint.toString()})(arguments[0]);`,[element]);
   if(!stable?.ready)throw new Error(`SEE_MORE_${stable?.reason||'UNAVAILABLE'}`);
-  try {
-    await wd('POST','/actions',{actions:[{type:'pointer',id:'temu-see-more-mouse',
-      parameters:{pointerType:'mouse'},actions:[
-        {type:'pointerMove',duration:160,origin:'viewport',x:stable.x,y:stable.y},
-        {type:'pause',duration:100},{type:'pointerDown',button:0},
-        {type:'pause',duration:100},{type:'pointerUp',button:0}]}]});
-  }finally{await wd('DELETE','/actions').catch(()=>{});}
-  return {method:'viewport_pointer',x:stable.x,y:stable.y};
+  const target=stable.target||element,id=target?.['element-6066-11e4-a52e-4f735466cecf'];
+  if(!id)throw new Error('SEE_MORE_STALE_CONTROL');
+  // The driver input-actions queue can stall across background browser windows.
+  // Click the freshly hit-tested DOM element, without another mouse-actions chain.
+  await wd('POST',`/element/${id}/click`,{},{commandLabel:'see_more_element_click'});
+  return {method:'element_click',x:stable.x,y:stable.y};
 }
 
 export function expansionObserved(before,after) {

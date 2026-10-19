@@ -1,3 +1,4 @@
+import {inspectHumanVerification} from '../scripts/temu_verification.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -8,7 +9,7 @@ import {inspectSearchReadiness} from '../scripts/temu_search_readiness.mjs';
 const source=fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs',import.meta.url),'utf8');
 const start=source.indexOf('const extractScript = `')+'const extractScript = '.length;
 const end=source.indexOf('`;',start)+1;
-const script=vm.runInNewContext(source.slice(start,end),{parseProductCardMetrics,inspectSearchReadiness});
+const script=vm.runInNewContext(source.slice(start,end),{parseProductCardMetrics,inspectSearchReadiness,inspectHumanVerification});
 
 function node({tag='DIV',text='',attrs={},children=[]}={}) {
   const item={tagName:tag,innerText:text,attributes:[],children,parentElement:null,

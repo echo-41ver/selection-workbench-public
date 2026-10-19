@@ -108,15 +108,15 @@ def _temu(base,category):
         status=_json(supervisor) or {};name=supervisor.stem;query=status.get('current_query')
         snapshots=[_json(p) for p in (base/'temu/workers'/name).glob('*/progress.json')]
         current=next((x for x in snapshots if x and x.get('search_query',x.get('query'))==query and (not status.get('current_sort') or (x.get('sales_sort') or {}).get('requested')==status['current_sort'])),None)
-        goods=current.get('unique_goods') if current else None
+        goods=current.get('raw_collected_count') if current else None
         complete=sum(1 for x in snapshots if x and x.get('status') in ('KEYWORD_LIMIT_REACHED','KEYWORD_COMPLETE'))
         total_keywords=len(assignments[name]) if name in assignments else status.get('assigned')
-        collected=sum(x.get('unique_goods',0) for x in snapshots if x and type(x.get('unique_goods')) is int)
+        collected=sum(x.get('raw_collected_count',0) for x in snapshots if x and type(x.get('raw_collected_count')) is int)
         dual=any(isinstance(item,dict) for item in assignments.get(name,[]))
         query_target=budgets.get(query) or target
         progress=(_bar(goods,query_target,f'当前排序目标 {query_target} 条；每词依次采销量和最近上架',False) if query else
                   _bar(complete,total_keywords,'已完成采集批次；每词包含销量和最近上架两批' if dual else '历史任务采集进度；此任务尚未包含最近上架轮次',False))
-        workers.append({'name':name,'current_query':query,'current_sort':status.get('current_sort'),**progress,'actual_count':collected,
+        workers.append({'name':name,'current_query':query,'current_sort':status.get('current_sort'),**progress,'actual_count':collected,'count_basis':'RAW_FRONTEND_CARDS',
                         'completed_keywords':complete,'total_keywords':total_keywords})
     return {'workers':workers,'scope_label':'每路当前关键词；关键词计划随Amazon采集变化','dynamic_total':True} if workers else None
 

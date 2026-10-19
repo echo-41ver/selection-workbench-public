@@ -1,3 +1,4 @@
+import {inspectHumanVerification} from '../scripts/temu_verification.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import {parseProductCardMetrics} from '../scripts/product_card_metrics.mjs';
 import {inspectSearchReadiness} from '../scripts/temu_search_readiness.mjs';
 const source=fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs',import.meta.url),'utf8');
 const block=source.slice(source.indexOf('const extractScript = `')+23,source.indexOf('\nconst installResponseCaptureScript'));
-const script=vm.runInNewContext('`'+block.slice(0,block.lastIndexOf('`;'))+'`',{parseProductCardMetrics,inspectSearchReadiness});
+const script=vm.runInNewContext('`'+block.slice(0,block.lastIndexOf('`;'))+'`',{parseProductCardMetrics,inspectSearchReadiness,inspectHumanVerification});
 function extract({text='Remote control\n$5.00',hidden=false,label='',long=false,offscreen=false,partial=false,labelDelay=false,loading=false,shortGap=false}={}){
   const img={currentSrc:'https://img.kwcdn.com/product.jpg',alt:'Remote control product',getAttribute:()=>null,attributes:[]};
   const card={innerText:long?'x'.repeat(10001):text,parentElement:null,attributes:[],getAttribute:k=>k==='aria-label'?label:null,

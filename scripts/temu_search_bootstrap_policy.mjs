@@ -1,13 +1,10 @@
+import {classifyPageState} from './temu_flower_recovery_policy.mjs';
 export function normalizeSearchText(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 export function isActiveVerificationState(state = {}) {
-  const safe = state && typeof state === 'object' ? state : {};
-  let pathname = '';
-  try { pathname = new URL(String(safe.url || '')).pathname; } catch {}
-  return /(?:bgn_verification|captcha|challenge|security[-_]?verification)/i.test(pathname)
-    || /security verification|verify (?:that )?you are human|complete the verification|安全验证|验证码|拖动滑块/i.test(String(safe.text || ''));
+  return classifyPageState(state&&typeof state==='object'?state:{})==='HUMAN_VERIFICATION';
 }
 
 export function decideSearchSubmission(currentValue, currentUrl, query) {

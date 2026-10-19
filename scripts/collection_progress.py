@@ -10,6 +10,9 @@ from empty_results_checkpoint import confirmed_empty_checkpoint
 _HISTORY = {}
 DONE = {'KEYWORD_COMPLETE', 'KEYWORD_LIMIT_REACHED'}
 
+def collected_count(row):
+    return row.get('raw_collected_count',row.get('unique_goods',0))
+
 
 def blocked_observation(row):
     status = str(row.get('status') or '')
@@ -43,7 +46,7 @@ def snapshots(base):
         row = read(path)
         query = row.get('search_query', row.get('query'))
         order = (row.get('sales_sort') or {}).get('requested', 'sales')
-        count = row.get('unique_goods')
+        count = collected_count(row)
         if not query or type(count) is not int or count < 0:
             continue
         key = (query, order)
@@ -56,10 +59,11 @@ def snapshots(base):
 def sample(rows):
     count = seconds = batches = 0
     for row in rows:
+        if 'raw_collected_count' not in row:continue
         if row.get('status') not in DONE:
             continue
         start, end = stamp(row.get('started_at')), stamp(row.get('updated_at'))
-        goods = row.get('unique_goods', 0)
+        goods = collected_count(row)
         if start is None or end is None or end - start < 10 or type(goods) is not int or goods <= 0:
             continue
         count += goods
@@ -121,7 +125,7 @@ def collection_total(base, category, *, rate_snapshot=None):
     blocked_passes = set()
     for key, target in planned.items():
         row = observed.get(key, {})
-        goods = row.get('unique_goods', 0)
+        goods = collected_count(row)
         actual += goods
         empty_done = key[0] in empty_queries and goods == 0 and not blocked_observation(row)
         done = row.get('status') in DONE or key in completed_passes
@@ -155,7 +159,8 @@ def collection_total(base, category, *, rate_snapshot=None):
     blocked = min(lanes, max(len(blocked_passes), blocked_states))
     capacity = min(max(0, lanes - blocked), max(0, len(planned) - finished - len(blocked_passes)))
     speed = (rate['per_lane_per_second'] or 0) * capacity
-    return {'completed': completed, 'total': total, 'planned_total': original, 'actual_count': actual,
+    basis='LEGACY_UNIQUE' if any('raw_collected_count' not in row for row in observed.values()) else 'RAW_FRONTEND_CARDS'
+    return {'completed': completed, 'total': total, 'planned_total': original, 'actual_count': actual,'count_basis':basis,
             'remaining': remaining,
             'all_passes_complete':finished==len(planned),
             'percent':100 if finished==len(planned) else min(99.9,round(100 * completed / total, 1)) if total else 0,

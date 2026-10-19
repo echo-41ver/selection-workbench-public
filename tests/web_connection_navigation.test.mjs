@@ -9,6 +9,19 @@ function sandbox(value){const context=vm.createContext(value);vm.runInContext(he
 
 const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 
+test('preparation progress belongs to creation and does not appear as a running task',()=>{
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);};
+ const context=vm.createContext({$:get});
+ vm.runInContext(html.slice(html.indexOf('function preparationOnly('),html.indexOf('function render(data)')),context);
+ context.data={console_busy:true,generation:{message:'正在采集 Amazon 商品标题'}};
+ vm.runInContext('renderPreparationProgress(data)',context);
+ assert.equal(get('create-progress').hidden,false);assert.match(get('create-progress').textContent,/Amazon/);
+ assert.equal(get('overview').hidden,true);assert.equal(get('run-overview').hidden,true);
+ context.data={category_key:'started',active:true,phase:'采集中'};
+ vm.runInContext('renderPreparationProgress(data)',context);
+ assert.equal(get('create-progress').hidden,true);assert.equal(get('overview').hidden,false);
+});
+
 test('history timeout releases refresh lock and allows the next request',async()=>{
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{hidden:true,replaceChildren(){this.textContent='';}});return nodes.get(id);};
  let calls=0;const timers=[];
@@ -83,18 +96,17 @@ test('compact worker surfaces its round, state heartbeat time, and deduplicated 
  vm.runInContext(code,context);
  const card=element();card.className='progress-card';
  context.card=card;
- vm.runInContext(`compactWorker(card,{unique_goods:17,round:4,status_updated_at:1791596096,'未归类商品数':23,'明确排除商品数':2},2,false)`,context);
+ vm.runInContext(`compactWorker(card,{raw_collected_count:400,unique_goods:17,round:4,status_updated_at:1791596096},2,false)`,context);
  const activity=card.children.find(child=>child.className==='small worker-activity');
  assert.match(activity.textContent,/第 4 轮/);
  assert.match(activity.textContent,/状态更新 \d{2}:\d{2}:\d{2}/);
- assert.match(activity.textContent,/当前关键词 \/ 排序已确认相关的去重商品/);
- const breakdown=card.children.find(node=>node.textContent?.includes('另有未归类'));
- assert.match(breakdown.textContent,/未归类 23 件.*明确排除 2 件/);
- assert.match(breakdown.textContent,/资料完整的商品仍进入后续筛选/);
+ assert.match(activity.textContent,/当前关键词 \/ 排序采集条数（去重前）/);
+ assert.equal(card.children.find(node=>node.className==='lane-count').textContent,'400 ');
  const completedCard=element();completedCard.className='progress-card';context.card=completedCard;
  vm.runInContext(`compactWorker(card,{unique_goods:7159,round:4,status_updated_at:1791596096,'采集状态':'WORKER_COMPLETE'},2,false)`,context);
  const completedActivity=completedCard.children.find(child=>child.className==='small worker-activity');
- assert.match(completedActivity.textContent,/已完成关键词 \/ 排序累计商品/);
+ assert.match(completedActivity.textContent,/采集条数（去重前）/);
+ assert.equal(completedCard.children.find(node=>node.className==='lane-count').textContent,'待统计 ');
 });
 
 test('changing the address fragment switches the visible panel without resetting edits',()=>{

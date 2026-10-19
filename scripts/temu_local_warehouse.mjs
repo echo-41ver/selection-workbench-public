@@ -1,4 +1,20 @@
 import {isTargetSearch} from './temu_sales_sort.mjs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+export async function loadLocalWarehouseEvidence(directory,query){
+  const valid=value=>value?.state==='UI_CONFIRMED'&&value.query===query&&typeof value.filter_item==='string'&&Boolean(value.filter_item);
+  for(const name of ['warehouse_filter.json','progress.json']){
+    try{const saved=JSON.parse(await fs.readFile(path.join(directory,name),'utf8')),value=saved.local_warehouse_filter||saved;
+      if(valid(value))return value;}catch(error){if(error.code!=='ENOENT'&&!(error instanceof SyntaxError))throw error;}
+  }
+  // Older collectors only persisted this proof in their append-only events.
+  const lines=await fs.readFile(path.join(directory,'events.jsonl'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
+  for(const line of lines.split(/\r?\n/).reverse()){
+    try{const value=JSON.parse(line);if(value.type==='LOCAL_WAREHOUSE_FILTER_RESULT'&&valid(value))return value;}catch{}
+  }
+  return {state:'PENDING'};
+}
 
 /** Accept only an explicit warehouse badge in this product's visible card. */
 export function hasLocalWarehouseLabel(row) {
@@ -58,8 +74,9 @@ export const confirmsLocalWarehouse=(state,query,evidence={})=>isTargetSearch(st
     &&evidence.filter_item&&(filterItems(state)||'').split('|').includes(evidence.filter_item)))
   &&!state.ambiguous&&!state.loading&&!state.dialog_open&&state.goods_ids?.length>0;
 
-export async function selectLocalWarehouse({inspect,click,guard,sleep,query,maxChecks=60,onAction=async()=>{},onRetry=async()=>{}}) {
-  const attempts={option:0,menu:0,apply:0};let stable=0,previous=null,nextAction=0,checkedFilters=null;
+export async function selectLocalWarehouse({inspect,click,guard,sleep,query,initialEvidence={},maxChecks=60,onAction=async()=>{},onRetry=async()=>{}}) {
+  const attempts={option:0,menu:0,apply:0};let stable=0,previous=null,nextAction=0;
+  let checkedFilters=initialEvidence.state==='UI_CONFIRMED'&&initialEvidence.query===query?initialEvidence.filter_item:null;
   for(let check=0;check<maxChecks;check++) {
     await guard();
     let state;try{state=await inspect();}catch{await sleep(500);continue;}

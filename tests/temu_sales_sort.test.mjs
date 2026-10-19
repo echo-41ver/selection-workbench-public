@@ -9,6 +9,15 @@ import vm from 'node:vm';
 
 const url='https://www.temu.com/search_result.html?search_key=power%20drill';
 const selected={url,selected_label:'Top sales',selected_by:'combobox_value',goods_ids:['12','34'],loading:false};
+
+test('sticky controls left above the viewport return to the page header before native click',async()=>{
+ let top=-56;const calls=[];
+ const element={isConnected:true,scrollIntoView(){calls.push('position');},getBoundingClientRect:()=>({top,bottom:top+36})};
+ await clickSalesSortControl({element,sleep:async()=>{},execute:async(script,args)=>
+   vm.runInNewContext(`(function(){${script}}).apply(null,args)`,{args,innerHeight:773,window:{scrollTo(){top=150;calls.push('header');}}}),
+   click:async()=>{assert.equal(top,150);calls.push('click');}});
+ assert.deepEqual(calls,['position','header','click']);
+});
 const run=(inspect, click=async()=>{}, guard=async()=>{}) => selectSalesSort({
   inspect,click,guard,query:'power drill',sleep:async()=>{},maxChecks:8});
 
