@@ -48,3 +48,12 @@ test('Chinese names appear first and extra conditions stay selectable in a folde
  const input=get('match-text-more-rows').children[0].children[0].children[0];input.checked=true;input.handlers.change();
  assert.equal(vm.runInContext('criteriaSelection.has("extra")',context),true);
 });
+test('image coverage is separate from per-feature observations and suggestions are not observations',()=>{
+ const {get,context}=setup();const value=structuredClone(catalog);
+ value.image_review={completed_images:100,total_images:100,reviewed_products:100,total_products:100,state:'ready'};
+ value.items[1].label='颜色';value.items[1].observations=[{asin:'A1',value:'蓝色'}];
+ context.data={draft:{id:'draft',match_criteria:value}};vm.runInContext('renderMatchCriteria(data)',context);
+ assert.match(get('match-image-coverage').textContent,/100 \/ 100 张/);
+ const cell=get('match-visual-rows').children[0].children[2];
+ assert.equal(cell.children[0].children[0].textContent,'1 件商品的外观记录 · 展开查看');
+});

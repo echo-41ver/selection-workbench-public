@@ -20,6 +20,13 @@ def test_unchanged_text_no_model_and_edited_prompt_threshold_apply():
     assert cat['stage2']['candidate_threshold']!=77
 
 
+def test_accepting_unchanged_prompt_does_not_append_a_duplicate_prompt():
+    cat=fixture();edit=draft_view(cat,'draft')
+    out=edit_rules(cat,edit,compile_model=lambda *a,**k:pytest.fail('unchanged rules must not call model'))
+    assert 'prompt_override' not in out['stage3']
+    assert draft_view(out,'next')['stage3_text']==edit['stage3_text']
+
+
 def test_edited_first_layer_compiled_and_original_saved():
     cat=fixture();edit=draft_view(cat,'draft');edit['stage1_text']='新的人工文字规则'
     attrs=[{'name':'identity','hard_conflict':True,'values':{'A':['alpha'],'B':['beta']}}]

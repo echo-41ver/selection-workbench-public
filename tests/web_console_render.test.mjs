@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
+const helperHtml=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
+function sandbox(value){const context=vm.createContext(value);vm.runInContext(helperHtml.slice(helperHtml.indexOf('function stage3Heartbeat('),helperHtml.indexOf('function runtimeStage3(')),context);return context;}
+
+
 test('history downloads show their actual publication time and filename',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function historyExcelLinks('),html.indexOf('async function openHistory('));
  const createElement=tag=>({tag,children:[],style:{},append(child){this.children.push(child);}});
- const context=vm.createContext({document:{createElement},encodeURIComponent,Date});
+ const context=sandbox({document:{createElement},encodeURIComponent,Date});
  vm.runInContext(code,context);
  context.files={layer123:{available:true,filename:'刀具_查看快照_20261012_121518.xlsx',updated_at:1791778518}};
  const links=vm.runInContext("historyExcelLinks('knife_task',files)",context);
@@ -24,7 +28,7 @@ test('final controls keep market retry enabled while collection is active',()=>{
   const line=html.split('\n').find(s=>s.trim().startsWith("$('refresh-market').disabled=busy||!statusFresh"));
   assert.ok(line);
   const button={disabled:true};
-  const context=vm.createContext({$:()=>button,busy:false,statusFresh:true,active:true,data:{active:true,category_key:'fixture',market_busy:false,market_status:{status:'ACTION_REQUIRED'}}});
+  const context=sandbox({$:()=>button,busy:false,statusFresh:true,active:true,data:{active:true,category_key:'fixture',market_busy:false,market_status:{status:'ACTION_REQUIRED'}}});
   vm.runInContext(line,context);assert.equal(button.disabled,false);
   context.data.release_update={pending:true};vm.runInContext(line,context);assert.equal(button.disabled,false);
   context.data.market_busy=true;vm.runInContext(line,context);assert.equal(button.disabled,true);
@@ -36,7 +40,7 @@ test('saved market authorization is retried automatically, with cooldown and exp
  const code=html.slice(html.indexOf('let marketLoginRetry='),html.indexOf("window.addEventListener('focus',()=>continueMarketLogin(true))"));
  let now=100000,calls=0;
  const data={category_key:'fixture',market_busy:false,release_update:{pending:true},market_status:{status:'ACTION_REQUIRED',action:'AUTH_REQUIRED',jumpUrl:'https://openapi.geekbi.com/agent/auth/login',updated_at:new Date(0).toISOString(),expiresIn:600}};
- const context=vm.createContext({lastStatus:data,busy:false,statusFresh:true,Date:{now:()=>now,parse:Date.parse},Number,action:async endpoint=>{assert.equal(endpoint,'/api/refresh-market');calls++;}});
+ const context=sandbox({lastStatus:data,busy:false,statusFresh:true,Date:{now:()=>now,parse:Date.parse},Number,action:async endpoint=>{assert.equal(endpoint,'/api/refresh-market');calls++;}});
  vm.runInContext(code,context);
  await vm.runInContext('continueMarketLogin()',context);assert.equal(calls,1);
  await vm.runInContext('continueMarketLogin(true)',context);assert.equal(calls,1);
@@ -53,7 +57,7 @@ test('overall progress shows weighted count, hours and minutes, and paused lanes
   const code=html.slice(html.indexOf('function renderCollectionTotal(data)'),html.indexOf('function render(data)'));
   const nodes=new Map();
   const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
-  const context=vm.createContext({$:get,Number,Math});
+  const context=sandbox({$:get,Number,Math});
   vm.runInContext(code,context);
   context.data={active:true,details:{'阶段':{temu:{overall:{completed:1200,total:4800,percent:25,keyword_count:4,finished_passes:2,total_passes:8,remaining:3600,eta_seconds:7260,source:'history',history_tasks:3,rate_per_hour:1785,blocked_lanes:1}}}}};
   vm.runInContext('renderCollectionTotal(data)',context);
@@ -101,7 +105,7 @@ test('collection status polls keep hidden controls attached across repeated rend
     if(id)nodes.set(id,n);return n;
   }
   for(const match of html.matchAll(/id="([^"]+)"/g))node(match[1]);
-  const context=vm.createContext({
+  const context=sandbox({
     $:id=>nodes.get(id)?.connected?nodes.get(id):null,
     document:{createElement:()=>node()},busy:false,lastStatus:null,draftId:'draft',keywordReady:true,
     renderFrontendMarket(){},renderBusiness(){},renderDraft(){},renderPlainApplication(){},cards:[],addProgressCard(title,row,wide,n){if(n)context.cards.push(n);},sectionLabel(){},workerCardRow(actual){return actual;},
@@ -159,7 +163,7 @@ test('current lane evidence clears stale alerts and still displays real verifica
   const code=html.slice(html.indexOf('const statusLabels='),html.indexOf('function sectionLabel('));
   const modules={children:[],append(n){this.children.push(n);}};
   const node=()=>({children:[],style:{},dataset:{},append(...n){this.children.push(...n);},setAttribute(){},addEventListener(){}});
-  const context=vm.createContext({document:{createElement:node},$:()=>modules,
+  const context=sandbox({document:{createElement:node},$:()=>modules,
     redFlags:/captcha|verification|human_action|blocked|failed|error|验证码|人工|阻断|失败/i,
     busy:false,lastStatus:{active:true,category_key:'fixture'},rotationSubmitting:new Set()});
   context.statusFresh=true;
@@ -192,7 +196,7 @@ test('third layer starts during collection and displays live queue and stop cont
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const a=html.indexOf('function stage3Button(data)'),b=html.indexOf('\n}',a)+2;
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,Math,Number,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined,stage3ResumeRequired:()=>false});
+ const context=sandbox({$:get,statusFresh:true,busy:false,Math,Number,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined,stage3ResumeRequired:()=>false});
  vm.runInContext(html.slice(a,b),context);
  context.data={active:true,category_key:'task',scope:{execution_mode:'full'},stage3_control:{can_start:true,running:false,progress:{total:100,completed:40,pending:60,percent:40,rate_per_hour:60,eta_seconds:3600,rate_source:'history'}}};
  vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,false);assert.match(get('stage3-count').textContent,/100/);assert.equal(get('stage3-progress-fill').style.width,'40%');assert.match(get('stage3-speed').textContent,/1 小时 0 分钟/);
@@ -205,7 +209,7 @@ test('combined paid and Codex completion shows full progress without stale ETA',
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
+ const context=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);
  context.data={category_key:'fixture',stage3_control:{can_start:false,progress:{total:10855,completed:10855,api_completed:5976,codex_completed:4879,pending:0,pending_after_codex:0,eta_seconds:1616}}};
  vm.runInContext('stage3Button(data)',context);
@@ -221,7 +225,7 @@ test('cold candidate progress never unlocks paid action while collection is acti
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
+ const context=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);context.data={active:true,category_key:'fixture',stage3_control:{can_start:true,progress:{counting:true}}};
  vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,true);
  assert.match(get('stage3-phase').textContent,/正在核对/);
@@ -232,7 +236,7 @@ test('old authorized retry success is pending free review instead of current API
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});vm.runInContext(code,context);
+ const context=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});vm.runInContext(code,context);
  context.data={category_key:'fixture',stage3_control:{can_start:false,progress:{total:1,completed:0,api_completed:0,pending:1,pending_after_codex:1,runnable_pending:0,billing_retry_consumed_pairs:1}}};
  vm.runInContext('stage3Button(data)',context);
  assert.match(get('stage3-count').textContent,/已处理 0 对.*待处理 1 对/);
@@ -245,7 +249,7 @@ test('changed candidate input retains dated completion snapshot without claiming
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
- const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});vm.runInContext(code,context);
+ const context=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});vm.runInContext(code,context);
  for(const flag of ['refreshing','current_inputs_pending']){
   context.data={category_key:'fixture',stage3_control:{can_start:true,progress:{total:10855,completed:10855,api_completed:5976,codex_completed:4879,pending_after_codex:0,eta_seconds:0,updated_at:1791566063,[flag]:true}}};
   vm.runInContext('stage3Button(data)',context);

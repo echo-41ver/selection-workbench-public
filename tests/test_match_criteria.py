@@ -172,7 +172,7 @@ def test_extractor_sends_only_actual_images_once_and_reuses_complete_result(cate
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
     from extract_match_criteria import extract
     calls=[]
-    def ask(prompt,**kwargs):calls.append(kwargs);return {'items':[]}
+    def ask(prompt,**kwargs):calls.append(kwargs);return {'items':[],'reviewed_asins':['A1','A2']}
     receipt=tmp_path/'receipt.json'
     result=extract(deepcopy(category),products,ask,receipt)
     assert len(calls)==1 and len(calls[0]['images'])==2 and calls[0]['retry_truncated'] is False

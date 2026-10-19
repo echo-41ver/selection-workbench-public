@@ -6,7 +6,7 @@ const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 const code=html.slice(html.indexOf('let stage3SettingsDirty='),html.indexOf('function businessSettings'));
 
 test('measured defaults follow the provider while manual edits defeat late responses',async()=>{
- const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id);};
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false,dataset:{},children:[],replaceChildren(){this.children=[];},append(...items){this.children.push(...items);}});return nodes.get(id);};
  let resolve;const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:get,lastStatus:null,fetch:()=>new Promise(r=>{resolve=r;})});vm.runInContext(code,context);
  get('stage3-mode').value='multimodal_api';get('stage3-confidence').value='90';
  const pending=vm.runInContext('refreshConcurrencyDefault()',context);
@@ -19,7 +19,7 @@ test('measured defaults follow the provider while manual edits defeat late respo
 });
 
 test('a delayed default for the previous provider cannot replace the new provider',async()=>{
- const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id);};
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false,dataset:{},children:[],replaceChildren(){this.children=[];},append(...items){this.children.push(...items);}});return nodes.get(id);};
  const replies=[];const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:get,fetch:()=>new Promise(r=>replies.push(r))});vm.runInContext(code,context);
  get('stage3-mode').value='liquid_d1';get('stage3-confidence').value='90';const first=vm.runInContext('refreshConcurrencyDefault()',context);
  get('stage3-mode').value='local_agent';const second=vm.runInContext('refreshConcurrencyDefault()',context);
@@ -29,7 +29,7 @@ test('a delayed default for the previous provider cannot replace the new provide
 });
 
 test('manual concurrency preserves the entered value across Agent and API modes without an HTML ceiling',()=>{
- const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id);};
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false,dataset:{},children:[],replaceChildren(){this.children=[];},append(...items){this.children.push(...items);}});return nodes.get(id);};
  const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:get,lastStatus:null});vm.runInContext(code,context);
  get('stage3-workers').value='1024';get('stage3-confidence').value='90';
  for(const mode of ['local_agent','liquid_d1','multimodal_api','local_model']){
@@ -41,7 +41,7 @@ test('manual concurrency preserves the entered value across Agent and API modes 
 
 test('four provider modes bind endpoint model protocol and concurrency without retaining key',()=>{
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',hidden:false,replaceChildren(){},append(){}});return nodes.get(id);};
- const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:get,lastStatus:null,fetch:async()=>({ok:true,json:async()=>({agents:[]})})});vm.runInContext(code,context);
+ const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:get,document:{createElement:()=>({})},lastStatus:null,fetch:async()=>({ok:true,json:async()=>({agents:[]})})});vm.runInContext(code,context);
  const cases=[['liquid_d1','https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],
  ['multimodal_api','https://api.deepseek.com','deepseek-flash','responses',4],
  ['local_model','http://127.0.0.1:11434/v1','','chat_completions',2],['local_agent','','gpt-6.1-sol','responses',6]];
@@ -51,7 +51,7 @@ test('four provider modes bind endpoint model protocol and concurrency without r
 
 test('third-layer click submits a dedicated key and clears the input',()=>{
  const nodes={'start-stage3':{addEventListener:(_event,cb)=>context.click=cb},'stage3-api-key':{value:'TEST_ONLY_VISUAL_KEY'}};
- let submitted;const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:id=>nodes[id],stage3ProviderSettings:()=>({mode:'liquid_d1'}),stage3SettingsDirty:true,action:(path,body)=>submitted={path,body}});
+ let submitted;const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:id=>nodes[id],stage3ProviderSettings:()=>({mode:'liquid_d1'}),stage3SettingsDirty:true,apiReasoningReady:()=>true,action:(path,body)=>submitted={path,body}});
  vm.runInContext(html.split('\n').find(x=>x.startsWith("$('start-stage3').addEventListener")),context);context.click();
  assert.equal(submitted.path,'/api/start-stage3');assert.equal(submitted.body.api_key,'TEST_ONLY_VISUAL_KEY');assert.equal(submitted.body.provider.mode,'liquid_d1');assert.equal(nodes['stage3-api-key'].value,'');
 });

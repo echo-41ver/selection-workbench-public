@@ -57,6 +57,10 @@ def test_independent_text_attribute_does_not_require_a_same_named_image_feature(
     category=generator.generate_category('电钻',3,40,bestsellers_url=evidence['url'])
     assert category['stage1']['attributes'][0]['name']=='power_supply' and len(calls)==1
     assert category['stage3']['identity_policy']['features'][0]['id']=='power'
+    from rule_editor import draft_view,edit_rules
+    out=edit_rules(category,draft_view(category,'draft'),compile_model=lambda *a,**k:pytest.fail('unchanged rules'))
+    assert out['stage1']['attributes'][0]['name']=='power_supply'
+    assert 'prompt_override' not in out['stage3']
 
 
 def test_real_monitor_response_is_compiled_and_reused_without_another_paid_request(tmp_path,monkeypatch):

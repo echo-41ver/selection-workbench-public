@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
+const helperHtml=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
+function sandbox(value){const context=vm.createContext(value);vm.runInContext(helperHtml.slice(helperHtml.indexOf('function stage3Heartbeat('),helperHtml.indexOf('function runtimeStage3(')),context);return context;}
+
+
 const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 const code=html.slice(html.indexOf('function codexReviewPanel(data)'),html.indexOf('const excelOpening='));
 function render(imported,target,allComplete=false,excelCurrent=false){
@@ -11,7 +15,7 @@ function render(imported,target,allComplete=false,excelCurrent=false){
   if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(name,value){this[name]=value;}});
   return nodes.get(id);
  };
- const ctx=vm.createContext({$:get});
+ const ctx=sandbox({$:get});
  vm.runInContext(code,ctx);
  ctx.data={stage3_control:{progress:{codex_completed:5700,codex_different:5500,codex_unknown:199,codex_same:1},
   codex_review:{available:true,imported,target,expected_tasks:3,all_reviews_complete:allComplete,excel_current:excelCurrent}}};
@@ -39,7 +43,7 @@ test('API historical speed is not shown as the ETA for active free review',()=>{
   if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(){},replaceChildren(){}});
   return nodes.get(id);
  };
- const ctx=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel(){},renderStage3Settings(){},stage3ProviderSettings:()=>undefined});
+ const ctx=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel(){},renderStage3Settings(){},stage3ProviderSettings:()=>undefined});
  const buttonCode=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
  vm.runInContext(buttonCode,ctx);
  ctx.data={category_key:'task',stage3_control:{running:false,codex_review:{running:true},

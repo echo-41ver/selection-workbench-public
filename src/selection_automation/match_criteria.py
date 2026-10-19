@@ -33,7 +33,6 @@ def image_sources(snapshot):
             except ValueError:continue
             if parsed.scheme=='https' and parsed.hostname in {'m.media-amazon.com','images-na.ssl-images-amazon.com','images-eu.ssl-images-amazon.com'} and not parsed.username and not parsed.password and not port:
                 result.append({'asin':row['asin'],'url':url});break
-        if len(result)==3:break
     return result
 
 
@@ -205,6 +204,11 @@ def comparison_prompt(category,native=False):
     catalog=category.get('match_criteria') or {}
     on=[{'id':item['id'],'label':item['label'],'rule':item['rule'],'kind':item['kind']} for item in selected(category,'visual')]
     off=[{'id':item['id'],'label':item['label']} for item in catalog.get('items',[]) if item['kind']=='text' or not item.get('selected')]
+    if catalog.get('visual_mode')=='auto':
+        return ('\n自动判断同款、类似款或不同款。依据主体基础设计和本品类关键外观，忽略拍摄背景、角度和光照。'
+                '未勾选不代表忽略该特征，由模型结合整体判断；已勾选是额外的强制一致要求。'
+                '文字参数由第一层处理，不猜精确尺寸、性能、成分。'
+                '\n额外强制一致条件：'+json.dumps(on,ensure_ascii=False))
     return ('\nUSER_MATCH_CONDITIONS_V1：本次明确采用分层勾选边界，优先于上方通用品类的默认身份/变体规则。'
         '文字条件已由第一层仅排除双边明确冲突；第三层不补齐缺失文字规格，也不凭图片猜精确尺寸、性能或材料成分。以下已勾选均为第三层图片条件。'
         '勾选项必须逐项验证双方同一实际属性；未勾选项的差异不构成否决，也不扣身份分。'
@@ -247,6 +251,11 @@ def text_gate(category,left,right):
     for condition in selected(category,'text'):
         attribute=original.get(condition.get('feature_id') or condition['id'])
         observations=[proof['value'] for proof in condition.get('observations',[]) if not proof.get('image')]
+        # A model may reuse an authored ID for a real Amazon field (for
+        # example display_type: product category versus LCD/OLED). Once this
+        # checkbox is grounded in actual specifications, compare that field's
+        # observed values rather than the unrelated authoring dictionary.
+        if observations and condition.get('source_labels'):attribute=None
         observed_measures={key for value in observations for key in measures(value)}
         numeric=next(iter(observed_measures)) if len(observed_measures)==1 else None
         if attribute is None:
@@ -288,6 +297,21 @@ def score(category,facts,result):
         elif row['relation']=='DIFFERENT':hard.append(condition['id'])
     identity=facts.get('identity') or {}
     if identity:validate_identity(identity)
+    if category['match_criteria'].get('visual_mode')=='auto':
+        confidence=facts.get('overall_confidence',0);design=identity.get('design_comparison') or {}
+        verdict=identity.get('verdict')
+        if explicitly_reversed_sources(facts):state,reason='待复核','双边图片来源矛盾'
+        elif confidence<.55:state,reason='待补充证据','关键主体图片无法辨认，需自动补充图片核验'
+        elif hard:state,reason='不同款','额外强制一致要求明确不符：'+'、'.join(hard)
+        elif unknown:state,reason='待补充证据','额外强制一致要求尚缺关键图片证据'
+        elif not backed(design) or verdict not in {'SAME','SIMILAR','DIFFERENT'} or design.get('relation')!=verdict:
+            state,reason='待补充证据','关键整体款式证据尚未核实，需自动补充图片核验'
+        else:state,reason={'SAME':'确认同款','SIMILAR':'相似款','DIFFERENT':'不同款'}[verdict],identity.get('reason','')
+        return {**result,'state':state,'reason':reason,'hard_conflicts':hard,'uncertainties':unknown,
+                'condition_comparisons':rows,'ignored_condition_differences':[],'identity':identity,
+                'match_criteria_revision':category['match_criteria']['revision'],'decision_policy':'automatic-visual-v1',
+                'effective_confidence':confidence,'variant_differences':[],
+                'normalization_notes':['模型自动判断整体款式；勾选项仅添加强制一致要求']}
     differences=identity.get('differences') or []
     unchecked={item['id'] for item in category['match_criteria']['items'] if item['kind']=='text' or not item['selected']}
     ignored_labels={item['label'] for item in category['match_criteria']['items'] if item['id'] in unchecked}
@@ -317,6 +341,7 @@ def score(category,facts,result):
 def decision_conditions_score(category,facts,result):
     import math
     conditions=selected(category,'visual');answers=facts['decision_api'].get('conditions') or {}
+    if category['match_criteria'].get('visual_mode')=='auto' and not conditions:return result
     threshold=category['stage3'].get('provider',{}).get('confidence',.9)
     hard=[];unknown=[];comparisons={}
     for condition in conditions:

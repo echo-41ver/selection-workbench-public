@@ -70,7 +70,8 @@ def edit_rules(category, edits, *, compile_model=model_json):
     result['human_stage1_text']=edits['stage1_text']
     from selection_automation.stage2_authoring import manual_threshold
     manual_threshold(result['stage2'],threshold)
-    result['stage3']['prompt_override']=edits['stage3_text']
+    if edits['stage3_text']!=original['stage3_text']:
+        result['stage3']['prompt_override']=edits['stage3_text']
     version=hashlib.sha256(json.dumps({k:v for k,v in edits.items() if k not in ('commercial','draft_id','worker_count')},sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:16]
     result['stage1']['rule_version']='human-reviewed-'+version
     result['stage3']['prompt_version']='human-reviewed-'+version
@@ -80,7 +81,8 @@ def edit_rules(category, edits, *, compile_model=model_json):
         from selection_automation.identity_policy import compile_policy, checked_policy
         policy = checked_policy(result, required=True)
         allowed = {f['id']: f['role'] for f in policy['features']}
-        if any(a.get('hard_conflict') and allowed[a['name']] != 'identity' for a in result['stage1']['attributes']):
+        if (result.get('rule_authoring_format')!='compact-category-v1' and
+                any(a.get('hard_conflict') and allowed[a['name']] != 'identity' for a in result['stage1']['attributes'])):
             raise ValueError('该属性在统一同款边界中允许变化或仅供说明，不能单独改成文字硬排除；请先调整品类边界')
         # Weights remain auxiliary; changes cannot make a context/variant module
         # become a required identity module via an edited score minimum.

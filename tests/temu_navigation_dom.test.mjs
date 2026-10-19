@@ -11,7 +11,7 @@ function embedded(name) {
   const start = source.indexOf(`const ${name} = \``) + `const ${name} = `.length;
   const end = source.indexOf('`;', start) + 1;
   assert.ok(start > name.length && end > start);
-  return vm.runInNewContext(source.slice(start, end),{parseProductCardMetrics});
+  return vm.runInNewContext(source.slice(start, end),{parseProductCardMetrics,inspectSearchReadiness,inspectSearchEnd});
 }
 function context(root = null) {
   return vm.createContext({

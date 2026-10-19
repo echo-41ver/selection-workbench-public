@@ -33,3 +33,15 @@ def test_eight_core_fields_and_all_selected_fields_stay_visible_without_discardi
     assert result['core_text_count']==8 and result['more_text_count']==4
     assert next(r for r in result['items'] if r['id']=='10')['display_group']=='core'
     assert len(result['items'])==12 and all(r.get('label_zh') for r in result['items'])
+
+
+def test_actual_parameter_values_win_over_a_reused_authoring_name():
+    from selection_automation.match_criteria import text_gate,attach
+    category={'stage1':{'attributes':[{'name':'display_type','hard_conflict':True,
+        'values':{'monitor':['monitor'],'television':['television']}}]},'stage3':{'rule_version':'test'}}
+    snapshot={'records':[{'asin':asin,'specifications':[{'label':'Display Type','value':value}]}
+                         for asin,value in [('A','LCD'),('B','OLED')]]}
+    catalog=seed(category,snapshot);assert len(catalog['items'])==1
+    attach(category,catalog)
+    assert text_gate(category,'LCD monitor','OLED monitor')['excluded']
+    assert not text_gate(category,'LCD monitor','monitor')['excluded']

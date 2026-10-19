@@ -24,10 +24,10 @@ test('market cards name the all-collected denominator and recent subset',()=>{
  assert.doesNotMatch(content,/已识别自然商品|自然商品不足|单独统计为/);
 });
 
-test('selection summary counts both final same and similar, excluding equality',()=>{
+test('live progress retains all products and names the Excel same-plus-similar selection threshold',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function renderSelectionSummary('),html.indexOf('function businessSettings('));
- function node(){return {children:[],textContent:'',append(...items){this.children.push(...items);},replaceChildren(){this.children=[];}};}
+ function node(){return {children:[],dataset:{},textContent:'',append(...items){this.children.push(...items);},replaceChildren(){this.children=[];}};}
  const box=node();
  const context=vm.createContext({document:{createElement:node},$:()=>box});
  vm.runInContext(code,context);
@@ -36,9 +36,10 @@ test('selection summary counts both final same and similar, excluding equality',
   {asin:'SELECT',title:'selected',match:{confirmed:1,similar:3,pending:0}}]};
  context.box=box;vm.runInContext('renderSelectionSummary(report,box)',context);
  const content=element=>element.textContent+element.children.map(content).join(' ');
- assert.match(content(box),/合计严格小于 5：1 件/);
- assert.match(content(box),/SELECT.*同款 1.*类似款 3.*合计 4/);
- assert.doesNotMatch(content(box),/EXCLUDE/);
+ assert.match(content(box),/共 2 件 Amazon 商品/);
+ assert.match(content(box),/Excel 选品结论只保留同款＋类似款小于 5/);
+ assert.match(content(box),/EXCLUDE.*1 4/);
+ assert.match(content(box),/SELECT.*1 3/);
 });
 
 test('completed acquisition shows completion while the analysis supervisor remains active',()=>{

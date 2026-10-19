@@ -238,6 +238,14 @@ class Console:
         self.phase='尚未启动'; self.key=selection.read(root/'runtime/web-console/state.json',{}).get('category_key'); self.cancel=threading.Event(); self.progress_file=None; self.draft=None; self.draft_path=None; self.draft_key=None; self.draft_used=False; self.draft_amazon_path=None; self.draft_plan_path=None
         self.pending_scope=None; self.generation_error=None
         self.pending_key=None
+        self.workspace_stop_pending=False
+        saved_view=selection.read(root/'runtime/web-console/state.json',{})
+        if self.key and not saved_view.get('explicitly_restored'):
+            from selection_automation.stage3_progress import controller_alive
+            base=root/'runs'/self.key
+            if not controller_alive(base) and not codex_review_control(base,scan_batches=False).get('running'):
+                self.key=None
+        self.draft_used=bool(self.key)
         from selection_automation.monitor_status import MonitorStatus
         self.monitor=MonitorStatus(self.status,lambda:(self.key,self.busy,self.phase,self.draft_used,self.stage3_busy,id(self.draft),id(self.pending_scope)))
         self.live_monitor=MonitorStatus(self.live_status,lambda:self.key,interval=1,loading_key='live_loading')
@@ -291,13 +299,39 @@ class Console:
             elif self.phase=='连接品类模型超时或网络失败；未创建任务':
                 self.phase='上次完整规则请求中断；已改为流式接收，请重新填写 Key 后沿用已定位榜单重试'
             self.generation_error={'code':pending.get('code') or 'GENERATION_INTERRUPTED','message':self.phase}
+        self.ensure_draft_visual_criteria()
+
+    def ensure_draft_visual_criteria(self):
+        """Upgrade only an unused draft; frozen runs and their choices stay intact."""
+        from selection_automation.visual_criteria import VERSION
+        if (not self.draft or self.draft_used or self.busy or self.pending_scope or not self.draft_key
+                or not self.draft_amazon_path or not (self.root/'scripts/extract_match_criteria.py').is_file()):return
+        catalog=self.draft.get('match_criteria') or {}
+        if catalog.get('visual_version')==VERSION and catalog.get('state')=='ready':return
+        self.busy=True;self.phase='正在逐件核对全部 Amazon 商品主图并合并图片条件'
+        threading.Thread(target=self._refresh_visual_criteria,daemon=True).start()
+
+    def _refresh_visual_criteria(self):
+        from selection_automation.rule_provider import environment
+        env={**os.environ,**environment(self.draft_provider),'DEEPSEEK_API_KEY':self.draft_key,'PYTHONUTF8':'1'}
+        try:
+            result=self.invoke([str(self.root/'scripts/extract_match_criteria.py'),'--category',str(self.draft_path),
+                                '--amazon',str(self.draft_amazon_path)],env=env,timeout=3600)
+            if result.returncode:raise ConsoleError('IMAGE_CRITERIA_FAILED','商品主图条件提取未完成，已完成批次保留')
+            category=selection.read(self.draft_path,{})
+            with self.lock:
+                self.draft=draft_view(category,uuid.uuid4().hex,selection.read(self.draft_plan_path,{}));self.persist_draft()
+            self.phase='全部商品主图已汇总，第三层默认自动判断，可直接运行' if category.get('match_criteria',{}).get('state')=='ready' else '商品主图条件尚未全部提取，已完成批次保留'
+        except ConsoleError as error:self.phase=error.message
+        except Exception:self.phase='商品主图条件未完成，原始资料和已完成批次保留'
+        finally:self.busy=False
 
 
     def live_status(self):
         """Small operational files only; never scan reviews, publish or dispatch."""
         from selection_automation.stage3_progress import controller_alive
         from selection_automation.stage3_provider import from_category
-        key=self.key
+        key=self.current_run_key()[0]
         value={'ok':True,'category_key':key}
         if not key:return value
         base=self.root/'runs'/key
@@ -545,9 +579,9 @@ class Console:
             output.write_text(json.dumps(category,ensure_ascii=False),encoding='utf-8')
             self.phase='正在采集 Amazon 商品标题、详情参数并提炼关键词'
             self.draft_amazon_path,self.draft_plan_path=self.collect_amazon_and_plan(output,category,env)
-            self.phase='正在汇总 Amazon 参数和少量图片特征，生成可勾选的同款条件'
+            self.phase='正在逐件核对全部 Amazon 商品主图并合并图片条件'
             extracted=self.invoke([str(self.root/'scripts/extract_match_criteria.py'),'--category',str(output),
-                '--amazon',str(self.draft_amazon_path)],env=env,timeout=900)
+                '--amazon',str(self.draft_amazon_path)],env=env,timeout=3600)
             if extracted.returncode:
                 from selection_automation.match_criteria import attach,seed
                 attach(category,seed(category,selection.read(self.draft_amazon_path,{})))
@@ -659,6 +693,9 @@ class Console:
             self.accept_key(body)
             self.draft_provider=provider
             if not self.draft_key: raise ConsoleError('KEY_REQUIRED','请重新填写API key，已保留草稿无需重新生成',409)
+            picture_conditions=(selection.read(self.draft_path,{}) or {}).get('match_criteria') or {}
+            if picture_conditions.get('visual_version') and picture_conditions.get('state')!='ready':
+                raise ConsoleError('IMAGE_CRITERIA_INCOMPLETE','全部商品主图条件尚未提取完成，已完成批次保留',409)
             scope=body.get('scope','all')
             self.plain_application[scope]={'state':'processing','message':'正在应用，请等待处理结果。','updated_at':time.time()}
             self.save_plain_application()
@@ -830,11 +867,30 @@ class Console:
     def current_run_key(self):
         owner=self.owner()
         if owner and owner.get('category_key'): return owner['category_key'], True
-        # A completed CLI or web run takes precedence over the web process's
-        # older in-memory key.  The latter is useful only while launching.
-        recent=selection.read(self.root/'runtime/last_run.json',{})
-        key=(self.key if self.busy and self.key else recent.get('category_key') or self.key)
-        return key, False
+        if not self.draft_used and (self.draft is not None or self.pending_scope is not None):
+            return None,False
+        return self.key,False
+
+    def clear_workspace(self):
+        """Clear selection and draft pointers, never collected data or history."""
+        self.key=None;self.draft=None;self.draft_path=None;self.draft_key=None;self.draft_used=False
+        self.draft_amazon_path=None;self.draft_plan_path=None;self.pending_scope=None
+        self.generation_error=None;self.progress_file=None;self.plain_application={}
+        self.workspace_stop_pending=False;self.phase='当前工作区已清空，可新建任务；历史任务可在历史记录中恢复'
+        folder=self.root/'runtime/web-console'
+        selection.save(folder/'state.json',{'category_key':None,'explicitly_restored':False})
+        selection.save(folder/'resume-draft.json',{'draft':None})
+        (folder/'pending-generation.json').unlink(missing_ok=True)
+
+    def restore_history(self,body):
+        if set(body)!={'category_key'}:raise ConsoleError('INVALID_INPUT','请选择一个历史任务')
+        with self.lock:
+            if self.busy or self.stage3_busy or self.owner():raise ConsoleError('TASK_BUSY','当前任务仍在运行，请先停止',409)
+            base,category=self.history_base(body['category_key'])
+            self.key=base.name;self.draft_used=True;self.pending_scope=None;self.generation_error=None
+            self.phase='历史任务已恢复，可查看结果或继续运行'
+            selection.save(self.root/'runtime/web-console/state.json',{'category_key':self.key,'explicitly_restored':True})
+            return {'ok':True,'category_key':self.key,'phase':self.phase}
 
     def excel_workbook(self,kind,run_key=None):
         """Select the newest user-facing copy belonging to the visible run."""
@@ -1736,6 +1792,7 @@ class Console:
             if self.busy or self.owner():
                 raise ConsoleError('TASK_BUSY','任务仍在运行或退出中，请稍后重试',409)
             key,_ = self.current_run_key()
+            if not key:key=selection.read(self.root/'runtime/last_run.json',{}).get('category_key')
             if not key:
                 raise ConsoleError('NO_TASK','没有可继续的任务，请先新建任务',409)
             base,category = self.history_base(key)
@@ -1769,11 +1826,15 @@ class Console:
             if name=='stop':
                 if body: raise ConsoleError('INVALID_INPUT','停止不接受额外参数')
                 self.cancel.set()
+                self.workspace_stop_pending=True
             elif set(body)!={'worker'} or type(body['worker']) is not int or not 1<=body['worker']<=32:
                 raise ConsoleError('INVALID_INPUT','采集路编号无效')
             owner=self.owner(); key=(owner or {}).get('category_key') or self.key
             if not key:
-                if name=='stop': self.phase='停止中' if self.busy else '已停止'; return {'ok':True,'phase':self.phase}
+                if name=='stop':
+                    if not self.busy:self.clear_workspace()
+                    else:self.phase='停止中'
+                    return {'ok':True,'phase':self.phase}
                 raise ConsoleError('NO_ACTIVE_TASK','没有可换session的任务',409)
             if name!='stop':
                 if not owner or (self.root/'runs'/key/'STOP').exists():
@@ -1821,7 +1882,15 @@ class Console:
             return {'ok':True,'message':'已记录选择；下次空闲准备时使用，当前网络与VPN设置未改变。'}
 
     def status(self):
-        owner=self.owner(); key,_=self.current_run_key()
+        if self.busy and self.draft and self.draft_path and self.phase.startswith('正在逐件核对全部'):
+            self.draft['match_criteria']=selection.read(self.draft_path,{}).get('match_criteria')
+        owner=self.owner()
+        if self.workspace_stop_pending and not owner and not self.busy and not self.stage3_busy:
+            from selection_automation.stage3_progress import controller_alive
+            base=self.root/'runs'/self.key if self.key else None
+            if base is None or (not controller_alive(base) and not codex_review_control(base,scan_batches=False).get('running')):
+                self.clear_workspace()
+        key,_=self.current_run_key()
         preparing_new=self.key is None and self.pending_scope is not None
         if preparing_new: key=None
         details={}; workers=[]
@@ -2093,6 +2162,7 @@ class Handler(BaseHTTPRequestHandler):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)
+            if self.path=='/api/restore': return self.send_json(self.server.console.restore_history(body))
             if self.path=='/api/network/proxy-choice': return self.send_json(self.server.console.select_local_proxy(body))
             if self.path=='/api/operator/subscribe': return self.send_json(self.server.console.operator_subscribe(body))
             if self.path=='/api/operator/feedback': return self.send_json(self.server.console.operator_feedback(body))

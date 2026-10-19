@@ -119,11 +119,11 @@ def model_json(prompt: str, *, max_tokens: int = 8000, retry_truncated: bool = T
     protocol,endpoint=request_protocol(provider)
     if images:
         payload['messages'][-1]['content']=[{'type':'text','text':prompt}]+[
-            {'type':'image_url','image_url':{'url':url}} for url in images[:3]]
+            {'type':'image_url','image_url':{'url':url}} for url in images]
     if protocol=='responses':
         if images:
             payload['messages'][-1]['content']=[{'type':'input_text','text':prompt}]+[
-                {'type':'input_image','image_url':url} for url in images[:3]]
+                {'type':'input_image','image_url':url} for url in images]
         payload={'model':provider['model'],'input':payload['messages'],'stream':True,'store':False,
             'max_output_tokens':max_tokens,'text':{'format':{'type':'json_object'}}}
         if provider['model'].lower().startswith(('gpt-','o1','o3','o4')):payload['reasoning']={'effort':'low'}

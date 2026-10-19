@@ -347,7 +347,7 @@ def test_market_cache_isolates_tasks_and_keeps_good_snapshot_on_failure(tmp_path
 
 
 def test_resume_uses_current_saved_task_and_never_regenerates_or_enables_paid_analysis(tmp_path,monkeypatch):
-    console=web.Console(tmp_path); console.key='older'
+    console=web.Console(tmp_path)
     base=tmp_path/'runs/current';base.mkdir(parents=True)
     web.selection.save(base/'category.json',{'category_key':'current','category_name_zh':'遥控器','execution_mode':'collection'})
     web.selection.save(tmp_path/'runtime/last_run.json',{'category_key':'current'})
@@ -652,7 +652,9 @@ def test_web_run_starts_full_collector_without_paid_vision(tmp_path, monkeypatch
     assert not (run/'stage123/paid_enabled.json').exists()
     assert not (folder/'pending-generation.json').exists()
     assert console.pending_scope is None and console.generation_error is None
-    assert web.Console(tmp_path).key==console.key
+    recovered=web.Console(tmp_path)
+    monkeypatch.setattr(recovered,'owner',lambda:{'category_key':console.key})
+    assert recovered.current_run_key()[0]==console.key
 
 
 def test_stale_running_state_red_and_actual_worker(tmp_path,monkeypatch):
@@ -1002,6 +1004,7 @@ def test_completed_run_stage3_requires_key_and_consumes_candidates_once(tmp_path
     folder=tmp_path/'runtime';folder.mkdir()
     (folder/'last_run.json').write_text(json.dumps({'category_key':'finished_run'}))
     monkeypatch.setattr(console,'owner',lambda:None)
+    console.restore_history({'category_key':'finished_run'})
     with pytest.raises(web.ConsoleError) as exc:console.start_stage3({})
     assert exc.value.code=='KEY_REQUIRED'
     assert not (base/'stage123/paid_enabled.json').exists()
