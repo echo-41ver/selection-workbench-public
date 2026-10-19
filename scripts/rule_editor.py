@@ -86,6 +86,9 @@ def edit_rules(category, edits, *, compile_model=model_json):
         # become a required identity module via an edited score minimum.
         result = compile_policy(result)
     validate_rules(result)
+    if edits['stage1_text']!=original['stage1_text']:
+        from selection_automation.match_criteria import include_manual_attributes
+        include_manual_attributes(result)
     return result
 
 

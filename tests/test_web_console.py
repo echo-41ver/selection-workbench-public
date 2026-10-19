@@ -582,8 +582,9 @@ def test_generation_then_start_key_only_in_env(tmp_path,monkeypatch):
     console.busy=True
     monkeypatch.setattr(console,'owner',lambda:{'category_key':console.key})
     console._start({'category_name':'测试','amazon_count':3,'per_keyword':5,'api_key':'private-key'})
-    assert len(calls)==2
-    assert '--listing-only' in calls[1][0]
+    assert len(calls)==3
+    assert '--listing-only' not in calls[1][0]
+    assert 'extract_match_criteria.py' in calls[2][0][0]
     assert all('private-key' not in json.dumps(args) for args,kw in calls)
     assert console.phase=='规则与 Amazon 关键词已生成，请编辑确认后点击运行'
     assert console.draft and console.draft_key=='private-key'

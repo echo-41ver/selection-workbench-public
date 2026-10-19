@@ -7,6 +7,10 @@ import openai
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import run_category_layer3 as runner
 
+@pytest.fixture(autouse=True)
+def offline_connectivity(offline_api_transport):
+    """A fake inference response must not depend on a real connectivity GET."""
+
 class SimulatedProcessCrash(BaseException):pass
 
 def fixture(tmp_path,monkeypatch,crash_at):

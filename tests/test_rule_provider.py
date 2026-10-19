@@ -83,7 +83,7 @@ def test_web_generation_keeps_provider_for_edits_without_persisting_key(tmp_path
             category=json.loads((ROOT/'config/categories/power_drill.json').read_text('utf-8'))
             category['amazon']['target_count']=1
             Path(args[args.index('--output')+1]).write_text(json.dumps(category))
-        else:
+        elif len(args)>1 and 'collect_amazon_search_frontend.mjs' in args[1]:
             category=json.loads(Path(args[args.index('--config')+1]).read_text('utf-8'))
             Path(args[args.index('--output')+1]).write_text(json.dumps({'records':[
                 {'asin':'B000000001','rank':1,'title':'Cordless power drill kit'}], 'record_count':1,

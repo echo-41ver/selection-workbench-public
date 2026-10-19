@@ -150,6 +150,10 @@ def request_key(provider):
 
 
 def decision_score(category, facts):
+    from .match_criteria import enabled,decision_conditions_score
+    if enabled(category):
+        base={key:value for key,value in category.items() if key!='match_criteria'}
+        return decision_conditions_score(category,facts,decision_score(base,facts))
     if from_category(category)['protocol'] != 'decisions':
         from copy import deepcopy
         previous=next((stage for stage in reversed(category.get('stage3_checkpoint_sources',[]))
@@ -182,6 +186,8 @@ def decision_score(category, facts):
 
 
 def decision_instructions(category):
+    from .match_criteria import enabled,comparison_prompt
+    if enabled(category):return comparison_prompt(category,native=True)
     from .identity import PROMPT
     stage=category['stage3']
     policy={'品类':category.get('category_name_zh'), '整体身份规则':stage.get('identity_policy'),
@@ -193,8 +199,9 @@ def decision_instructions(category):
 
 class VisualClient:
     """Keep the existing consumer's billing/retry contract across API protocols."""
-    def __init__(self, provider, transport, key, timeout):
+    def __init__(self, provider, transport, key, timeout,criteria=None):
         self.provider, self.transport, self.key = provider, transport, key
+        self.criteria=criteria
         self.timeout_seconds=getattr(timeout,'read',timeout) or 600
         self.responses = self
         self.openai = None
@@ -267,8 +274,14 @@ class VisualClient:
         def facts(answer):
             return {'decision_api': {'choice': answer['choice'], 'probabilities': answer['probabilities'],
                 'confidence':answer.get('confidence'),'protocol_version':'product-choice-v2'}}
-        result=({'decision_facts':facts(answers['same_product'])} if expected=={'same_product'} else
-                {'decision_facts_by_id':{identity:facts(answer) for identity,answer in answers.items()}})
+        base_ids={identity for identity in expected if '__condition__' not in identity}
+        converted={}
+        for identity in base_ids:
+            converted[identity]=facts(answers[identity])
+            checks={name.split('__condition__',1)[1]:answer for name,answer in answers.items() if name.startswith(identity+'__condition__')}
+            if checks:converted[identity]['decision_api']['conditions']=checks
+        result=({'decision_facts':converted['same_product']} if base_ids=={'same_product'} else
+                {'decision_facts_by_id':converted})
         usage = raw.get('usage') or {}
         return SimpleNamespace(id=raw.get('id'), usage=SimpleNamespace(model_dump=lambda: usage), status='completed',
                                output_text=json.dumps(result), incomplete_details=None)
@@ -292,6 +305,16 @@ class VisualClient:
             question=payload['questions']['same_product']
             payload['state'].update(image_2='TEMU 编号拼图',candidate_ids=candidate_ids)
             payload['questions']={identity:{**question,'instructions':instructions+'\n只比较图片1的 Amazon 与图片2中编号 '+identity+' 的候选，忽略其它格子。'} for identity in candidate_ids}
+        from .match_criteria import selected
+        conditions=selected({'match_criteria':getattr(self,'criteria',None)},'visual')
+        if conditions:
+            for identity,question in list(payload['questions'].items()):
+                question['criteria']={'same':'出售主体和已勾选身份条件一致，未选项差异不否决',
+                    'different':'出售主体或已选条件存在明确不同','similar':'证据不足以证明同一基础款'}
+                for condition in conditions:
+                    payload['questions'][identity+'__condition__'+condition['id']]={'type':'choice',
+                        'instructions':question['instructions']+'\n本题只核实已勾选条件：'+condition['label']+'。'+condition['rule'],
+                        'criteria':{'same':'双方证据均清楚且该项一致','different':'双方证据均清楚且该项不同','unknown':'任一方未提供、不可读、被遮挡或不能可靠比较'}}
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         if len(data) >= 4_500_000:
             raise ValueError('决策 API 图片与文字请求超过 4.5 MB，请补采适当尺寸图片')

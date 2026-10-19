@@ -98,7 +98,7 @@ def compile_generated_policy(config, *, model=None):
     return result
 
 
-def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = True) -> dict:
+def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = True, images=None) -> dict:
     from selection_automation.rule_provider import settings,request_protocol
     from selection_automation.model_stream import read_chat_completion,ModelStreamError
     try:
@@ -115,7 +115,13 @@ def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = 
     if provider == settings():
         payload.update(thinking={'type': 'enabled'}, reasoning_effort='low')
     protocol,endpoint=request_protocol(provider)
+    if images:
+        payload['messages'][-1]['content']=[{'type':'text','text':prompt}]+[
+            {'type':'image_url','image_url':{'url':url}} for url in images[:3]]
     if protocol=='responses':
+        if images:
+            payload['messages'][-1]['content']=[{'type':'input_text','text':prompt}]+[
+                {'type':'input_image','image_url':url} for url in images[:3]]
         payload={'model':provider['model'],'input':payload['messages'],'stream':True,'store':False,
             'max_output_tokens':max_tokens,'text':{'format':{'type':'json_object'}}}
         if provider['model'].lower().startswith(('gpt-','o1','o3','o4')):payload['reasoning']={'effort':'low'}

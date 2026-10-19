@@ -12,6 +12,9 @@ REL = {"S": "SAME", "V": "VARIANT", "L": "SIMILAR", "D": "DIFFERENT", "U": "UNKN
 GROUP_WIRE_VERSION = 'shared-amazon-features-v2-short'
 
 def _provider_revision(stage):
+    if stage.get('match_criteria_revision'):
+        other=dict(stage);other.pop('match_criteria_revision')
+        return {**_provider_revision(other),'match_criteria_revision':stage['match_criteria_revision']}
     provider=stage.get('provider')
     if not isinstance(provider,dict):return {}
     if provider.get('mode')=='multimodal_api' and provider.get('protocol')=='responses':return {}
@@ -99,6 +102,10 @@ def protocol(category: dict, count: int) -> tuple[str, dict]:
             feature_properties[fid] = obj(fields)
         item['properties']['f'] = obj(feature_properties)
         item['required'].append('f')
+    from .match_criteria import enabled,comparison_schema,comparison_prompt
+    if enabled(category):
+        item['properties']['q']=comparison_schema(category)
+        item['required'].append('q')
     schema = obj({"candidates": {"type": "array", "minItems": count, "maxItems": count, "items": item}})
     descriptions = stage.get("module_descriptions", {})
     prompt = (f"核验{category['category_name_zh']}同一基础款。第一张为Amazon基准图，其后为带ID的TEMU候选。"
@@ -149,7 +156,8 @@ def protocol(category: dict, count: int) -> tuple[str, dict]:
         result = VERSION + "\n" + VISUAL_GUIDE + "\n" + prompt + "\n以此统一边界为准：\n" + boundary
     else:
         result = PROTOCOL_VERSION + "\n" + PROMPT + "\n" + prompt
-    # Keep the scalar prompt/schema byte-identical: paid cache revisions use it.
+    if enabled(category):result+=comparison_prompt(category)
+    # Keep legacy scalar prompt/schema byte-identical: paid cache revisions use it.
     return _group_protocol(result, schema) if count > 1 else (result, schema)
 
 
@@ -251,7 +259,8 @@ def decode(category: dict, raw: dict, expected: list[str]) -> dict:
     out = {}
     allowed_relations = set(REL) if category["stage3"].get("allow_similar_relation", True) else {"S", "V", "D", "U"}
     for item in raw["candidates"]:
-        keys = {'i','m','c','v'} | ({'f'} if category['stage3'].get('require_feature_comparisons') else set())
+        from .match_criteria import enabled,selected
+        keys = {'i','m','c','v'} | ({'f'} if category['stage3'].get('require_feature_comparisons') else set()) | ({'q'} if enabled(category) else set())
         if not isinstance(item, dict) or set(item) != keys or not isinstance(item["i"], str) or not isinstance(item["m"], dict):
             raise ValueError("invalid visual candidate object")
         if item.get("i") in out or item.get("i") not in expected:
@@ -301,6 +310,17 @@ def decode(category: dict, raw: dict, expected: list[str]) -> dict:
                     validate_inventory(row['inventory'], inventory_requirements[fid])
                     features[fid]['inventory'] = row['inventory']
             facts['feature_comparisons']=features
+        if enabled(category):
+            comparisons=item['q']
+            if not isinstance(comparisons,dict) or set(comparisons)!={row['id'] for row in selected(category,'visual')}:
+                raise ValueError('missing or unexpected selected condition evidence')
+            translated={}
+            for fid,row in comparisons.items():
+                if not isinstance(row,dict) or set(row)!={'r','a','t'} or row['r'] not in {'S','D','U'} or not isinstance(row['a'],str) or not isinstance(row['t'],str):
+                    raise ValueError('invalid selected condition evidence')
+                translated[fid]={'relation':{'S':'SAME','D':'DIFFERENT','U':'UNKNOWN'}[row['r']],
+                                 'amazon':row['a'],'temu':row['t']}
+            facts['condition_comparisons']=translated
         score(category, facts)
         out[item["i"]] = facts
     if set(out) != set(expected):

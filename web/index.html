@@ -63,7 +63,7 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
 <section id="draft-editor" class="review-divider" hidden><h2>确认任务</h2><p class="small">生成时会先采集 Amazon 前 N 名并从商品标题提炼关键词。确认规则与分配后，点击运行，所选路数的 TEMU 采集及第一、二层分析自动开始。第三层需单独点击付费按钮。</p><div class="notice draft-source"><strong id="draft-category"></strong><div id="draft-title"></div><a id="draft-url" target="_blank" rel="noopener noreferrer"></a></div><div id="draft-keywords" class="notice" aria-live="polite"></div>
 <details class="review-divider"><summary>调整同款规则（可选）</summary><label for="plain-rule">第一层 · 文字筛选要求（通俗版）</label><p class="small">只看商品标题和文字介绍：哪些明确差异要排除，哪些可以保留。</p><textarea id="plain-rule" placeholder="例如：文字没有明确写材质时先保留，不要直接排除。"></textarea><button id="apply-plain" type="button">解释 / 应用第一层要求</button><div id="plain-status-stage1" class="notice" role="status" aria-live="polite" hidden></div>
 <label for="plain-rule3">第三层 · 图片同款判断要求（通俗版）</label><p class="small">先看整体是不是同一基础款，再看具体图案、结构和套装构成。两边对应部位都清楚，一边有关键特征、另一边确实没有，就是不同款；关键身份部位被挡住、无法辨认款式才保留未知；主体已能清楚辨认时，局部遮挡不自动降为待复核。模块分数只作辅助，明确差异不能被高分抵消。允许的颜色、包装或花纹变化按品类规则判断：浴巾主体织法、构造及阴刻位置布局对应时可允许花纹变化；浴帘整幅印花不同仍属不同款。</p><textarea id="plain-rule3" placeholder="例如：图案和结构必须一致；拍摄角度、背景和光线不同可以接受；被遮挡的部分不要猜。" style="min-height:190px"></textarea><button id="apply-plain3" type="button">解释 / 应用第三层要求</button><div id="plain-status-stage3" class="notice" role="status" aria-live="polite" hidden></div><div id="plain-changes" class="notice" role="status">两个框独立应用。留空点击对应按钮可解释当前规则；应用后仍需手动运行。</div>
-</details><details><summary>高级设置：查看或直接编辑实际执行规则</summary><p class="small">应用上方要求后，这里的规则会同步更新。普通使用无需修改这些配置。</p>
+</details><section id="match-criteria-panel" class="review-divider" hidden><h3>选择必须一致的商品特征</h3><p class="small">汇总本次 Amazon 商品实际记录；每次比较以当前 Amazon 商品自己的参数为准。未勾选项的差异不作否决条件。</p><p id="match-criteria-status" class="notice"></p><h4>文字条件 · 第一层</h4><p class="small">双方文字明确冲突才排除；一边没写就进入第二、三层，不要求第三层补齐该文字参数。</p><table style="width:100%"><thead><tr><th>必需</th><th>条件及要求</th><th>Amazon 原始依据</th></tr></thead><tbody id="match-text-rows"></tbody></table><h4>图片条件 · 第三层</h4><p class="small">按勾选的可见外观特征核验；看不清则待确认。确认同款仍需核实同一出售主体和基础款。</p><table style="width:100%"><thead><tr><th>必需</th><th>条件及要求</th><th>Amazon 原始依据</th></tr></thead><tbody id="match-visual-rows"></tbody></table><button id="apply-match-criteria" type="button">应用匹配条件</button></section><details><summary>高级设置：查看或直接编辑实际执行规则</summary><p class="small">应用上方要求后，这里的规则会同步更新。普通使用无需修改这些配置。</p>
 <label for="stage1-rule">第一层 · 文字严格筛选规则</label><textarea id="stage1-rule" spellcheck="false"></textarea>
 <label for="stage2-threshold">第二层 · 图片向量候选阈值（0–100）</label><input id="stage2-threshold" type="number" min="0" max="100" step="0.1"><p class="small">默认由当前规则生成接口按本品类给出保守建议，可手动修改。取完整商品和可用主体视图的最佳分数，尽量减少漏检；分数只筛选候选，不是同款概率。</p>
 <label for="stage3-rule">第三层 · 视觉分析规则与提示词</label><p class="small">新品类按出售主体、部件、装饰、包装和变化影响生成统一标准；第一层和第三层共用，允许变体须保持决定款式的结构。整体核验与证据要求固定保留，编辑内容作为品类补充规则。旧结果缺少整体核验时，需用新版重新分析后才能确认同款。</p><textarea id="stage3-rule" spellcheck="false"></textarea>
@@ -395,6 +395,34 @@ function runtimeUnion(row={}){
  if(row.automatic_recovery||!row['阻断']||!row.recovery_exhausted)return row;
  return {...row,状态:'汇总自动恢复已停止，需要处理',需人工介入:true,建议动作:'原始快照和已有结果已保留。请查看汇总错误；修复文件占用或权限后继续任务。'};
 }
+let criteriaSelection=null,criteriaRevision='',criteriaDraft='',criteriaDirty=false,criteriaRendering='',criteriaSaving=false;
+function renderMatchCriteria(data={}){
+ const box=$('match-criteria-panel');if(!box)return;const catalog=data.draft?.match_criteria||data.match_criteria;box.hidden=!catalog;if(!catalog)return;
+ const draft=data.draft?.id||data.category_key||'',locked=!data.draft||data.console_busy||data.active||criteriaSaving;
+ if(criteriaRevision!==catalog.revision||criteriaDraft!==draft){
+  const previous=criteriaDraft===draft&&criteriaDirty?criteriaSelection:null;
+  criteriaSelection=new Set(catalog.items.filter(item=>previous?previous.has(item.id):item.selected).map(item=>item.id));
+  criteriaRevision=catalog.revision;criteriaDraft=draft;if(!previous)criteriaDirty=false;
+ }
+ const signature=JSON.stringify([criteriaRevision,draft,locked]);
+ if(criteriaRendering!==signature){criteriaRendering=signature;$('match-text-rows').replaceChildren();$('match-visual-rows').replaceChildren();
+  for(const item of catalog.items){const rows=$(item.kind==='text'?'match-text-rows':'match-visual-rows'),row=document.createElement('tr'),choice=document.createElement('td'),input=document.createElement('input');input.type='checkbox';input.checked=criteriaSelection.has(item.id);input.disabled=locked;input.setAttribute('aria-label','必须一致：'+item.label);input.dataset.criterion=item.id;
+   input.addEventListener('change',()=>{if(input.checked)criteriaSelection.add(item.id);else criteriaSelection.delete(item.id);criteriaDirty=true;$('apply-match-criteria').disabled=false;$('match-criteria-status').textContent='勾选已修改，请应用匹配条件后再开始任务。';updateControls();});choice.append(input);row.append(choice);
+   const label=document.createElement('td'),name=document.createElement('strong'),rule=document.createElement('p');name.textContent=item.label;rule.textContent=item.rule;rule.className='small';label.append(name,rule);row.append(label);
+   const values=document.createElement('td');values.style.overflowWrap='anywhere';const observations=item.observations||[];
+   if(observations.length){const detail=document.createElement('details'),summary=document.createElement('summary');summary.textContent=new Set(observations.map(proof=>proof.asin)).size+' 个商品有记录 · '+observations.slice(0,2).map(proof=>String(proof.value).slice(0,70)).join('；');detail.append(summary);for(const proof of observations){const p=document.createElement('p');p.textContent=proof.asin+'：'+proof.value;detail.append(p);}values.append(detail);}else values.textContent='规则建议，尚无本次商品的独立记录';row.append(values);
+   const origin=document.createElement('p');origin.className='small';origin.textContent=item.origin||'实际记录';values.append(origin);rows.append(row);
+  }
+ }
+ $('apply-match-criteria').disabled=locked||!criteriaDirty;
+ $('match-criteria-status').textContent=criteriaDirty?'有未应用的勾选修改，请应用后再开始任务。':(catalog.message||'')+' 当前已勾选 '+criteriaSelection.size+' 项。'+(locked?'本任务开始后条件已冻结。':'勾选修改须点击应用。');
+}
+async function applyMatchCriteria(){
+ if(!lastStatus?.draft||!criteriaSelection)return;criteriaSaving=true;renderMatchCriteria(lastStatus);const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
+ try{const response=await fetch('/api/match-criteria',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({draft_id:lastStatus.draft.id,revision:criteriaRevision,selected_ids:[...criteriaSelection]})});const value=await response.json();if(!response.ok)throw Error(value.error?.message||'匹配条件保存失败');criteriaDirty=false;criteriaRevision='';feedback(value.phase);await poll();}
+ catch(error){feedback(error.name==='AbortError'?'条件保存等待超时，请刷新确认；原任务数据保留。':error.message,true);}
+ finally{clearTimeout(timer);criteriaSaving=false;criteriaRendering='';if(lastStatus)renderMatchCriteria(lastStatus);updateControls();}
+}
 function stage3Heartbeat(data={}){
  if(data.stage3_provider?.mode==='local_model')return {label:data.stage3_activity?.status==='waiting'?'模型请求开始':'本地模型响应更新',time:data.stage3_activity?.updated_at};
  if(data.stage3_provider?.mode&&data.stage3_provider.mode!=='local_agent')return {label:'第三层状态采样',time:data.live_sample?.sampled_at};
@@ -465,6 +493,7 @@ function updateControls(data=lastStatus){
  $('retry-generation').disabled=busy||!statusFresh||updating||active||!data?.can_retry_generation;
  stage3Button(data);excelButtons(data);rotationButtons();
  $('refresh-market').disabled=busy||!statusFresh||data?.market_busy||!data?.category_key||!('market_status' in data);
+ if(typeof criteriaDirty!=='undefined'&&criteriaDirty){$('run').disabled=true;if($('run-hint'))$('run-hint').textContent='匹配条件尚未保存，请点击“应用匹配条件”。';}
 }
 function nextStep(data){
  const node=$('next-step');if(!node)return;
@@ -615,6 +644,7 @@ function renderPlainApplication(states={}){for(const scope of ['stage1','stage3'
 function applyLayer(scope,id){if(!draftId||busy||lastStatus?.active)return;applyingScope=scope;const node=$('plain-status-'+scope);node.hidden=false;node.className='notice warning';node.textContent=(scope==='stage1'?'第一层':'第三层')+' · 正在提交应用请求…';action('/api/plain-rules',{draft_id:draftId,instruction:$(id).value,scope});}
 $('apply-plain').addEventListener('click',()=>applyLayer('stage1','plain-rule'));
 $('apply-plain3').addEventListener('click',()=>applyLayer('stage3','plain-rule3'));
+$('apply-match-criteria').addEventListener('click',applyMatchCriteria);
 $('plain-rule3').addEventListener('input',()=>{$('plain-changes').textContent='第三层有未应用的修改，请先应用第三层要求。';updateControls();});
 $('plain-rule').addEventListener('input',()=>{$('plain-changes').textContent=$('plain-rule').value===plainApplied?'当前说明已应用。':'有尚未应用的要求，请先点击“解释 / 应用第一层要求”。';updateControls();});
 $('run').addEventListener('click',()=>action('/api/run',{draft_id:draftId,stage1_text:$('stage1-rule').value,stage2_threshold:Number($('stage2-threshold').value),stage3_text:$('stage3-rule').value,stage3_modules_json:$('stage3-modules').value,commercial:businessSettings(),worker_count:Number($('worker-count').value)}));
@@ -764,7 +794,7 @@ if(scope.execution_mode==='collection'&&completed===laneRows.length&&completed>0
 laneRows.sort((a,b)=>Number(b.blocked)-Number(a.blocked)||a.i-b.i);for(const item of laneRows){if($('only-errors').checked&&!item.blocked)continue;addProgressCard('TEMU 第 '+item.i+' 路',item.row,false,item.i);}
 addProgressCard('TEMU 去重汇总',runtimeUnion(stages.temu_union),true);if(scope.execution_mode==='collection'){stage3Controls.hidden=true;}}stage3Button(data);excelButtons(data);$('result-scope').textContent=$('scope').textContent;
 for(const key of ['error','blocked_reason','human_action','message','提示']){const value=data[key];if(value&&redFlags.test(text(value))){const alert=document.createElement('div');alert.className=noticeClass({状态:text(value),manual_action_required:key==='human_action'});alert.textContent=typeof value==='object'?value.message||'请查看详细状态':value;$('alerts').append(alert);}}
-renderRuntimeOverview(data);if(data.collection_complete&&attentionItems(data).some(item=>item.name==='第三层分析')){$('overview').textContent='采集已完成 · 第三层等待处理';$('overview').className='notice danger';}if(data.collection_complete&&(data.stage3_control?.running||data.stage3_control?.codex_review?.running)&&!attentionItems(data).length){$('overview').textContent='采集已完成 · 第三层分析运行中';$('overview').className='notice success';}$('connection').textContent='本地服务已连接';$('updated').textContent='最近读取：'+new Date().toLocaleTimeString('zh-CN');renderPlainApplication(data.plain_application);nextStep(data);updateControls();}
+if(typeof renderMatchCriteria==='function')renderMatchCriteria(data);renderRuntimeOverview(data);if(data.collection_complete&&attentionItems(data).some(item=>item.name==='第三层分析')){$('overview').textContent='采集已完成 · 第三层等待处理';$('overview').className='notice danger';}if(data.collection_complete&&(data.stage3_control?.running||data.stage3_control?.codex_review?.running)&&!attentionItems(data).length){$('overview').textContent='采集已完成 · 第三层分析运行中';$('overview').className='notice success';}$('connection').textContent='本地服务已连接';$('updated').textContent='最近读取：'+new Date().toLocaleTimeString('zh-CN');renderPlainApplication(data.plain_application);nextStep(data);updateControls();}
 
 let polling=false;async function poll(){if(polling)return;polling=true;if(typeof lastStatus!=='undefined'&&lastStatus?.received_at&&Date.now()/1000-lastStatus.received_at>15){statusFresh=false;lastStatus.live_loading=true;updateControls();}let received=false;const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);try{
  const response=await fetch('/api/monitor-status',{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error('状态接口返回 '+response.status);const data=await response.json();received=true;data.received_at=Date.now()/1000;

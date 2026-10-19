@@ -46,7 +46,8 @@ def test_new_usable_draft_is_not_replaced_by_previous_when_explanation_fails(tmp
     previous={'draft':{'id':'old'},'draft_path':old,'draft_amazon_path':None,'draft_plan_path':None}
     new=compile_policy(authored_case('new_cap','新杯盖','threaded join','snap join'))
     def invoke(argv,**kwargs):
-        Path(argv[argv.index('--output')+1]).write_text(json.dumps(new),encoding='utf8')
+        if 'generate_category.py' in argv[0]:
+            Path(argv[argv.index('--output')+1]).write_text(json.dumps(new),encoding='utf8')
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(console,'invoke',invoke)
     amazon=tmp_path/'a.json';amazon.write_text('{}',encoding='utf8')

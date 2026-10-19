@@ -28,6 +28,7 @@ def draft_view(category,draft_id,keyword_plan=None):
     return {**_draft_view(category,draft_id), 'worker_count':category_worker_count(category),
             "plain_text":category.get("plain_rules_summary",""), "plain_stage1":category.get("plain_stage1",""), "plain_stage3":category.get("plain_stage3",""),
             "change_summary":category.get("plain_rules_changes",[]),
+            'match_criteria':category.get('match_criteria'),
             "keyword_coverage":(keyword_plan or {}).get('coverage',{}),
             "keyword_plan":[{'worker':index%category_worker_count(category)+1,'query':row['query'],'amazon_products':len(row.get('source_asins') or []),'purpose':row.get('purpose')}
                             for index,row in enumerate((keyword_plan or {}).get('keywords') or [])]}
@@ -536,8 +537,16 @@ class Console:
             if not re.fullmatch('[a-z][a-z0-9_]{0,63}',category['category_key']): raise ValueError('invalid generated key')
             category['category_key']=category['category_key'][:48]+'_'+uuid.uuid4().hex[:12]
             output.write_text(json.dumps(category,ensure_ascii=False),encoding='utf-8')
-            self.phase='正在采集 Amazon 榜单标题并提炼关键词；详情将在运行后并行补全'
+            self.phase='正在采集 Amazon 商品标题、详情参数并提炼关键词'
             self.draft_amazon_path,self.draft_plan_path=self.collect_amazon_and_plan(output,category,env)
+            self.phase='正在汇总 Amazon 参数和少量图片特征，生成可勾选的同款条件'
+            extracted=self.invoke([str(self.root/'scripts/extract_match_criteria.py'),'--category',str(output),
+                '--amazon',str(self.draft_amazon_path)],env=env,timeout=900)
+            if extracted.returncode:
+                from selection_automation.match_criteria import attach,seed
+                attach(category,seed(category,selection.read(self.draft_amazon_path,{})))
+                selection.save(output,category)
+            category=selection.read(output,category)
             plan=selection.read(self.draft_plan_path)
             # Save usable generated rules before the optional explanation.
             with self.lock:
@@ -594,7 +603,7 @@ class Console:
         amazon=category_path.with_suffix('.amazon.json'); plan_path=category_path.with_suffix('.keywords.json')
         amazon_env={key:value for key,value in env.items() if key!='DEEPSEEK_API_KEY'}
         result=self.invoke(['node',str(self.root/'scripts/collect_amazon_search_frontend.mjs'),'--config',str(category_path),
-                            '--output',str(amazon),'--listing-only'],env=amazon_env,timeout=1800)
+                            '--output',str(amazon)],env=amazon_env,timeout=max(1800,45*category['amazon']['target_count']))
         payload=selection.read(amazon,{})
         rows=payload.get('records') or []
         count=category['amazon']['target_count']
@@ -652,6 +661,19 @@ class Console:
     def save_plain_application(self):
         selection.save(self.root/'runtime/web-console/plain-application.json',
                        {'draft_id':(self.draft or {}).get('id'),'states':self.plain_application})
+
+    def select_match_criteria(self,body):
+        if set(body)!={'draft_id','revision','selected_ids'}:raise ConsoleError('INVALID_INPUT','请选择当前草稿中的匹配条件')
+        with self.lock:
+            if self.busy or self.owner() or self.draft_used:raise ConsoleError('ALREADY_RUNNING','匹配条件只能在开始当前任务之前修改',409)
+            if not self.draft or body['draft_id']!=self.draft['id']:raise ConsoleError('STALE_DRAFT','草稿已更新，请刷新后重试',409)
+            from selection_automation.match_criteria import select,attach
+            category=selection.read(self.draft_path,{})
+            try:catalog=select(category.get('match_criteria'),body['selected_ids'],body['revision'])
+            except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
+            attach(category,catalog);selection.save(self.draft_path,category)
+            self.draft=draft_view(category,self.draft['id'],selection.read(self.draft_plan_path,{}));self.persist_draft()
+            return {'ok':True,'phase':'条件已保存：文字用于第一层，图片用于第三层','match_criteria':catalog}
 
     def _plain_rules(self, instruction, scope="all"):
         from selection_automation.rule_provider import environment
@@ -1920,7 +1942,7 @@ class Console:
         from selection_automation.network_readiness import describe
         network_readiness=selection.read(self.root/'runtime/network-readiness.json',{}) or describe(selection.read(self.root/'runtime/secrets/proxyshare.settings.json',{}))
         return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,'api_reasoning_supported':True,
-                      'task_stopped':bool(stopped.get('task_stopped')),
+                      'task_stopped':bool(stopped.get('task_stopped')),'match_criteria':category.get('match_criteria'),
                       'network_readiness':network_readiness,
                       'task_runtime':selection.read(self.root/'runs'/key/'runtime_version.json',{}) if key else {},
                       'console_busy':self.busy,'active':bool(owner) or self.busy or self.stage3_busy,'category_key':key,'phase':'已停止' if stopped.get('task_stopped') else phase,
@@ -2069,6 +2091,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/resume': return self.send_json(self.server.console.resume_current(body),202)
             if self.path=='/api/retry-preparation': return self.send_json(self.server.console.retry_preparation(body),202)
             if self.path=='/api/plain-rules': return self.send_json(self.server.console.plain_rules(body),202)
+            if self.path=='/api/match-criteria': return self.send_json(self.server.console.select_match_criteria(body))
             if self.path=='/api/run': return self.send_json(self.server.console.run_draft(body),202)
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
             if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))

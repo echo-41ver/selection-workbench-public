@@ -53,7 +53,7 @@ def output_token_budget(stage, count):
     # a bounded 65536 output allowance still applies. Incomplete responses
     # retain their billed usage and fail the group without an immediate retry.
     inventory_features = len(stage.get('set_inventory_features') or {})
-    scaled = 8192 + (640 * len(stage['modules']) + 1200 * inventory_features) * count
+    scaled = 8192 + (640 * len(stage['modules']) + 1200 * inventory_features + 256 * stage.get('match_criteria_visual_count',0)) * count
     return min(65536, max(16384, configured or 0, scaled))
 
 
@@ -471,6 +471,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
             settle_intent()
         return completed
     size = 1 if provider['mode']=='liquid_d1' else max(1,min(12,stage.get('batch_size',12)))
+    if stage.get('match_criteria_visual_count'):
+        per_pair=640*len(stage['modules'])+1200*len(stage.get('set_inventory_features') or {})+256*stage['match_criteria_visual_count']
+        size=min(size,max(1,(65536-8192)//per_pair))
     def batches():
         # At most one partial batch per Amazon image, instead of N*M pending rows.
         groups = defaultdict(list)
@@ -502,7 +505,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
             api_timeout=Timeout(timeout_seconds,connect=30,pool=30)
             transport=resources.enter_context(create_transport(provider,timeout=api_timeout,
                 limits=Limits(max_connections=capacity,max_keepalive_connections=min(capacity,256))))
-            client=resources.enter_context(VisualClient(provider,transport,key,api_timeout))
+            from selection_automation.match_criteria import enabled
+            options={'criteria':cat['match_criteria']} if enabled(cat) else {}
+            client=resources.enter_context(VisualClient(provider,transport,key,api_timeout,**options))
         except Exception as exc:
             # Preserve local NO_CHARGE bookkeeping, without a sent intent.
             client_setup_error=exc

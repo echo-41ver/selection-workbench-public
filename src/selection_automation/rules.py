@@ -197,6 +197,8 @@ def attribute_values(text: str, aliases: dict) -> tuple[set, bool]:
 
 
 def text_gate(category: dict, left: str, right: str) -> dict:
+    from .match_criteria import enabled,text_gate as selected_text_gate
+    if enabled(category):return selected_text_gate(category,left,right)
     conflicts, facts, insufficient = [], [], False
     for attr in category["stage1"].get("attributes", []):
         a, a_uncertain = attribute_values(left,attr['values'])
@@ -226,6 +228,8 @@ def score(category: dict, value: dict) -> dict:
     if isinstance(value, dict) and 'decision_api' in value:
         from .stage3_provider import decision_score
         return decision_score(category, value)
+    from .match_criteria import enabled,score as selected_score
+    if enabled(category):return selected_score(category,value,_score_modules(category,value))
     from .identity import apply_identity
     from .visual_decision import scoring_category, final_decision
     effective = scoring_category(category)
