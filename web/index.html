@@ -218,6 +218,7 @@ function renderAgentStatus(node,id){
  if(!node)return;node.dataset??={};node.dataset.agentStatus=id||'';
  const modelChanged=agent&&stage3AgentModels[id]&&(agent.selected_model||'')!==stage3AgentModels[id];
  const data=typeof lastStatus==='undefined'?null:lastStatus,runtime=data?.stage3_runtime,pool=data?.stage3_control?.codex_review?.pool,live=liveStage3Fresh(data),entry=pool?.agents?.find(a=>a.id===id),block=runtime?.agent_blocks?.[id];
+ if(data?.stage3_control?.stopped&&live){node.className='small';node.textContent='已停止，历史记录已保留；再次启动时重新检查。';return;}
  if(id&&live&&runtime){
   node.className='small'+(block?' agent-block':'');
   node.textContent=block?block.message||'Agent 需要人工处理':runtime.paused||runtime.paused_agents?.includes(id)?'已暂停派发新组；已发出的结果继续保存。':entry&&pool.running?'当前 '+Number(entry.running||0)+' 组处理中 · 每组最多 12 个 TEMU':'当前无人工处理提示；运行情况见上方状态。';
@@ -370,6 +371,7 @@ function runtimeStage3(data={}){
  const completed=p.api_completed!=null?Number(p.completed||0):Number(p.completed||0)+Number(p.codex_completed||0);
  let row={...(data.details?.['阶段']?.stage3||{}),completed,total:p.total,remaining:p.pending_after_codex??p.pending};
  row['需人工介入']=false;row['阻断']=false;row.agent_block=false;
+ if(c.stopped&&!c.running&&!review.running)return {...row,状态:'已停止，已完成结果和历史记录已保留',running:false,recovery_exhausted:false};
  if(blocks.length)Object.assign(row,{状态:blocks.map(([,b])=>b.message||b.code||'Agent 需要处理').join('；'),需人工介入:true,阻断:true,agent_block:true,建议动作:'请在对应 Agent 完成验证码或登录，保留原会话，再点击“继续此 Agent”。'});
  else if(r.switch_error)Object.assign(row,{状态:'切换失败，需要处理',需人工介入:true,阻断:true,建议动作:r.switch_error});
  else if(p.billing_hold_fail_closed||p.billing_unknown_pairs)Object.assign(row,{状态:'发送或费用记录待核对',需人工介入:true,阻断:true,建议动作:'请核对原会话和费用记录；状态不明的请求不会自动重发。'});
@@ -382,6 +384,7 @@ function runtimeStage3(data={}){
  return row;
 }
 function attentionItems(data={}){
+ if(data.task_stopped)return [];
  const stages=data.details?.['阶段']||data.modules||{},items=[];
  const add=(name,row)=>{if(needsHuman(row))items.push({name,message:String(first(row,['采集状态','状态','status','phase'])||'需要人工处理'),action:first(row,['建议动作','recovery_action','action'])||'请查看对应运行详情，完成处理后继续。'});};
  for(const w of Array.isArray(data.workers)?data.workers:Object.values(data.workers||{})){const n=(w.name||'').match(/worker-(\d+)/)?.[1];add('TEMU 第 '+Number(n||0)+' 路',workerCardRow(w,stages[w.name]||{}));}
@@ -426,6 +429,7 @@ function nextStep(data){
  const attention=attentionItems(data);
  let message='第一步：填写品类和采集数量，再生成规则。',tone='';
  if(attention.length){message='有 '+attention.length+' 项需要人工处理，请查看上方红色提醒。';tone='danger';}
+ else if(data.task_stopped){message='任务已停止。已完成结果、断点和错误记录已保留，需要继续时重新启动。';}
  else if(data.generation_error){message='准备失败，采集尚未开始。请按错误提示修正，原可用草稿仍可查看；有“重试准备任务”时可直接重试。';tone='danger';}
  else if(data.stage3_control?.codex_review?.running){message=data.stage3_control.codex_review.phase+'。同款分析正在进行，可到“运行总览”查看进度，结果与导出在独立页面。';tone='success';}
  else if(data.collection_complete){message=data.stage3_control?.running?'全部采集已完成；第三层图片分析正在进行。':'全部采集已完成。可以查看结果；第三层看图仍等待手动启动。';tone='success';}

@@ -311,6 +311,10 @@ class Console:
             running=controller_alive(base),
             enabled=(base/'stage123/paid_enabled.json').is_file() and not (base/'stage123/STOP').exists(),
             controller=selection.read(base/'stage123/controller.json',{}))
+        from runtime_overview import stopped_state
+        value.update(stopped_state(base,runtime,task_running=bool(self.owner()) or self.busy,
+            stage3_running=value['running'] or bool(value['review'].get('running')) or self.stage3_busy))
+        if value['stage3_stopped']:value['enabled']=False
         return clean(value)
 
     def monitor_status(self):
@@ -324,22 +328,26 @@ class Console:
         for field in ('stage3_runtime','stage3_provider','stage3_concurrency'):
             if field in live:state[field]=live[field]
         if not live.get('category_key'):return state
+        state['task_stopped']=bool(live.get('task_stopped'))
         control=state.setdefault('stage3_control',{})
         old_review=control.get('codex_review') or {}
         review=live['review']
         # Validated pair totals retain their independent result snapshot.
-        control.update(running=live['running'],enabled=live['enabled'],
+        control.update(running=live['running'],enabled=live['enabled'],stopped=bool(live.get('stage3_stopped')),
             error=bool(live['controller'].get('error')),error_code=live['controller'].get('error_code'),
             can_stop=live['enabled'] or live['running'] or bool(review.get('running')),
             codex_review={**old_review,**{k:review[k] for k in ('available','running','phase','pid','created') if k in review},
                           'pool':review.get('pool',{})})
         control['phase']=live['controller'].get('phase') or '等待手动启动'
+        if control['stopped']:control.update(enabled=False,can_stop=False,phase='已停止，已完成结果和历史记录已保留')
         from runtime_overview import stage3_display,local_stream_activity
         state['stage3_activity']=(local_stream_activity(self.root/'runs'/live['category_key']/'stage123',
             live['controller'].get('created',0)) if live['running'] and
             state['stage3_provider'].get('mode')=='local_model' else {})
         state.setdefault('details',{}).setdefault('阶段',{})['stage3']=stage3_display(
             control,state['stage3_runtime'],state['stage3_provider'])
+        if state['task_stopped']:
+            state.update(phase='已停止',severity='neutral')
         return state
 
     def owner(self): return selection.live_owner()
@@ -1605,7 +1613,7 @@ class Console:
         if not key: raise ConsoleError('NO_TASK','当前没有任务',409)
         from selection_automation.stage3_runtime import update_control
         update_control(self.root/'runs'/key/'stage123',paused=True,switch_pending=False,switch_cancelled=True,pending_provider=None)
-        selection.save(self.root/'runs'/key/'stage123/STOP',{'time':time.time()})
+        selection.save(self.root/'runs'/key/'stage123/STOP',{'time':time.time(),'reason':'user-request'})
         self.stage3_phase='停止中：等待已发出的请求返回并保存，采集和前两层继续运行'
         self.stage3_key=key
         return {'ok':True,'phase':self.stage3_phase}
@@ -1868,12 +1876,16 @@ class Console:
             stage3_ready=False
             if not stage3_running: stage3_phase='当前候选已全部处理，结果已保留；新增候选后可继续分析'
         codex_control=self.codex_review_snapshot(key) if key else {'available':False,'running':False}
-        from runtime_overview import stage3_display
+        from runtime_overview import stage3_display,stopped_state
         provider=__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)
+        stopped=stopped_state(stage3_base,runtime_control,task_running=bool(owner) or self.busy,
+            stage3_running=stage3_running or bool(codex_control.get('running')) or self.stage3_busy) if key else {}
         stage3_control={'enabled':stage3_enabled,'can_start':stage3_ready,'running':stage3_running,
+                       'stopped':bool(stopped.get('stage3_stopped')),
                        'can_stop':stage3_enabled or stage3_running or bool(codex_control.get('running')),
                        'progress':stage3_progress,'phase':stage3_phase,'codex_review':codex_control,
                        'error':bool(stage3_state.get('error')),'error_code':stage3_state.get('error_code')}
+        if stage3_control['stopped']:stage3_control.update(enabled=False,can_stop=False,phase='已停止，已完成结果和历史记录已保留')
         if key and category.get('execution_mode')!='collection':
             live_stage3=stage3_display(stage3_control,runtime_control,provider)
             details.setdefault('阶段',{})['stage3']=live_stage3
@@ -1881,10 +1893,11 @@ class Console:
         from selection_automation.network_readiness import describe
         network_readiness=selection.read(self.root/'runtime/network-readiness.json',{}) or describe(selection.read(self.root/'runtime/secrets/proxyshare.settings.json',{}))
         return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,
+                      'task_stopped':bool(stopped.get('task_stopped')),
                       'network_readiness':network_readiness,
                       'task_runtime':selection.read(self.root/'runs'/key/'runtime_version.json',{}) if key else {},
-                      'console_busy':self.busy,'active':bool(owner) or self.busy or self.stage3_busy,'category_key':key,'phase':phase,
-                      'severity':'red' if red else 'yellow' if yellow else 'green' if owner or self.busy or self.stage3_busy else 'neutral','workers':workers,'details':details,
+                      'console_busy':self.busy,'active':bool(owner) or self.busy or self.stage3_busy,'category_key':key,'phase':'已停止' if stopped.get('task_stopped') else phase,
+                      'severity':'neutral' if stopped.get('task_stopped') else 'red' if red else 'yellow' if yellow else 'green' if owner or self.busy or self.stage3_busy else 'neutral','workers':workers,'details':details,
                       'generation':generation,'generation_error':self.generation_error if preparing_new else None,
                       'can_retry_generation':bool(preparing_new and generation_failed and not self.busy),
                       'can_resume':bool(not owner and not self.busy and not preparing_new and key and (self.root/'runs'/key/'category.json').is_file()),

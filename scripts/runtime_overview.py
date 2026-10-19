@@ -1,6 +1,32 @@
 """Read-only presentation of the actual third-layer controller and its gates."""
 
 
+def stopped_state(base, runtime, *, task_running=False, stage3_running=False):
+    """A confirmed user stop acknowledges old alerts without deleting evidence."""
+    import json
+    from pathlib import Path
+    base = Path(base)
+    def read(path):
+        try:
+            value = json.loads(path.read_text(encoding='utf-8'))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+    stop = base / 'STOP'
+    authorization = base / 'stage123/paid_enabled.json'
+    try:
+        restarted = authorization.is_file() and authorization.stat().st_mtime_ns > stop.stat().st_mtime_ns
+        stopped = (stop.is_file() and not task_running and not stage3_running and not restarted
+                   and read(base / 'status.json').get('状态') == '已停止')
+    except OSError:
+        stopped = False
+    analysis_stop = base / 'stage123/STOP'
+    requested = (analysis_stop.is_file() and
+                 (read(analysis_stop).get('reason') == 'user-request' or
+                  (runtime.get('paused') and runtime.get('switch_cancelled'))))
+    return {'task_stopped': stopped, 'stage3_stopped': bool(not stage3_running and (stopped or requested))}
+
+
 def stage3_display(control, runtime, provider):
     progress = control.get('progress') or {}
     review = control.get('codex_review') or {}
@@ -17,7 +43,9 @@ def stage3_display(control, runtime, provider):
     row = {'completed': completed, 'total': total, 'remaining': pending,
            'scope_label': '当前候选版本；已保存的实际分析结果',
            '分析方式': provider.get('mode'), '动态快照': bool(progress.get('refreshing'))}
-    if blocks:
+    if control.get('stopped') and not control.get('running') and not review.get('running'):
+        row['状态'] = '已停止，已完成结果和历史记录已保留'
+    elif blocks:
         message = '；'.join(str(block.get('message') or block.get('code') or 'Agent 已阻塞') for block in blocks)
         row.update(状态=message, 阻断=True, 需人工介入=True,
                    建议动作='请在对应 Agent 完成验证码、登录或提示要求，再点击继续此 Agent；不会自动绕过验证。')

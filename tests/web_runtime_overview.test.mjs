@@ -24,6 +24,35 @@ function setup(){
  vm.runInContext(helpers,context);return {nodes,context};
 }
 
+test('confirmed user stop removes actionable alerts and restart restores unresolved failures',()=>{
+ const {context,nodes}=setup();context.data={stage3_provider:{mode:'local_model'},
+  stage3_control:{error:true,phase:'分析暂停，请查看错误记录',running:false},
+  workers:[{name:'worker-01-new',status:'WAITING_CAPTCHA',manual_action_required:true}]};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ assert.equal(nodes.get('human-attention').hidden,false);
+ context.data.task_stopped=true;context.data.stage3_control.stopped=true;
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ assert.equal(nodes.get('human-attention').hidden,true);
+ assert.equal(nodes.get('human-attention').children.length,0);
+ assert.match(vm.runInContext('runtimeStage3(data)["状态"]',context),/已停止/);
+ assert.doesNotMatch(nodes.get('run-overview').children[5].className,/danger/);
+ vm.runInContext(html.slice(html.indexOf('function nextStep('),html.indexOf('const secretKey=')),context);
+ vm.runInContext('nextStep(data)',context);
+ assert.match(nodes.get('next-step').textContent,/任务已停止/);
+ assert.doesNotMatch(nodes.get('next-step').className,/danger/);
+ assert.equal(context.data.stage3_control.error,true);
+ context.data.task_stopped=false;context.data.stage3_control.stopped=false;
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ assert.equal(nodes.get('human-attention').hidden,false);
+});
+
+test('stopping only analysis preserves current collection alerts',()=>{
+ const {context}=setup();context.data={stage3_provider:{mode:'local_model'},
+  stage3_control:{stopped:true,error:true},workers:[{name:'worker-01-new',status:'WAITING_CAPTCHA',manual_action_required:true}]};
+ assert.equal(vm.runInContext('attentionItems(data).length',context),1);
+ assert.match(vm.runInContext('attentionItems(data)[0].name',context),/TEMU/);
+});
+
 test('one running page contains analysis controls; export and results stay separate',()=>{
  const monitor=html.slice(html.indexOf('id="monitor-panel"'),html.indexOf('id="results-panel"'));
  const results=html.slice(html.indexOf('id="results-panel"'),html.indexOf('id="history-panel"'));

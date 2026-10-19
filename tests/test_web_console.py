@@ -76,6 +76,29 @@ def test_invalid_live_gate_is_an_error_instead_of_a_cleared_captcha(tmp_path):
     with pytest.raises(ValueError):console.live_status()
 
 
+def test_stopped_task_is_neutral_in_full_status_and_fast_monitor(tmp_path,monkeypatch):
+    console=web.Console(tmp_path);console.key='fixture'
+    base=tmp_path/'runs/fixture';folder=base/'stage123';folder.mkdir(parents=True)
+    web.selection.save(base/'category.json',{'category_name_zh':'测试','stage3':{'mode':'local_model'}})
+    web.selection.save(base/'status.json',{'状态':'已停止'})
+    (base/'STOP').write_text('用户请求停止',encoding='utf-8')
+    web.selection.save(folder/'controller.json',{'error':True,'phase':'分析暂停，请查看错误记录'})
+    monkeypatch.setattr(console,'owner',lambda:None)
+    monkeypatch.setattr(console,'stage3_snapshot',lambda key:{'total':10,'completed':2,'pending':8})
+    state=console.status()
+    assert state['task_stopped'] and state['phase']=='已停止' and state['severity']=='neutral'
+    assert state['stage3_control']['stopped'] and state['stage3_control']['error']
+    assert not state['stage3_control']['can_stop'] and '已停止' in state['stage3_control']['phase']
+    assert not state['details']['阶段']['stage3'].get('需人工介入')
+    live=console.live_status();live['status_sample']={'age_seconds':0}
+    monkeypatch.setattr(console.monitor,'get',lambda:state)
+    monkeypatch.setattr(console.live_monitor,'get',lambda:live)
+    assert console.monitor_status()['stage3_control']['stopped']
+    # Starting again clears the acknowledgement even if an old error remains.
+    (base/'STOP').unlink()
+    assert not console.live_status()['task_stopped']
+
+
 def test_health_endpoint_works_without_loading_console_reports(tmp_path):
     server=web.ThreadingHTTPServer(('127.0.0.1',0),web.Handler)
     server.console=SimpleNamespace(status=lambda:pytest.fail('health probe must not read task state'))

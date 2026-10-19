@@ -5,6 +5,49 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from runtime_overview import stage3_display
 
 
+def test_confirmed_stop_acknowledges_old_failure_without_deleting_it(tmp_path):
+    import json
+    import os
+    from runtime_overview import stopped_state
+    folder=tmp_path/'stage123';folder.mkdir()
+    controller={'error':True,'phase':'分析暂停，请查看错误记录'}
+    (folder/'controller.json').write_text(json.dumps(controller),encoding='utf-8')
+    (tmp_path/'status.json').write_text(json.dumps({'状态':'已停止'}),encoding='utf-8')
+    (tmp_path/'STOP').write_text('用户请求停止',encoding='utf-8')
+    assert stopped_state(tmp_path,{})=={'task_stopped':True,'stage3_stopped':True}
+    assert not stopped_state(tmp_path,{},task_running=True)['task_stopped']
+    assert not stopped_state(tmp_path,{},stage3_running=True)['stage3_stopped']
+    row=stage3_display({**controller,'stopped':True}, {}, {'mode':'local_model'})
+    assert '已停止' in row['状态'] and not row.get('需人工介入')
+    assert json.loads((folder/'controller.json').read_text(encoding='utf-8'))==controller
+    # A separate restart of layer three must not inherit the old task stop.
+    (folder/'paid_enabled.json').write_text('{}')
+    stopped_at=(tmp_path/'STOP').stat().st_mtime_ns
+    os.utime(folder/'paid_enabled.json',ns=(stopped_at+1_000_000,stopped_at+1_000_000))
+    assert not stopped_state(tmp_path,{})['task_stopped']
+
+
+def test_stop_failures_and_automatic_switches_are_not_acknowledged(tmp_path):
+    import json
+    from runtime_overview import stopped_state
+    folder=tmp_path/'stage123';folder.mkdir()
+    (tmp_path/'STOP').write_text('用户请求停止',encoding='utf-8')
+    (tmp_path/'status.json').write_text(json.dumps({'状态':'启动或运行失败'}),encoding='utf-8')
+    (folder/'STOP').write_text(json.dumps({'reason':'provider-switch'}),encoding='utf-8')
+    assert not any(stopped_state(tmp_path,{}).values())
+    (folder/'STOP').write_text(json.dumps({'reason':'user-request'}),encoding='utf-8')
+    assert stopped_state(tmp_path,{})['stage3_stopped']
+    assert not stopped_state(tmp_path,{},stage3_running=True)['stage3_stopped']
+
+
+def test_stopped_agent_block_is_historical_until_analysis_restarts():
+    runtime={'agent_blocks':{'doubao':{'message':'请完成验证码'}}}
+    control={'stopped':True,'error':True,'codex_review':{'running':False}}
+    assert not stage3_display(control,runtime,{'agent_ids':['doubao']}).get('需人工介入')
+    control['codex_review']['running']=True
+    assert stage3_display(control,runtime,{'agent_ids':['doubao']})['需人工介入']
+
+
 def test_native_agent_progress_overrides_legacy_api_idle_message():
     row=stage3_display({'enabled':True,'running':False,'phase':'等待手动启动',
         'progress':{'api_completed':0,'completed':1419,'codex_completed':1419,
