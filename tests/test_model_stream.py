@@ -57,7 +57,7 @@ def test_model_request_uses_stream_and_long_read_window_without_changing_provide
     monkeypatch.setattr(generator,'MODEL_PROGRESS_REPORTER',lambda **fields:updates.append(fields))
     def call(request,**kwargs):
         calls.append((request,kwargs));return stream(chunk('{"ok":true}',finish='stop'))
-    monkeypatch.setattr(generator.urllib.request,'urlopen',call)
+    monkeypatch.setattr(generator,'open_model_url',call)
     assert generator.model_json('test')=={'ok':True}
     payload=json.loads(calls[0][0].data)
     assert payload['stream'] is True and payload['model']=='test-model'
@@ -72,14 +72,14 @@ def test_model_request_uses_stream_and_long_read_window_without_changing_provide
 def test_timeouts_and_network_failures_are_distinct_and_never_retried(monkeypatch,error,code):
     monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY');calls=[]
     def fail(*args,**kwargs):calls.append(True);raise error
-    monkeypatch.setattr(generator.urllib.request,'urlopen',fail)
+    monkeypatch.setattr(generator,'open_model_url',fail)
     with pytest.raises(generator.CategoryGenerationError) as captured:generator.model_json('test')
     assert captured.value.code==code and len(calls)==1
 
 
 def test_stream_service_error_cannot_echo_key(monkeypatch):
     key='TEST_ONLY_PRIVATE_KEY';monkeypatch.setenv('DEEPSEEK_API_KEY',key)
-    monkeypatch.setattr(generator.urllib.request,'urlopen',lambda *a,**k:stream({'error':{'message':'blocked '+key}}))
+    monkeypatch.setattr(generator,'open_model_url',lambda *a,**k:stream({'error':{'message':'blocked '+key}}))
     with pytest.raises(generator.CategoryGenerationError) as captured:generator.model_json('test')
     assert captured.value.code=='MODEL_STREAM_SERVICE_ERROR' and key not in str(captured.value)
 
@@ -104,7 +104,7 @@ def test_actual_http_stream_is_read_by_production_model_client(monkeypatch):
 
 def test_cli_progress_preserves_route_while_waiting_and_restores_reporter(tmp_path,monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY')
-    monkeypatch.setattr(generator.urllib.request,'urlopen',lambda *a,**k:stream(chunk('{"ok":true}',finish='stop')))
+    monkeypatch.setattr(generator,'open_model_url',lambda *a,**k:stream(chunk('{"ok":true}',finish='stop')))
     captures=[];write=generator.atomic_write
     def capture(path,value):captures.append(json.loads(value));write(path,value)
     monkeypatch.setattr(generator,'atomic_write',capture)

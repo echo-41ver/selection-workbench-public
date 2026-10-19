@@ -26,6 +26,7 @@ from selection_automation.rules import validate
 from selection_automation.identity_policy import compile_policy
 from selection_automation.identity_profiles import reviewed_profile
 from selection_automation.merge_temu_snapshots import atomic_write
+from selection_automation.model_transport import open_model_url
 
 
 class CategoryGenerationError(RuntimeError):
@@ -135,7 +136,7 @@ def model_json(prompt: str, *, max_tokens: int = 16000, retry_truncated: bool = 
             except OSError:pass
     notify(events=0,characters=0,model_protocol=protocol)
     try:
-        with urllib.request.urlopen(request, timeout=600) as response:
+        with open_model_url(request, timeout=600, notify=notify) as response:
             request_id=(getattr(response,'headers',{}) or {}).get('x-request-id','')
             if request_id and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}',request_id):notify(model_request_id=request_id)
             if protocol=='responses':

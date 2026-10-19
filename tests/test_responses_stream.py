@@ -66,7 +66,7 @@ def test_native_gpt_request_keeps_model_and_uses_low_effort(monkeypatch):
     monkeypatch.setenv('SELECTION_RULES_MODEL','gpt-6.1-sol')
     calls=[]
     def send(request,**kw):calls.append(request);return stream({'type':'response.completed','response':completed()})
-    monkeypatch.setattr(generator.urllib.request,'urlopen',send)
+    monkeypatch.setattr(generator,'open_model_url',send)
     assert generator.model_json('test')=={'ok':True}
     body=json.loads(calls[0].data)
     assert body['model']=='gpt-6.1-sol' and body['reasoning']=={'effort':'low'}

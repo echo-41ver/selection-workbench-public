@@ -193,7 +193,7 @@ def test_bad_json_redacted(monkeypatch):
         def __enter__(self): return self
         def __exit__(self,*args): pass
         def read(self): return b'not JSON sensitive'
-    monkeypatch.setattr(generator.urllib.request,'urlopen',lambda *a,**k:Response())
+    monkeypatch.setattr(generator,'open_model_url',lambda *a,**k:Response())
     with pytest.raises(generator.CategoryGenerationError) as error:
         generator.model_json('test')
     assert 'sensitive' not in str(error.value)
@@ -239,7 +239,7 @@ def test_truncated_output_never_silently_repeats_paid_request(monkeypatch):
     def request(req,**kwargs):
         budgets.append(json.loads(req.data)['max_tokens'])
         return Response()
-    monkeypatch.setattr(generator.urllib.request,'urlopen',request)
+    monkeypatch.setattr(generator,'open_model_url',request)
     with pytest.raises(generator.CategoryGenerationError) as error:
         generator.model_json('test')
     assert error.value.code=='MODEL_OUTPUT_TRUNCATED'

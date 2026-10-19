@@ -67,7 +67,7 @@ def test_http403_preserves_reason_without_exposing_credentials(monkeypatch,body,
     from urllib.error import HTTPError
     monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_PRIVATE_KEY')
     def fail(*args,**kwargs):raise HTTPError('https://provider.example/chat/completions',403,'Forbidden',{},io.BytesIO(body))
-    monkeypatch.setattr(generator.urllib.request,'urlopen',fail)
+    monkeypatch.setattr(generator,'open_model_url',fail)
     with pytest.raises(generator.CategoryGenerationError) as captured:generator.model_json('test')
     assert captured.value.code=='MODEL_HTTP_403' and expected in str(captured.value)
     assert 'TEST_ONLY_PRIVATE_KEY' not in str(captured.value)
