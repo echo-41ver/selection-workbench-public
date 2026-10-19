@@ -12,7 +12,7 @@ def read_requests(base):
     for path in (base/'commands/rotate').glob('*.json'):
         try: values.append(json.loads(path.read_text('utf-8')))
         except (OSError,ValueError): continue
-    return sorted(values,key=lambda r:(r['created_at'],r['id']))
+    return sorted(values,key=lambda r:(r.get('queue_order',0),r['created_at'],r['id']))
 
 
 def write(base,request):
@@ -31,10 +31,14 @@ def enqueue(base,workers,owner):
             time.sleep(.02)
     try:
         identity={k:owner[k] for k in ('pid','created')}
-        occupied={w for r in read_requests(base) if r['status'] in PENDING and r['owner']==identity for w in r['workers']}
+        requests=read_requests(base)
+        occupied={w for r in requests if r['status'] in PENDING and r['owner']==identity for w in r['workers']}
         if occupied.intersection(workers):
             raise ValueError('该采集路已在排队或更换session，请等待本次结果；其他路可提交排队')
-        return write(base,{'id':uuid.uuid4().hex,'action':'rotate','workers':list(workers),
+        # Wall-clock timestamps can tie on Windows or move backwards. The
+        # existing append lock also serializes this durable FIFO sequence.
+        order=max((request.get('queue_order',0) for request in requests),default=0)+1
+        return write(base,{'id':uuid.uuid4().hex,'action':'rotate','workers':list(workers),'queue_order':order,
                           'owner':identity,'created_at':time.time(),
                           'status':'QUEUED','worker_status':{str(w):'QUEUED' for w in workers}})
     finally: guard.__exit__(None,None,None)

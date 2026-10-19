@@ -50,6 +50,23 @@ def test_other_worker_requests_survive_busy_rotation(tmp_path):
     assert [r['id'] for r in q.read_requests(tmp_path)]==[first['id'],second['id'],third['id']]
 
 
+def test_fifo_survives_equal_or_backwards_clock_and_random_ids(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    timestamps=iter([100,100,99,98]);ids=iter(['z','a','y','b'])
+    monkeypatch.setattr(q.time,'time',lambda:next(timestamps))
+    monkeypatch.setattr(q.uuid,'uuid4',lambda:SimpleNamespace(hex=next(ids)))
+    queued=[q.enqueue(tmp_path,[worker],OWNER) for worker in range(1,5)]
+    assert [row['queue_order'] for row in queued]==[1,2,3,4]
+    assert [row['id'] for row in q.read_requests(tmp_path)]==['z','a','y','b']
+
+
+def test_new_sequence_preserves_legacy_requests_ahead_of_new_ones(tmp_path):
+    old={'id':'old','action':'rotate','workers':[1],'owner':{'pid':123,'created':1},
+         'created_at':1,'status':'QUEUED','worker_status':{'1':'QUEUED'}}
+    q.write(tmp_path,old);new=q.enqueue(tmp_path,[2],OWNER)
+    assert [row['id'] for row in q.read_requests(tmp_path)]==['old',new['id']]
+
+
 def test_no_owner_rejects_without_writing_command(tmp_path,monkeypatch):
     monkeypatch.setattr(selection,'live_owner',lambda:None)
     console=web.Console(tmp_path);console.key='fixture'
