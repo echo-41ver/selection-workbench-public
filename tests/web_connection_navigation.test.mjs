@@ -83,11 +83,14 @@ test('compact worker surfaces its round, state heartbeat time, and deduplicated 
  vm.runInContext(code,context);
  const card=element();card.className='progress-card';
  context.card=card;
- vm.runInContext(`compactWorker(card,{unique_goods:17,round:4,status_updated_at:1791596096},2,false)`,context);
+ vm.runInContext(`compactWorker(card,{unique_goods:17,round:4,status_updated_at:1791596096,'未归类商品数':23,'明确排除商品数':2},2,false)`,context);
  const activity=card.children.find(child=>child.className==='small worker-activity');
  assert.match(activity.textContent,/第 4 轮/);
  assert.match(activity.textContent,/状态更新 \d{2}:\d{2}:\d{2}/);
- assert.match(activity.textContent,/当前关键词 \/ 排序去重商品/);
+ assert.match(activity.textContent,/当前关键词 \/ 排序已确认相关的去重商品/);
+ const breakdown=card.children.find(node=>node.textContent?.includes('另有未归类'));
+ assert.match(breakdown.textContent,/未归类 23 件.*明确排除 2 件/);
+ assert.match(breakdown.textContent,/资料完整的商品仍进入后续筛选/);
  const completedCard=element();completedCard.className='progress-card';context.card=completedCard;
  vm.runInContext(`compactWorker(card,{unique_goods:7159,round:4,status_updated_at:1791596096,'采集状态':'WORKER_COMPLETE'},2,false)`,context);
  const completedActivity=completedCard.children.find(child=>child.className==='small worker-activity');
