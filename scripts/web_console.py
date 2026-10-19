@@ -1538,6 +1538,10 @@ class Console:
             if not api_key:api_key=saved_key(self.root,provider)
             if not api_key and provider['mode'] in {'multimodal_api','liquid_d1'}:
                 raise ConsoleError('KEY_REQUIRED','请填写与第三层服务地址配套的 API key',409)
+            if provider['mode']=='multimodal_api' and provider.get('reasoning_effort','default')!='default':
+                from selection_automation.api_reasoning import validate
+                try:validate(provider,api_key)
+                except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
             if supplied is not None and provider['mode'] in {'liquid_d1','multimodal_api'}:
                 save_key(self.root,provider,api_key)
             if api_key:self.stage3_keys[(key,provider['base_url'])]=api_key
@@ -1603,6 +1607,29 @@ class Console:
             except Exception:
                 self.stage3_busy=False;selection.save(folder/'STOP',{'time':time.time()});raise
             return {'ok':True,'phase':self.stage3_phase,'provider':provider}
+
+    def api_reasoning_catalog(self,body):
+        if set(body)-{'provider','api_key','refresh'} or not isinstance(body.get('provider'),dict) or type(body.get('refresh',False)) is not bool:
+            raise ConsoleError('INVALID_INPUT','模型能力读取参数无效')
+        from selection_automation.stage3_provider import settings
+        from selection_automation.stage3_credentials import saved_key,validate_key
+        from selection_automation.api_reasoning import discover,list_models,capabilities
+        try:
+            provider=settings(body['provider'])
+            if provider['mode']!='multimodal_api':raise ValueError('请选择外部多模态 API')
+            supplied=body.get('api_key')
+            key=validate_key(supplied) if supplied is not None else ''
+        except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
+        current,_=self.current_run_key()
+        key=key or self.stage3_keys.get((current,provider['base_url']),'') or saved_key(self.root,provider)
+        if not key and self.key==current and self.draft_key and self.draft_provider.get('base_url','').rstrip('/')==provider['base_url']:
+            key=self.draft_key
+        inventory=list_models(provider,key,refresh=body.get('refresh',False))
+        model=next((row for row in inventory['models'] if row['id']==provider['model']),None)
+        if model:catalog=model['reasoning']
+        elif inventory['status']=='ready':catalog={**capabilities(None,provider),'message':'请从接口返回的模型列表中选择模型。'}
+        else:catalog=discover(provider,key,refresh=body.get('refresh',False))
+        return {'ok':True,'catalog':catalog,'inventory':inventory}
 
     def stop_stage3(self,body):
         if body: raise ConsoleError('INVALID_INPUT','停止第三层无需参数')
@@ -1892,7 +1919,7 @@ class Console:
             if live_stage3.get('需人工介入'):red=True
         from selection_automation.network_readiness import describe
         network_readiness=selection.read(self.root/'runtime/network-readiness.json',{}) or describe(selection.read(self.root/'runtime/secrets/proxyshare.settings.json',{}))
-        return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,
+        return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,'api_reasoning_supported':True,
                       'task_stopped':bool(stopped.get('task_stopped')),
                       'network_readiness':network_readiness,
                       'task_runtime':selection.read(self.root/'runs'/key/'runtime_version.json',{}) if key else {},
@@ -2032,7 +2059,7 @@ class Handler(BaseHTTPRequestHandler):
             body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
             if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market',
-                    '/api/local-agents/models','/api/local-agents/refresh','/api/local-models/repair','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
+                    '/api/local-agents/models','/api/local-agents/refresh','/api/local-models/repair','/api/stage3/api-reasoning','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)
@@ -2046,6 +2073,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
             if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))
             if self.path=='/api/stage3/concurrency': return self.send_json(self.server.console.set_stage3_concurrency(body))
+            if self.path=='/api/stage3/api-reasoning': return self.send_json(self.server.console.api_reasoning_catalog(body))
             if self.path=='/api/stage3/concurrency-default':
                 from selection_automation.stage3_provider import settings
                 from selection_automation.analysis_concurrency import recommendation

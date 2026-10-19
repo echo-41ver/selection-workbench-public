@@ -254,6 +254,11 @@ def consume(args, cat, fatal_file, key_identity, pending):
     if not authorized():return
     from selection_automation.stage3_provider import from_category, request_key, VisualClient
     provider=from_category(cat)
+    if provider['mode']=='multimodal_api' and 'reasoning_effort' in provider:
+        initial_effort=provider['reasoning_effort']
+        if initial_effort!='default':
+            from selection_automation.api_reasoning import validate
+            validate(provider,request_key(provider))
     provider_identity={k:provider[k] for k in ('mode','base_url','model','protocol')}
     if fatal_file.exists():
         blocked=json.loads(fatal_file.read_text(encoding='utf-8'))
@@ -380,7 +385,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 raise
             for i, (identity, row) in enumerate(zip(ids, batch)):
                 scored = score(cat, facts[identity])
-                if provider['mode']!='local_model' and effort == 'low' and scored['hard_conflicts'] and facts[identity].get('overall_confidence',1) < .65:
+                if provider['mode']!='local_model' and 'reasoning_effort' not in provider and effort == 'low' and scored['hard_conflicts'] and facts[identity].get('overall_confidence',1) < .65:
                     call([row], 'high')
                     continue
                 append(args.results, {**{k: row[k] for k in ('asin','goods_id','pair_revision','vision_revision_key','attempt')},

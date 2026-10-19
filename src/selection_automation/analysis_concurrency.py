@@ -13,7 +13,8 @@ def profile(provider):
                 'agent_models':{key:provider.get('agent_models',{}).get(key,'') for key in ids},
                 **({'agent_efforts':{key:provider['agent_efforts'].get(key,'default') for key in ids}}
                    if provider.get('agent_efforts') else {})}
-    return {key:provider.get(key,'') for key in ('mode','base_url','model','protocol')}
+    return {**{key:provider.get(key,'') for key in ('mode','base_url','model','protocol')},
+            **({'reasoning_effort':provider['reasoning_effort']} if 'reasoning_effort' in provider else {})}
 
 
 def profile_path(provider,root=None):

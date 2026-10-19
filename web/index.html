@@ -96,6 +96,7 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
 <div><label for="stage3-api-key">该服务的 API key</label><input id="stage3-api-key" type="password" autocomplete="new-password" placeholder="本地服务无需 Key 时可留空"></div></div>
 <label for="stage3-protocol">服务接口</label><select id="stage3-protocol"><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option><option value="decisions" selected>D1 决策接口</option></select></div>
 <div id="stage3-model-field"><label for="stage3-model">模型 ID</label><input id="stage3-model" value="d1" maxlength="200" autocomplete="off"></div>
+<div id="stage3-api-effort-box" hidden><label for="stage3-api-model">接口可用模型</label><select id="stage3-api-model"><option value="">填写服务地址和 Key 后自动读取</option></select><label for="stage3-api-effort">推理强度</label><select id="stage3-api-effort"><option value="default">默认（接口默认）</option></select><div class="actions"><button id="stage3-api-effort-refresh" type="button">重新读取模型与档位</button></div><p id="stage3-api-effort-status" class="small">填写服务地址和 API Key 后自动读取模型；选择模型后显示其推理档位。</p></div>
 <div id="stage3-local-tools" hidden><label for="stage3-local-model">本机已安装的看图模型</label><select id="stage3-local-model"><option value="">等待自动识别</option></select><div class="actions"><button type="button" id="stage3-local-repair">重新检测并修复连接</button></div><p id="stage3-local-status" class="small" role="status"></p></div>
 <div id="stage3-confidence-field" hidden><label for="stage3-confidence">决策确认概率（%）</label><input id="stage3-confidence" type="number" value="90" min="50" max="100"><p class="small">仅供决策接口分流，尚未按当前品类校准；中间区间保留证据不足。</p></div>
 
@@ -110,15 +111,53 @@ let stage3AgentSelection=[],stage3AgentModels={},stage3AgentEfforts={},stage3Age
 let stage3DetectedAgents=[],stage3AgentCatalogs={};
 async function boundedAgentRead(url,options){const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),25000);try{const response=await fetch(url,{...options,signal:controller.signal});const data=await response.json();return {response,data};}catch(error){if(error.name==='AbortError')throw Error('本机 Agent 读取超时，任务和已保存模型保持，请稍后重新识别。');throw error;}finally{clearTimeout(deadline);}}
 function reasoningSettingsSupported(){return typeof lastStatus==='undefined'||!lastStatus?.stage3_provider||Object.hasOwn(lastStatus.stage3_provider,'agent_efforts');}
+let stage3ApiReasoningValue='default',stage3ApiReasoningCatalog=null,stage3ApiModelInventory=null,stage3ApiReasoningRead='',stage3ApiReasoningGeneration=0,stage3ApiReasoningLoading=false;
+function apiReasoningIdentity(){return JSON.stringify(['stage3-mode','stage3-base-url','stage3-model','stage3-protocol','stage3-api-key'].map(id=>$(id).value.trim()));}
+function resetApiReasoning(keepModels=false){stage3ApiReasoningValue='default';stage3ApiReasoningCatalog=null;if(!keepModels)stage3ApiModelInventory=null;stage3ApiReasoningRead='';stage3ApiReasoningGeneration++;stage3ApiReasoningLoading=false;}
+function apiReasoningReady(){if($('stage3-mode').value!=='multimodal_api')return true;const model=stage3ApiModelInventory?.models?.find(row=>row.id===$('stage3-model').value.trim());if(stage3ApiModelInventory?.status==='ready'&&(!model||model.vision===false))return false;return stage3ApiReasoningValue==='default'||stage3ApiReasoningCatalog?.status==='ready'&&stage3ApiReasoningCatalog.efforts.includes(stage3ApiReasoningValue);}
+function renderApiReasoning(){
+ const box=$('stage3-api-effort-box');if(!box)return;box.hidden=$('stage3-mode').value!=='multimodal_api'||!['responses','chat_completions'].includes($('stage3-protocol').value);if(box.hidden)return;
+ const modelSelect=$('stage3-api-model'),models=stage3ApiModelInventory?.models||[],modelSignature=JSON.stringify(models.map(row=>[row.id,row.name,row.vision]));modelSelect.dataset??={};
+ if(modelSelect.dataset.signature!==modelSignature){modelSelect.dataset.signature=modelSignature;modelSelect.replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent=models.length?'请选择模型':'模型列表尚未读取，可重新读取或手动填写模型 ID';modelSelect.append(empty);for(const model of models){const option=document.createElement('option');option.value=model.id;option.textContent=(model.name&&model.name!==model.id?model.name+' · ':'')+model.id+(model.vision===false?'（不支持图片）':'');option.disabled=model.vision===false;modelSelect.append(option);}}
+ modelSelect.value=models.some(row=>row.id===$('stage3-model').value.trim())?$('stage3-model').value.trim():'';
+ const select=$('stage3-api-effort'),catalog=stage3ApiReasoningCatalog,labels={none:'无',minimal:'最低',low:'低',medium:'中',high:'高',xhigh:'很高',max:'最高',ultra:'超高'};
+ const signature=JSON.stringify([stage3ApiReasoningValue,catalog?.efforts,catalog?.default_effort]);select.dataset??={};
+ if(select.dataset.signature!==signature){select.dataset.signature=signature;select.replaceChildren();const add=(value,label)=>{const option=document.createElement('option');option.value=value;option.textContent=label;select.append(option);};
+ add('default',catalog?.default_effort?'默认（接口默认：'+(labels[catalog.default_effort]||catalog.default_effort)+' · '+catalog.default_effort+'）':'默认（接口默认）');
+ for(const effort of catalog?.efforts||[])add(effort,(labels[effort]||effort)+' · '+effort);
+ if(stage3ApiReasoningValue!=='default'&&!(catalog?.efforts||[]).includes(stage3ApiReasoningValue))add(stage3ApiReasoningValue,'已保存：'+stage3ApiReasoningValue+'（待读取确认）');
+ select.value=stage3ApiReasoningValue;}
+ const supported=Boolean(typeof lastStatus!=='undefined'&&lastStatus?.api_reasoning_supported),locked=Boolean(lastStatus?.stage3_runtime?.switch_pending);
+ modelSelect.disabled=locked||!supported||!models.length;
+ select.disabled=locked||!supported||(!catalog?.efforts?.length&&stage3ApiReasoningValue==='default');
+ $('stage3-api-effort-refresh').disabled=locked||!supported||stage3ApiReasoningLoading;
+ $('stage3-api-effort-status').textContent=!supported?'网页服务更新后可读取模型和推理强度。':stage3ApiReasoningLoading?'正在读取接口支持的模型与推理档位…':(stage3ApiModelInventory?.message||'')+' '+(catalog?.message||'填写服务地址和 API Key 后自动读取模型。');
+}
+async function refreshApiReasoning(force=false){
+ if($('stage3-mode').value!=='multimodal_api'||!['responses','chat_completions'].includes($('stage3-protocol').value)||!lastStatus?.api_reasoning_supported)return;
+ if(!force&&['stage3-base-url','stage3-model','stage3-protocol','stage3-api-key'].includes(document.activeElement?.id))return;
+ const identity=apiReasoningIdentity();if(!force&&(stage3ApiReasoningRead===identity||stage3ApiReasoningLoading))return;
+ if(!$('stage3-base-url').value.trim())return;
+ const generation=++stage3ApiReasoningGeneration;stage3ApiReasoningRead=identity;stage3ApiReasoningLoading=true;renderApiReasoning();
+ const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);
+ try{
+  const body={provider:stage3ProviderSettings(),refresh:force};if($('stage3-api-key').value.trim())body.api_key=$('stage3-api-key').value.trim();
+  const response=await fetch('/api/stage3/api-reasoning',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});const data=await response.json();
+  if(generation!==stage3ApiReasoningGeneration||identity!==apiReasoningIdentity())return;
+  if(!response.ok)throw Error(data.error?.message||'模型能力读取失败');stage3ApiReasoningCatalog=data.catalog;stage3ApiModelInventory=data.inventory||null;
+ }catch(error){if(generation===stage3ApiReasoningGeneration&&identity===apiReasoningIdentity())stage3ApiReasoningCatalog={status:'unavailable',efforts:[],message:error.name==='AbortError'?'模型能力读取超时，请重新读取；已有配置保留。':error.message};}
+ finally{clearTimeout(deadline);if(generation===stage3ApiReasoningGeneration){stage3ApiReasoningLoading=false;renderApiReasoning();}}
+}
 function stage3ProviderSettings(){
  const mode=$('stage3-mode').value,ids=mode==='local_agent'?[...new Set(stage3AgentSelection.filter(Boolean))]:[];
  const models=Object.fromEntries(ids.filter(id=>stage3AgentModels[id]).map(id=>[id,stage3AgentModels[id]]));
  const efforts=Object.fromEntries(ids.map(id=>[id,stage3AgentEfforts[id]||'default']));
- return {mode,base_url:$('stage3-base-url').value.trim(),model:$('stage3-model').value.trim(),protocol:$('stage3-protocol').value,workers:Number($('stage3-workers').value),confidence:Number($('stage3-confidence').value)/100,concurrency_mode:$('stage3-auto')?.checked?'auto':'manual',agent_ids:ids,agent_models:models,...(reasoningSettingsSupported()?{agent_efforts:efforts}:{})};
+ return {mode,base_url:$('stage3-base-url').value.trim(),model:$('stage3-model').value.trim(),protocol:$('stage3-protocol').value,workers:Number($('stage3-workers').value),confidence:Number($('stage3-confidence').value)/100,concurrency_mode:$('stage3-auto')?.checked?'auto':'manual',agent_ids:ids,agent_models:models,...(reasoningSettingsSupported()?{agent_efforts:efforts}:{}),...(mode==='multimodal_api'&&['responses','chat_completions'].includes($('stage3-protocol').value)&&typeof lastStatus!=='undefined'&&lastStatus?.api_reasoning_supported?{reasoning_effort:stage3ApiReasoningValue}:{})};
 }
 function stage3ProviderFields(){
+ if(typeof renderApiReasoning==='function')renderApiReasoning();
  if($('stage3-local-tools'))$('stage3-local-tools').hidden=$('stage3-mode').value!=='local_model';
- const mode=$('stage3-mode').value,local=mode==='local_agent';$('stage3-api-fields').hidden=local;$('stage3-confidence-field').hidden=local||$('stage3-protocol').value!=='decisions';$('stage3-agents').hidden=!local;if($('stage3-model-field'))$('stage3-model-field').hidden=local;if($('configure-stage3'))$('configure-stage3').textContent=local?'保存方案（不启动）':'保存方案与 Key（不启动）';
+ const mode=$('stage3-mode').value,local=mode==='local_agent';$('stage3-api-fields').hidden=local;$('stage3-confidence-field').hidden=local||$('stage3-protocol').value!=='decisions';$('stage3-agents').hidden=!local;if($('stage3-model-field'))$('stage3-model-field').hidden=local||(mode==='multimodal_api'&&typeof stage3ApiModelInventory!=='undefined'&&stage3ApiModelInventory?.status==='ready');if($('configure-stage3'))$('configure-stage3').textContent=local?'保存方案（不启动）':'保存方案与 Key（不启动）';
  if($('stage3-auto')){$('stage3-workers').disabled=$('stage3-auto').checked;if($('stage3-workers-field'))$('stage3-workers-field').hidden=$('stage3-auto').checked;}
  $('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取。默认并发优先复用此前稳定且吞吐量最高的记录，可取消自动后手动修改。':mode==='local_model'?'连接已启动的本地看图模型服务。':local?'默认只使用你选中的一个 Agent；它可以按并发数同时处理多组商品。需要多个 Agent 分担时，在下方展开添加。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';
 }
@@ -133,6 +172,7 @@ async function refreshConcurrencyDefault(){
  }catch{} // A missing history record never blocks manual configuration.
 }
 function chooseStage3Mode(){
+ resetApiReasoning();
  const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:11434/v1','','chat_completions',2],local_agent:['','gpt-6.1-sol','responses',6]};
  const [url,model,protocol,workers]=values[$('stage3-mode').value];$('stage3-base-url').value=url;$('stage3-model').value=model;$('stage3-protocol').value=protocol;$('stage3-workers').value=workers;$('stage3-api-key').value='';if($('stage3-auto'))$('stage3-auto').checked=true;
  stage3ManualConcurrency=false;stage3SettingsDirty=true;stage3ProviderFields();if($('stage3-mode').value==='local_agent'){stage3AgentSelection=[];refreshLocalAgents();}refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);
@@ -162,12 +202,13 @@ function stage3AgentInputsReady(){return stage3AgentSelection.length>0&&stage3Ag
 });}
 function renderStage3Settings(data){
  data=data||{};const changedRun=stage3SettingsRun!==data.category_key;
- if(changedRun){stage3SettingsDirty=false;stage3SettingsRun=data.category_key;$('stage3-api-key').value='';}
+ if(changedRun){stage3SettingsDirty=false;stage3SettingsRun=data.category_key;$('stage3-api-key').value='';resetApiReasoning();}
  const p=data.stage3_provider;
  if(p&&!stage3SettingsDirty){
   const before=JSON.stringify([stage3AgentSelection,stage3AgentModels,stage3AgentEfforts]);stage3ManualConcurrency=p.concurrency_mode==='manual';
   $('stage3-mode').value=p.mode;$('stage3-base-url').value=p.base_url;$('stage3-model').value=p.model;$('stage3-protocol').value=p.protocol;$('stage3-workers').value=p.workers;$('stage3-confidence').value=Math.round(p.confidence*100);if($('stage3-auto'))$('stage3-auto').checked=p.concurrency_mode==='auto';stage3AgentSelection=[...(p.agent_ids||[])];stage3AgentModels={...(p.agent_models||{})};
   stage3AgentEfforts={...(p.agent_efforts||{})};
+  stage3ApiReasoningValue=p.reasoning_effort||'default';
   if(before!==JSON.stringify([stage3AgentSelection,stage3AgentModels,stage3AgentEfforts])||changedRun)renderAgentControls();
  }
  stage3ProviderFields();const locked=Boolean(data.stage3_runtime?.switch_pending);
@@ -182,6 +223,7 @@ function renderStage3Settings(data){
  if(p?.mode==='local_agent'&&stage3AgentLoadedFor!==(data.category_key||'')){stage3AgentLoadedFor=data.category_key||'';refreshLocalAgents();}
  // Runtime updates must not rebuild focused model selects or overwrite edits.
  renderAgentStatus($('stage3-agent-status'),stage3AgentSelection[0]||'');
+ refreshApiReasoning();
  for(const node of document.querySelectorAll('#stage3-extra-agents [data-agent-status]'))renderAgentStatus(node,node.dataset.agentStatus);
 }
 function agentOption(select,value,text,disabled=false){const option=document.createElement('option');option.value=value;option.textContent=text;option.disabled=disabled;select.append(option);}
@@ -577,8 +619,8 @@ $('plain-rule3').addEventListener('input',()=>{$('plain-changes').textContent='�
 $('plain-rule').addEventListener('input',()=>{$('plain-changes').textContent=$('plain-rule').value===plainApplied?'当前说明已应用。':'有尚未应用的要求，请先点击“解释 / 应用第一层要求”。';updateControls();});
 $('run').addEventListener('click',()=>action('/api/run',{draft_id:draftId,stage1_text:$('stage1-rule').value,stage2_threshold:Number($('stage2-threshold').value),stage3_text:$('stage3-rule').value,stage3_modules_json:$('stage3-modules').value,commercial:businessSettings(),worker_count:Number($('worker-count').value)}));
 $('apply-stage3-concurrency').addEventListener('click',()=>action('/api/stage3/concurrency',{workers:Number($('stage3-workers').value),concurrency_mode:$('stage3-auto').checked?'auto':'manual'}));
-$('configure-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()};if(body.provider.mode==='local_agent'&&!stage3AgentInputsReady()){$('stage3-agent-message').textContent='请先选择一个 Agent，并等待读取可用模型。';return;}const key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/configure-stage3',body);});
-$('start-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()};if(body.provider.mode==='local_agent'&&!stage3AgentInputsReady()){$('stage3-agent-message').textContent='请先选择一个 Agent，并等待读取可用模型。';return;}const key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/start-stage3',body);});
+$('configure-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()};if(!apiReasoningReady()){$('stage3-api-effort-status').textContent='请确认已选择可看图模型和接口支持的推理档位，需要时重新读取或选择默认。';return;}if(body.provider.mode==='local_agent'&&!stage3AgentInputsReady()){$('stage3-agent-message').textContent='请先选择一个 Agent，并等待读取可用模型。';return;}const key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/configure-stage3',body);});
+$('start-stage3').addEventListener('click',()=>{const body={provider:stage3ProviderSettings()};if(!apiReasoningReady()){$('stage3-api-effort-status').textContent='请确认已选择可看图模型和接口支持的推理档位，需要时重新读取或选择默认。';return;}if(body.provider.mode==='local_agent'&&!stage3AgentInputsReady()){$('stage3-agent-message').textContent='请先选择一个 Agent，并等待读取可用模型。';return;}const key=$('stage3-api-key').value.trim();if(key)body.api_key=key;$('stage3-api-key').value='';stage3SettingsDirty=false;action('/api/start-stage3',body);});
 $('stage3-mode').addEventListener('change',chooseStage3Mode);
 $('stage3-local-repair').addEventListener('click',repairLocalModelConnection);
 $('stage3-local-model').addEventListener('change',chooseLocalModel);
@@ -590,8 +632,12 @@ $('stage3-add-agent').addEventListener('click',addAnalysisAgent);
 $('stage3-agent-connect').addEventListener('click',()=>agentAction('connect',stage3AgentSelection[0],$('stage3-agent-connect')));
 $('stage3-agent-login').addEventListener('click',()=>agentAction('login',stage3AgentSelection[0],$('stage3-agent-login')));
 $('stage3-enable-doubao').addEventListener('click',enableSelectedDoubao);
-for(const id of ['stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-auto'])$(id).addEventListener('input',()=>{if(id==='stage3-workers'||id==='stage3-auto')stage3ManualConcurrency=id==='stage3-workers'||!$('stage3-auto').checked;stage3SettingsDirty=true;stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);});
+for(const id of ['stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-auto'])$(id).addEventListener('input',()=>{if(['stage3-base-url','stage3-model','stage3-protocol'].includes(id))resetApiReasoning();if(id==='stage3-workers'||id==='stage3-auto')stage3ManualConcurrency=id==='stage3-workers'||!$('stage3-auto').checked;stage3SettingsDirty=true;stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);});
 for(const id of ['stage3-base-url','stage3-model','stage3-protocol','stage3-auto'])$(id).addEventListener('change',()=>refreshConcurrencyDefault());
+for(const id of ['stage3-base-url','stage3-model','stage3-protocol','stage3-api-key'])$(id).addEventListener('change',()=>{if(id==='stage3-api-key')resetApiReasoning();refreshApiReasoning(true);});
+$('stage3-api-effort-refresh').addEventListener('click',()=>refreshApiReasoning(true));
+$('stage3-api-model').addEventListener('change',()=>{const model=stage3ApiModelInventory?.models?.find(row=>row.id===$('stage3-api-model').value);if(!model||model.vision===false)return;$('stage3-model').value=model.id;resetApiReasoning(true);stage3SettingsDirty=true;renderApiReasoning();refreshApiReasoning();refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);});
+$('stage3-api-effort').addEventListener('change',()=>{stage3ApiReasoningValue=$('stage3-api-effort').value;stage3SettingsDirty=true;renderApiReasoning();refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);});
 $('stop-stage3').addEventListener('click',()=>action('/api/stop-stage3',{}));
 $('stop').addEventListener('click',()=>action('/api/stop',{}));
 $('resume').addEventListener('click',()=>action('/api/resume',{}));

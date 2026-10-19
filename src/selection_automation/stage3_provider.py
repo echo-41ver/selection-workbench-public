@@ -16,7 +16,7 @@ LABELS = {'liquid_d1': 'Liquid D1 决策 API', 'multimodal_api': '多模态 API'
 
 def settings(value=None):
     value = value or {}
-    allowed = {'mode', 'base_url', 'model', 'protocol', 'workers', 'confidence', 'concurrency_mode', 'agent_ids','agent_models','agent_efforts'}
+    allowed = {'mode', 'base_url', 'model', 'protocol', 'workers', 'confidence', 'concurrency_mode', 'agent_ids','agent_models','agent_efforts','reasoning_effort'}
     if not isinstance(value, dict) or set(value) - allowed:
         raise ValueError('第三层配置字段无效')
     legacy = (isinstance(value.get('base_url'),str) and bool(value['base_url']) and 'liquid.ai' not in value['base_url']
@@ -91,7 +91,14 @@ def settings(value=None):
     confidence = value.get('confidence', .90)
     if type(confidence) not in (int, float) or not math.isfinite(confidence) or not .5 <= confidence <= 1:
         raise ValueError('决策确认概率须为 0.5–1')
-    return {'mode': mode, 'base_url': address if mode != 'local_agent' else '', 'model': model,
+    reasoning = {}
+    if 'reasoning_effort' in value:
+        from .api_reasoning import valid_effort
+        effort = value['reasoning_effort']
+        if mode != 'multimodal_api' or protocol not in ('responses','chat_completions') or not valid_effort(effort):
+            raise ValueError('外部 API 推理强度选择无效')
+        reasoning['reasoning_effort'] = effort
+    return {**reasoning, 'mode': mode, 'base_url': address if mode != 'local_agent' else '', 'model': model,
             'protocol': protocol, 'workers': workers, 'confidence': float(confidence),
             'concurrency_mode': concurrency_mode, 'agent_ids': agent_ids,'agent_models':agent_models,'agent_efforts':agent_efforts}
 
@@ -208,6 +215,10 @@ class VisualClient:
         prepared=request.pop('_prepared_data',None)
         on_progress=request.pop('_on_progress',None)
         protocol = self.provider['protocol']
+        if self.provider.get('mode')=='multimodal_api' and 'reasoning_effort' in self.provider:
+            effort=self.provider['reasoning_effort']
+            if effort=='default':request.pop('reasoning',None)
+            else:request['reasoning']={'effort':effort}
         if protocol == 'responses':
             if urlsplit(self.provider['base_url']).hostname=='api.daitu.cc':
                 return self.stream_responses(request)
@@ -230,6 +241,8 @@ class VisualClient:
             arguments = dict(model=request['model'],
                 messages=[{'role': 'system', 'content': instructions}, {'role': 'user', 'content': blocks}],
                 response_format=output_format, max_tokens=request['max_output_tokens'])
+            if self.provider.get('mode')=='multimodal_api' and 'reasoning_effort' in self.provider and request.get('reasoning'):
+                arguments['reasoning_effort']=request['reasoning']['effort']
             if self.provider.get('mode') == 'local_model':
                 arguments['temperature']=0
                 return self.stream_local_chat(arguments,on_progress=on_progress)
