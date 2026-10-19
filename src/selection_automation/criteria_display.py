@@ -84,6 +84,7 @@ def organize(catalog):
         if identity:groups[identity]=item
         chinese=item.get('label_zh') or item.get('label','')
         item['label_zh']=chinese if re.search(r'[\u4e00-\u9fff]',chinese) else label or '其他商品参数'
+        item['rule']='双方文字明确不一致才排除；缺失则继续后续层。一致仅通过本项筛选，不能据此确认同款。'
         item['display_priority']=rank
         items.append(item)
     for item in items:

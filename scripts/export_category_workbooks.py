@@ -297,16 +297,21 @@ def amazon_conclusions(headers, rows, limit, *, binary=False, same_only=False, o
     for row in rows:
         asin = str(row[0])
         item = products.setdefault(asin, {'asin': asin, 'title': row[1], 'url': row[2], 'image': row[3], 'review_images': set(),
-            'same': 0, 'review': 0, 'different': 0, 'unanalysed': 0, 'pending': 0, 'total': 0})
+            'same': 0, 'similar':0, 'review': 0, 'different': 0, 'unanalysed': 0, 'pending': 0, 'total': 0})
         kind = verdict_kind(row[final_index])
         item[kind] += 1
         if binary and ('分析失败' in str(row[final_index]) or '第三层待运行' in str(row[final_index])):
             item['pending'] += 1
-        if kind == 'same' or (kind == 'review' and not (same_only or binary)):
+        if kind in {'same','similar'} or (kind == 'review' and not (same_only or binary)):
             item['review_images'].update(filter(None, (row[3], row[7])))
         item['total'] += 1
     for item in products.values():
-        item['selected'] = item['same'] < limit if operator=='lt' else item['same'] <= limit
+        count=item['same']+item['similar']
+        item['selected'] = count < limit if operator=='lt' else count <= limit
+        if item['similar']:
+            item['conclusion']=('符合：当前采样同款及类似款在门槛内' if item['selected'] else '不符合：同款及类似款合计达到门槛')
+            item['reason']=f"当前采样同款{item['same']}个、类似款{item['similar']}个，合计{count}个；本任务要求{('严格少于' if operator=='lt' else '不超过')}{limit}个；未分析{item['unanalysed']}对、待补证{item['review']}对另行保留"
+            continue
         if not item['selected']:
             item['conclusion'] = '不符合：确认同款超过门槛'
             item['reason'] = f"已确认{item['same']}个同款，不满足本任务{('严格少于' if operator=='lt' else '不超过')}{limit}个的条件"
@@ -399,6 +404,9 @@ def export_stage_book(destination, headers, rows, summary, category_name, *, thi
                 cols[4] = '分析失败或待运行对数'
             if same_only:
                 cols[9] = '纳入同款专表'
+            three_class=summary.get('视觉结论口径')=='automatic-visual-v1'
+            if three_class:
+                cols[9]='纳入同款及类似款明细';cols.append('类似款数')
             conclusion.merge_range(0, 0, 0, len(cols)-1, f'{category_name}｜按Amazon商品汇总的最终结论', f['title'])
             conclusion.merge_range(1, 0, 1, len(cols)-1, '同款上限沿用采集前设置；按主体款式和核心结构二分类，仅汇总当前采样；未入围、待运行或分析失败不是商品结论。' if binary else '同款上限沿用采集前的任务设置；仅汇总当前采样。待复核、待补证、未分析及未入围不当作已确认不同款。', f['note'])
             conclusion.set_row(0, 28); conclusion.set_row(1, 42); conclusion.set_row(3, 48)
@@ -408,6 +416,7 @@ def export_stage_book(destination, headers, rows, summary, category_name, *, thi
                 values = [item['asin'], item['title'], item['url'], item['same'], item['pending'] if binary else item['review'],
                           item['different'], item['unanalysed'], item['total'], limit,
                           '是' if item['selected'] else '否', item['conclusion'], item['reason'], item['url']]
+                if three_class:values.append(item['similar'])
                 for col, value in enumerate(values):
                     if col == 2: insert_picture(conclusion, index, col, item['image'], item['url'])
                     else: _write_value(conclusion, index, col, value, f['text'], f, cols[col])
@@ -463,6 +472,9 @@ def export_stage_book(destination, headers, rows, summary, category_name, *, thi
             low_note = f'只列当前采样确认同款数≤{limit}的Amazon商品及其已确认同款行；沿用本任务已有判断，待复核及未入围行不纳入本表。'
             if binary:
                 low_note = f'只列当前采样同款数≤{limit}的Amazon商品及其同款行；颜色标识及无关未展示部位不阻断；未入围和任务失败不计为不同款。'
+            elif summary.get('视觉结论口径')=='automatic-visual-v1':
+                low_name=f'同款及类似款不超过{limit}_明细'
+                low_note=f'仅列同款加类似款合计≤{limit}的Amazon商品及其同款、类似款明细；无法判断和未分析单独保留。'
         if summary.get('同款数量比较方式')=='lt':
             low_name=low_name.replace('不超过','少于')
             low_note=low_note.replace('≤','<')
@@ -473,7 +485,7 @@ def export_stage_book(destination, headers, rows, summary, category_name, *, thi
                 main_sheets.append(make_sheet(f'{main_name}_{len(main_sheets)+1}'))
             write_one(main_sheets[-1], count % maximum + 4, record)
             count += 1
-            if low_asins is not None and str(record[0]) in low_asins and verdict_kind(record[final_index]) in (('same',) if same_only else ('same', 'review')):
+            if low_asins is not None and str(record[0]) in low_asins and verdict_kind(record[final_index]) in (('same','similar') if same_only else ('same', 'similar','review')):
                 if low_count and low_count % maximum == 0:
                     low_sheets.append(make_sheet(f'{low_name}_{len(low_sheets)+1}', low_note))
                 write_one(low_sheets[-1], low_count % maximum + 4, record, with_images=thumbnails is not None)
@@ -525,6 +537,7 @@ def export_snapshot(category_path, kind):
     from selection_automation.visual_decision import binary_mode
     from selection_automation.commercial import current_report
     binary=binary_mode(cat)
+    automatic=(cat.get('match_criteria') or {}).get('visual_mode')=='auto'
     report=None if cat.get('execution_mode')=='collection' else current_report(ROOT,cat)
     if kind=='layer123' and cat.get('stage3',{}).get('scoring_policy')=='shower_curtain_v3_1':
         from export_shower_layer123_excel import export as export_shower_layer123
@@ -663,6 +676,7 @@ def export_snapshot(category_path, kind):
         limit = policy['same_limit']
         conclusions = amazon_conclusions(headers, records(), limit, binary=binary, same_only=True,operator=policy['same_operator'])
         if binary: meta['视觉结论口径'] = 'visible_core_binary_v1'
+        elif automatic:meta['视觉结论口径']='automatic-visual-v1'
         low_asins = {item['asin'] for item in conclusions if item['selected']}
         from concurrent.futures import ThreadPoolExecutor
         image_urls = {item['image'] for item in conclusions if item['selected'] and item['image']}

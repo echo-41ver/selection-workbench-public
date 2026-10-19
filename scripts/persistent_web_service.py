@@ -95,6 +95,9 @@ def collection_host(port, category, *, paid=False, preserve_prepared=True):
     category=Path(category).resolve()
     if category.name!='category.json' or not category.is_relative_to((ROOT/'runs').resolve()):
         raise ValueError('Expected frozen category in this installation')
+    # A newly prepared task has Amazon/keyword data but no log directory yet.
+    # The independent host must create it before launching the supervisor.
+    (category.parent/'logs').mkdir(parents=True,exist_ok=True)
     command=[sys.executable,str(ROOT/'scripts/selection.py'),'run','--prepared-start','--category',str(category)]
     if preserve_prepared: command.append('--preserve-prepared')
     if paid: command.append('--paid')

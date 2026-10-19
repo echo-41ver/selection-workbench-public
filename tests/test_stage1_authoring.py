@@ -44,6 +44,16 @@ def test_silently_disabled_hard_rule_is_rejected_before_task_creation():
     with pytest.raises(ValueError,match='明确冲突也被规则判成不足'):compile_stage1_rules(cat)
 
 
+def test_observed_parameter_catalog_does_not_replace_authoring_validation_probe():
+    from selection_automation.match_criteria import seed,attach
+    cat=category();cat['category_name_zh']='键盘'
+    snapshot={'records':[{'asin':'A1','title':'keyboard','specifications':[{'label':'Screen Size','value':'7 inches'}]}]}
+    attach(cat,seed(cat,snapshot))
+    compiled=compile_stage1_rules(cat)
+    assert compiled['match_criteria']==cat['match_criteria']
+    assert compiled['stage1']['attributes'][0]['hard_conflict'] is True
+
+
 def test_variant_and_nonhard_attributes_are_not_forced_to_exclude():
     cat=category();cat['stage3']['variant_fields']=['connection']
     assert not text_gate(compile_stage1_rules(cat),'wired keyboard','wireless keyboard')['excluded']

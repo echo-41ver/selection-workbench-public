@@ -5,6 +5,7 @@ MODE = 'visible_core_binary_v1'
 
 
 def binary_mode(category):
+    if (category.get('match_criteria') or {}).get('visual_mode')=='auto':return False
     return category.get('visual_decision') == MODE
 
 

@@ -25,7 +25,9 @@ from selection_automation.frontend_market import build_frontend_market
 READONLY_PROGRESS_TIMEOUT_SECONDS=1800
 
 def draft_view(category,draft_id,keyword_plan=None):
-    return {**_draft_view(category,draft_id), 'worker_count':category_worker_count(category),
+    view=_draft_view(category,draft_id)
+    view['commercial']['same_operator']='lt'
+    return {**view, 'worker_count':category_worker_count(category),
             "plain_text":category.get("plain_rules_summary",""), "plain_stage1":category.get("plain_stage1",""), "plain_stage3":category.get("plain_stage3",""),
             "change_summary":category.get("plain_rules_changes",[]),
             'match_criteria':category.get('match_criteria'),
@@ -450,6 +452,12 @@ class Console:
     def refresh_draft_keywords(self):
         from pipeline import build_category_keyword_plan, keyword_coverage
         category=selection.read(self.draft_path)
+        if not self.draft_used:
+            from selection_automation.commercial import settings as commercial_settings
+            policy={**commercial_settings(category.get('commercial')),'same_operator':'lt'}
+            if category.get('commercial')!=policy:
+                category['commercial']=policy;selection.save(self.draft_path,category)
+            self.draft['commercial']=policy
         from selection_automation.match_criteria import enabled,preserve,attach
         if enabled(category) and not self.draft_used:
             organized=preserve(category['match_criteria'])
@@ -505,10 +513,9 @@ class Console:
         try:provider=settings(body.get('api_base_url',''),body.get('api_model',''))
         except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
         body.update(api_base_url=provider['base_url'],api_model=provider['model'])
-        if 'commercial' in body:
-            from selection_automation.commercial import settings
-            try:body['commercial']=settings(body['commercial'])
-            except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
+        from selection_automation.commercial import settings as commercial_settings
+        try:body['commercial']={**commercial_settings(body.get('commercial') or {'same_limit':5}),'same_operator':'lt'}
+        except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
         from generate_category import valid_url,approved_category
         listing=body.get('bestsellers_url','')
         if not isinstance(listing,str) or (listing.strip() and not valid_url(listing.strip())):
@@ -546,6 +553,7 @@ class Console:
             self.plain_application={}
             self.progress_file=None; self.generation_error=None
             self.pending_scope={'category':name.strip(),'amazon_count':body['amazon_count'],
+                                'commercial':body['commercial'],
                                 'per_keyword':body['per_keyword'],'worker_count':count,'bestsellers_url':body['bestsellers_url'],
                                 'api_base_url':provider['base_url'],'api_model':provider['model']}
             selection.save(self.root/'runtime/web-console/pending-generation.json',{'scope':self.pending_scope})
@@ -574,6 +582,8 @@ class Console:
             category['rule_generation_provider']=provider
             category['temu']['worker_count']=worker_count(body.get('worker_count',4))
             if 'commercial' in body:category['commercial']=body['commercial']
+            from selection_automation.commercial import settings as commercial_settings
+            category['commercial']={**commercial_settings(category.get('commercial')),'same_operator':'lt'}
             if not re.fullmatch('[a-z][a-z0-9_]{0,63}',category['category_key']): raise ValueError('invalid generated key')
             category['category_key']=category['category_key'][:48]+'_'+uuid.uuid4().hex[:12]
             output.write_text(json.dumps(category,ensure_ascii=False),encoding='utf-8')
@@ -815,6 +825,8 @@ class Console:
             category.setdefault('temu',{})['worker_count']=worker_count(edits.get('worker_count',category_worker_count(category)))
             category['rule_generation_provider']=self.draft_provider
             # Retried edits receive a fresh run instead of mixing old state.
+            from selection_automation.commercial import settings as commercial_settings
+            category['commercial']={**commercial_settings(category.get('commercial')),'same_operator':'lt'}
             category['category_key']=category['category_key'][:48]+'_'+uuid.uuid4().hex[:12]
             selection.save(output,category)
             self.key=category['category_key']

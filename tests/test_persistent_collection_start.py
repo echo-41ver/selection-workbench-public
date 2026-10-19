@@ -80,3 +80,17 @@ def test_normal_start_uses_scheduler_without_spawning_caller_child(tmp_path,monk
  assert result['PID']==owner['pid']
  assert result['launch_mode']=='WINDOWS_TASK_SCHEDULER'
  assert calls[0]['preserve_prepared'] is True and calls[0]['paid'] is False
+
+
+def test_independent_host_creates_logs_for_brand_new_prepared_task(tmp_path,monkeypatch):
+ from types import SimpleNamespace
+ monkeypatch.setattr(persistent,'ROOT',tmp_path)
+ monkeypatch.setattr(persistent,'configure_environment',lambda port:None)
+ category=tmp_path/'runs/new_task/category.json';category.parent.mkdir(parents=True);category.write_text('{}')
+ assert not (category.parent/'logs').exists()
+ calls=[]
+ def launch(command,**kwargs):
+  calls.append(command);kwargs['stdout'].write(b'cold supervisor launch\n');return SimpleNamespace(returncode=0)
+ monkeypatch.setattr(persistent.subprocess,'run',launch)
+ assert persistent.collection_host(8765,category,preserve_prepared=False)==0
+ assert len(calls)==1 and (category.parent/'logs/supervisor.log').read_bytes()==b'cold supervisor launch\n'

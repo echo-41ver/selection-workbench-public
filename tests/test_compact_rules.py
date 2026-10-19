@@ -77,6 +77,14 @@ def test_real_monitor_response_is_compiled_and_reused_without_another_paid_reque
         category=generator.generate_category('电脑显示器',count,400,bestsellers_url=evidence['url'],reuse_approved=True,draft_store=tmp_path)
         assert category['amazon']['target_count']==count
         assert next(f for f in category['stage3']['identity_policy']['features'] if f['id']=='back_structure')['role']=='context'
+        from selection_automation.match_criteria import seed,attach
+        from selection_automation.category_config import load_category
+        from rule_editor import draft_view,edit_rules
+        snapshot={'records':[{'asin':'A1','title':'Monitor','specifications':[{'label':'Display Type','value':'LCD'}]}]}
+        attach(category,seed(category,snapshot))
+        compiled=edit_rules(category,draft_view(category,'draft'),compile_model=lambda *a,**k:pytest.fail('no repeated model request'))
+        path=tmp_path/'launch-config.json';path.write_text(json.dumps(compiled),encoding='utf-8')
+        assert load_category(path,compile_authored_policy=True)['category_key']==category['category_key']
     assert len(calls)==1 and 'TEST_ONLY_KEY' not in next(tmp_path.glob('*.json')).read_text('utf-8')
 
 

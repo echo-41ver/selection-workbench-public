@@ -40,6 +40,9 @@ def validate_stage1_authoring(category):
         values=list(attr['values'].values())
         if len(values)<2:continue
         probe=deepcopy(category);probe['stage1']['attributes']=[attr]
+        # This validates the authored dictionary itself. A task's independent
+        # selected/observed parameters can legitimately use different values.
+        probe.pop('match_criteria',None)
         tested=False
         for i,left in enumerate(values):
             for right in values[i+1:]:

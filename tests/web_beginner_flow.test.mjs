@@ -6,16 +6,34 @@ const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 const helpers=html.slice(html.indexOf('function statusTone('),html.indexOf('let statusFresh='));
 const first=(row,keys)=>keys.map(k=>row?.[k]).find(v=>v!==undefined&&v!==null&&v!=='');
 
-test('one rule editor follows the current page without resetting unsaved edits',()=>{
+test('rule editor stays on the creation page and preserves edits across navigation',()=>{
  const code=html.slice(html.indexOf('function placeDraftEditor('),html.indexOf('function renderDraft('));
  const editor={value:'unsaved user rules'},create={hidden:true,append(n){n.parentElement=this;}},monitor={append(n){n.parentElement=this;}};
  const context=vm.createContext({$:id=>({'draft-editor':editor,'create-panel':create,'monitor-panel':monitor}[id])});
  vm.runInContext(code,context);vm.runInContext('placeDraftEditor()',context);
- assert.equal(editor.parentElement,monitor);assert.equal(editor.value,'unsaved user rules');
+ assert.equal(editor.parentElement,create);assert.equal(editor.value,'unsaved user rules');
  create.hidden=false;vm.runInContext('placeDraftEditor()',context);
  assert.equal(editor.parentElement,create);assert.equal(editor.value,'unsaved user rules');
- create.hidden=true;vm.runInContext('placeDraftEditor()',context);assert.equal(editor.parentElement,monitor);
+ create.hidden=true;vm.runInContext('placeDraftEditor()',context);assert.equal(editor.parentElement,create);
  assert.equal((html.match(/id="draft-editor"/g)||[]).length,1);
+});
+test('pending startup navigation remains compatible with startup snapshots',()=>{
+ const code=html.slice(html.indexOf('function finishRunNavigation('),html.indexOf('function renderDraft('));
+ const pages=[],context=vm.createContext({pendingRunNavigation:true,showPage:page=>pages.push(page)});
+ vm.runInContext(code,context);
+ context.data={console_busy:true,category_key:null,draft:{id:'draft'}};vm.runInContext('finishRunNavigation(data)',context);
+ assert.deepEqual(pages,[]);assert.equal(context.pendingRunNavigation,true);
+ context.data={console_busy:false,category_key:null,draft:{id:'draft'}};vm.runInContext('finishRunNavigation(data)',context);
+ assert.deepEqual(pages,[]);assert.equal(context.pendingRunNavigation,false);
+ context.pendingRunNavigation=true;context.data={console_busy:false,category_key:'task',draft:null};vm.runInContext('finishRunNavigation(data)',context);
+ assert.deepEqual(pages,['monitor']);
+});
+test('new task threshold has no less-than-or-equal option and always submits strict less-than',()=>{
+ assert.doesNotMatch(html,/<option value="lte">/);
+ const code=html.slice(html.indexOf('function businessSettings()'),html.indexOf('function renderBusinessDetails('));
+ const context=vm.createContext({document:{querySelectorAll:()=>[{id:'biz-same_operator',value:'lte'},{id:'biz-same_limit',value:'5'}]}});
+ vm.runInContext(code,context);const result=vm.runInContext('businessSettings()',context);
+ assert.equal(result.same_operator,'lt');assert.equal(result.same_limit,5);
 });
 test('errors and human-action waits red, automatic waits green',()=>{
  const context=vm.createContext({first});vm.runInContext(helpers,context);

@@ -1,10 +1,11 @@
 """Consistent final-verdict row colors; styling never changes a conclusion."""
-COLORS = {'different': '#FCE4D6', 'review': '#FFF2CC', 'same': '#E2F0D9', 'unanalysed': '#E7E6E6'}
-LEGEND = '颜色：不同款浅红；待复核或待补充证据浅黄；同款浅绿；未分析或未入围灰色。'
+COLORS = {'different': '#FCE4D6', 'review': '#FFF2CC', 'same': '#E2F0D9', 'similar':'#DDEBF7', 'unanalysed': '#E7E6E6'}
+LEGEND = '颜色：不同款浅红；待复核或待补充证据浅黄；同款浅绿；类似款浅蓝；未分析或未入围灰色。'
 
 
 def verdict_kind(value):
     value = str(value or '').replace('（Codex看图复核）', '')
+    if '类似款' in value or '相似款' in value or value=='SIMILAR':return 'similar'
     if '不同款' in value or value in {'DIFFERENT', 'NOT_SAME'}:
         return 'different'
     if any(word in value for word in ('复核', '补充', '未知', '不确定', '未确认')) or value == 'UNKNOWN':

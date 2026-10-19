@@ -90,6 +90,7 @@ def proposal_prompt(category,snapshot,catalog):
         '"image":false}]}]}。合并同义字段，必须保留证据。尺寸、规格、使用方式、连接方式和实际外观均可提取；'
         '同一参数只有一个勾选项，8英寸/7英寸/9英寸作为各商品的尺寸值，不拆成三个条件；不同含义参数不混并。'
         'label必须中文。只推荐最多8项最影响同款的文字条件，其余原始字段由程序保留，不逐项重写。'
+        '文字条件只排除明确冲突；参数一致不能直接确认同款，禁止写“一致视为同款”。最终关系由第三层综合判断。'
         '额外返回labels_zh对象，将已知英文参数名称映射为简短中文；core_ids数组列出建议优先展示的已有条件id。最多16项新建议。复用已有条件id；'
         '新增文字参数须给出原文 quote，新增图片特征须 image=true 且该 ASIN 确实提供了图片。'
         '\n品类：'+category['category_name_zh']+'\n已知条件：'+json.dumps([{k:item.get(k) for k in ('id','label','kind','source_labels')} for item in catalog['items']],ensure_ascii=False)
