@@ -279,6 +279,18 @@ def job_environment(config):
 
 
 def prompt(job, target, model, category_path):
+    from selection_automation.match_criteria import enabled
+    category=read(category_path,{})
+    if enabled(category):
+        from selection_automation.vision import protocol
+        instructions,schema=protocol(category,target)
+        save(job/'compact-output.json',{'version':'selected-visual-compact-v1','labels':[f'C{i:02}' for i in range(target)]})
+        return (instructions+'\n附件1为Amazon原图，附件2为Cxx编号TEMU拼图。对应记录：'+str(job/'comparison-input.json')+
+            '。拼图某格不清时，自动从 image-inputs.json 找该候选原图并放大查看，完成复核后再决定，不能要求用户看图。'
+            '可读本组原图和记录，不联网、不改代码、不调用其他API。'
+            '\n只将以下协议的一个JSON对象写入 '+str(job/'compact-response.json')+
+            '；不生成模块、长篇分析、JSONL或额外证据清单。父程序负责身份绑定、保存及校验。'
+            '\n输出协议：'+json.dumps(schema,ensure_ascii=False,separators=(',',':')))
     python = Path(sys.executable).resolve()
     validator = job / 'validate_reviews.py'
     validate_command = (f"& '{python}' '{validator}' --category '{category_path}' "
@@ -320,6 +332,11 @@ def _strict_attempt(record):
 
 
 def import_job(category, task, job):
+    compact=job/'compact-response.json'
+    if compact.is_file() and not (job/'reviews.jsonl').is_file():
+        from selection_automation.native_agent_transport import write_response
+        if not write_response(job,compact.read_text('utf-8')):
+            return 0,['精简看图结果尚未形成有效双边事实']
     expected = list(read_jsonl(job / 'manifest.jsonl'))
     bound = {key(row): row for row in expected}
     good, errors, validation_errors = {}, [], []

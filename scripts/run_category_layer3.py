@@ -290,7 +290,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
             f.flush()
             os.fsync(f.fileno())
 
-    def call(batch, effort, format_retry=0):
+    def call(batch, effort, format_retry=0, original_recheck=False):
         nonlocal requests, sent_requests
         if stop.is_set() or not authorized():
             stop.set()
@@ -385,6 +385,19 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 raise
             for i, (identity, row) in enumerate(zip(ids, batch)):
                 scored = score(cat, facts[identity])
+                from selection_automation.match_criteria import enabled
+                if (enabled(cat) and len(batch)>1 and not original_recheck
+                    and scored.get('state') in {'待补充证据','待复核'}):
+                    # The first pass uses numbered tiles. Recheck only this
+                    # candidate against its full original, once, automatically.
+                    append(args.results.with_name('evidence_rechecks.jsonl'),{
+                        'asin':row['asin'],'goods_id':row['goods_id'],
+                        'vision_revision_key':row['vision_revision_key'],'response_id':response.id,
+                        'visual_facts':facts[identity],'module_result':scored,
+                        'action':'AUTO_SINGLE_PAIR_ORIGINAL','time':time.time()})
+                    if call([{**row,'_evidence_recheck_of':response.id}],effort,original_recheck=True):
+                        completed+=1
+                        continue
                 if provider['mode']!='local_model' and 'reasoning_effort' not in provider and effort == 'low' and scored['hard_conflicts'] and facts[identity].get('overall_confidence',1) < .65:
                     call([row], 'high')
                     continue
@@ -392,6 +405,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     'api_status': 'success', 'visual_facts': facts[identity], 'module_result': scored,
                     'model': stage.get('model', 'deepseek-flash'), 'response_id': response.id, 'effort': effort,
                     'usage': usage if i == 0 else {}, 'elapsed_seconds': round(time.monotonic()-started, 3),
+                    **({'automatic_original_recheck':{'source_response_id':row['_evidence_recheck_of'],'attempt':1}} if row.get('_evidence_recheck_of') else {}),
                     **({'response_format_compatibility': {'version': 'lossless-envelope-v2-syntax-only', 'repairs': format_repairs}} if format_repairs else {})})
                 completed += 1
         except Exception as exc:

@@ -38,3 +38,13 @@ test('applied choices use a versioned request, while running tasks are read only
  assert.equal(get('match-visual-rows').children[0].children[0].children[0].disabled,true);
  assert.equal(get('apply-match-criteria').disabled,true);
 });
+test('Chinese names appear first and extra conditions stay selectable in a folded group',()=>{
+ const {get,context}=setup();const value=structuredClone(catalog);
+ value.items[0].label='Screen Size';value.items[0].label_zh='屏幕尺寸';
+ value.items.push({id:'extra',kind:'text',label:'Refresh Rate',label_zh:'刷新率',display_group:'more',selected:false,observations:[]});
+ context.data={draft:{id:'draft',match_criteria:value}};vm.runInContext('renderMatchCriteria(data)',context);
+ assert.equal(get('match-text-rows').children[0].children[1].children[0].textContent,'屏幕尺寸');
+ assert.equal(get('match-text-more').hidden,false);assert.equal(get('match-text-more-rows').children.length,1);
+ const input=get('match-text-more-rows').children[0].children[0].children[0];input.checked=true;input.handlers.change();
+ assert.equal(vm.runInContext('criteriaSelection.has("extra")',context),true);
+});

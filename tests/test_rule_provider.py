@@ -15,6 +15,20 @@ import generate_category as generator
 import web_console as web
 
 
+def test_authoring_budget_does_not_expand_short_rule_generation():
+    from selection_automation.rule_provider import authoring_output_budget
+    assert authoring_output_budget(settings(),4000)==4000
+    assert authoring_output_budget(settings(),6000)==6000
+    assert authoring_output_budget(settings(model='deepseek-v4-pro'),6000)==6000
+    assert authoring_output_budget(settings(model='deepseek-flash'),131072)==131072
+
+
+def test_other_services_do_not_inherit_deepseek_output_limits():
+    from selection_automation.rule_provider import authoring_output_budget
+    assert authoring_output_budget(settings('https://custom.example/v1','deepseek-flash'),16000)==16000
+    assert authoring_output_budget(settings(model='other-model'),4000)==4000
+
+
 @pytest.mark.parametrize('address', ['1234', 'https://user:pass@fixture/v1',
     'https://example.com/v1?key=private', 'http://localhost:99999/v1', 'https://example.com/#key'])
 def test_invalid_address_rejected(address):

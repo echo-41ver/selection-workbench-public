@@ -105,6 +105,8 @@ def checked_policy(category, *, required=False):
             raise ValueError('只有可见身份特征能设为确认必需项')
     by_id = {f['id']: f for f in features}
     for attr in category['stage1'].get('attributes', []):
+        if category.get('rule_authoring_format')=='compact-category-v1':
+            continue  # L1 text dictionaries are independent from L3 image features.
         f = by_id.get(attr['name'])
         if f is None:
             raise ValueError('每个文字属性须对应同款边界中的同名特征')
@@ -159,6 +161,8 @@ def compile_policy(category):
             f['modules'] = [rename.get(m, m) for m in f['modules']]
     by_id = {f['id']: f for f in features}
     for attr in result['stage1']['attributes']:
+        if result.get('rule_authoring_format')=='compact-category-v1':
+            continue
         # A visible feature with an explicit literal text dictionary has two
         # declared sources. This adds no inferred image capability. Unverifiable
         # marketing claims stay context-only, even when present in a title.

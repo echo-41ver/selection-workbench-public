@@ -109,7 +109,8 @@ def write_response(job,text):
             rows=[]
             for label,pair in zip(labels,manifest):
                 item=facts[label]
-                evidence=lambda side:'；'.join(dict.fromkeys(value[side+'_evidence'] for value in item['modules'].values() if value[side+'_evidence']))
+                evidence=lambda side: (item['identity']['design_comparison'][side] if item.get('visual_protocol')=='selected-visual-compact-v1' else
+                    '；'.join(dict.fromkeys(value[side+'_evidence'] for value in item['modules'].values() if value[side+'_evidence'])))
                 rows.append({**{key:pair[key] for key in ('asin','goods_id','vision_revision_key')},
                     'review_status':item['identity']['verdict'],'amazon_evidence':evidence('amazon'),'temu_evidence':evidence('temu'),
                     'reason':item['identity']['reason'],'visual_facts':item,'reviewer':job.name,
@@ -579,6 +580,15 @@ def workbuddy_run(root,job,prompt,timeout=900,model=None):
         'reviews 数组中每对一条。所有字符串中的双引号必须正确转义；不得添加字段或省略完整事实。')
     if (job/'validation_errors.json').is_file():
         request+='\n只修复以下已知错误，保留已观察事实，不重复推断：\n'+(job/'validation_errors.json').read_text(encoding='utf-8')+'\n原结果：\n'+(job/'reviews.jsonl').read_text(encoding='utf-8')
+    contract=read(job/'analysis-contract.json',{})
+    category=read(Path(contract['category']),{}) if contract.get('category') else {}
+    from .match_criteria import enabled
+    if enabled(category):
+        from .vision import protocol
+        instructions,schema=protocol(category,len(rows))
+        request=(instructions+'\n使用Read查看本组图片，不联网、不执行命令。无需写文件，只返回协议JSON。'
+                 '\n图片：'+json.dumps(files,ensure_ascii=False)+'\n商品编号资料：'+
+                 (job/'comparison-input.json').read_text('utf-8'))
     env=environment();env.update(workbuddy_environment(str(entry)))
     command=command_prefix(str(entry),'workbuddy')+['-p','--output-format','json','--json-schema',json.dumps(schema),
         '--no-session-persistence','--max-turns',str(max(20,2*len(files)+8)),'--permission-mode','acceptEdits','--tools','Read,StructuredOutput',

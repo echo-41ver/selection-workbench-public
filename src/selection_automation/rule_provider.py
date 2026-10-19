@@ -5,6 +5,12 @@ DEFAULT_URL = 'https://api.deepseek.com'
 DEFAULT_MODEL = 'deepseek-flash'
 
 
+def authoring_output_budget(provider,requested):
+    """Bound authoring output without silently expanding the requested budget."""
+    if type(requested) is not int or requested<1:raise ValueError('输出长度必须为正整数')
+    return requested
+
+
 def settings(base_url='', model=''):
     if not isinstance(base_url, str) or not isinstance(model, str):
         raise ValueError('API 服务地址和模型名必须是文字')

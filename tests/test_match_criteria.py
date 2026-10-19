@@ -122,10 +122,8 @@ def test_protocol_schema_and_decoder_bind_image_conditions_but_not_text(products
     from selection_automation.match_criteria import attach
     cat=configured(products);prompt,schema=protocol(cat,1)
     assert set(schema['properties']['candidates']['items']['properties']['q']['properties'])=={'body_type'}
-    assert prompt.rfind('USER_MATCH_CONDITIONS_V1')>prompt.rfind('以此统一边界为准')
-    value=facts();item={'i':'C00','c':.95,'v':value['identity'],
-        'm':{str(i):{'r':'S','a':'圆形镜头支架','t':'圆形镜头支架','h':'NONE'} for i in range(len(cat['stage3']['modules']))},
-        'f':{'body_type':{'r':'S','a':'圆形镜头支架','t':'圆形镜头支架'}},
+    assert 'selected-visual-compact-v1' in prompt and '未拍到不等于没有' in prompt
+    item={'i':'C00','c':.95,'r':'S','a':'圆形镜头配右侧弧形支架','t':'圆形镜头配右侧弧形支架','why':'可见基础款一致',
         'q':{'body_type':{'r':'S','a':'圆形镜头支架','t':'圆形镜头支架'}}}
     assert decode(cat,{'candidates':[item]},['C00'])['C00']['condition_comparisons']['body_type']['relation']=='SAME'
     _,wire=prepare(prompt,schema,['C00'])

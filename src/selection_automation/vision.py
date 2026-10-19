@@ -62,6 +62,10 @@ def protocol(category: dict, count: int) -> tuple[str, dict]:
     if isinstance(category.get('stage3',{}).get('provider'),dict) and category['stage3']['provider'].get('protocol')=='decisions':
         from .stage3_provider import decision_instructions
         return decision_instructions(category),{'decision_protocol_version':'product-choice-v2'}
+    from .match_criteria import enabled
+    if enabled(category):
+        from .compact_visual import protocol as compact_protocol
+        return compact_protocol(category,count)
     stage = category["stage3"]
     def obj(props):
         return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
@@ -251,6 +255,10 @@ def _expand_group_response(category: dict, raw: dict, expected: list[str]) -> di
 
 
 def decode(category: dict, raw: dict, expected: list[str]) -> dict:
+    from .match_criteria import enabled
+    if enabled(category):
+        from .compact_visual import decode as compact_decode
+        return compact_decode(category,raw,expected)
     raw = _expand_group_response(category, raw, expected)
     if not isinstance(raw, dict) or set(raw) != {"candidates"} or not isinstance(raw["candidates"], list):
         raise ValueError("invalid visual response object")

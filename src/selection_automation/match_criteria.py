@@ -71,9 +71,11 @@ def seed(category,snapshot,previous=None):
 
 
 def preserve(catalog,previous=None):
+    from .criteria_display import organize
     choices={item['id']:item['selected'] for item in (previous or {}).get('items',[]) if type(item.get('selected')) is bool}
     for item in catalog['items']:
         if item['id'] in choices:item['selected']=choices[item['id']]
+    catalog=organize(catalog)
     catalog['revision']=digest({k:v for k,v in catalog.items() if k!='revision'})
     return catalog
 
@@ -87,9 +89,11 @@ def proposal_prompt(category,snapshot,catalog):
         '"kind":"text或visual","rule":"比较双方同一属性的明确边界；可说明单位等价",'
         '"source_labels":["实际规格字段名"],"evidence":[{"asin":"实际ASIN","quote":"原始文字中的连续原文或空串",'
         '"image":false}]}]}。合并同义字段，必须保留证据。尺寸、规格、使用方式、连接方式和实际外观均可提取；'
-        '不同参数分开，不把一整段卖点当成一个参数。最多64项。复用已有条件id，尤其是对应的外观身份条件；'
+        '同一参数只有一个勾选项，8英寸/7英寸/9英寸作为各商品的尺寸值，不拆成三个条件；不同含义参数不混并。'
+        'label必须中文。只推荐最多8项最影响同款的文字条件，其余原始字段由程序保留，不逐项重写。'
+        '额外返回labels_zh对象，将已知英文参数名称映射为简短中文；core_ids数组列出建议优先展示的已有条件id。最多16项新建议。复用已有条件id；'
         '新增文字参数须给出原文 quote，新增图片特征须 image=true 且该 ASIN 确实提供了图片。'
-        '\n品类：'+category['category_name_zh']+'\n已知条件：'+json.dumps(catalog['items'],ensure_ascii=False)
+        '\n品类：'+category['category_name_zh']+'\n已知条件：'+json.dumps([{k:item.get(k) for k in ('id','label','kind','source_labels')} for item in catalog['items']],ensure_ascii=False)
         +'\n商品资料：'+json.dumps(products,ensure_ascii=False)
         +'\n附件图片依次属于：'+json.dumps([r['asin'] for r in catalog['image_sources']],ensure_ascii=False))
 
@@ -97,6 +101,13 @@ def proposal_prompt(category,snapshot,catalog):
 def merge_proposals(catalog,snapshot,proposal):
     if not isinstance(proposal,dict) or not isinstance(proposal.get('items'),list):raise ValueError('参数提取返回格式无效')
     result=deepcopy(catalog);items={row['id']:row for row in result['items']}
+    translations=proposal.get('labels_zh') or {}
+    core_ids=proposal.get('core_ids') or []
+    for item in items.values():
+        if item['id'] in core_ids:item['suggested_core']=True
+        for source in item.get('source_labels') or [item.get('label','')]:
+            label=translations.get(source) if isinstance(translations,dict) else None
+            if isinstance(label,str) and re.search(r'[\u4e00-\u9fff]',label):item['label_zh']=_text(label,80);break
     sources={row['asin']:row for row in _records(snapshot)}
     photographed={row['asin'] for row in catalog['image_sources']}
     for suggestion in proposal['items'][:64]:
@@ -143,6 +154,8 @@ def select(catalog,selected_ids,expected_revision=None):
     if set(selected_ids)-known:raise ValueError('勾选条件不属于当前商品资料')
     result=deepcopy(catalog)
     for item in result['items']:item['selected']=item['id'] in selected_ids
+    from .criteria_display import organize
+    result=organize(result)
     result['enabled']=True
     result['revision']=digest({k:v for k,v in result.items() if k!='revision'})
     return result
@@ -259,7 +272,7 @@ def text_gate(category,left,right):
             conflicts.append({'field':condition['id'],'amazon':next(iter(a)),'temu':next(iter(b)),
                 'reason':'已勾选 '+condition['label']+'，双方明确文字参数不同'})
     return {'excluded':bool(conflicts),'stage1_status':'TEXT_HARD_EXCLUDE' if conflicts else 'TEXT_INSUFFICIENT' if insufficient else 'TEXT_PASS',
-        'hard_conflicts':conflicts,'facts':facts,'reason':'已勾选参数存在明确冲突' if conflicts else '仅按已勾选条件筛选；未能确认的参数交由第三层补证',
+        'hard_conflicts':conflicts,'facts':facts,'reason':'已勾选参数存在明确冲突' if conflicts else '仅按已勾选文字条件筛选；缺失继续后续层，第三层仅核实图片条件',
         'rule_version':category['stage3']['rule_version'],'match_criteria_revision':category['match_criteria']['revision']}
 
 
@@ -283,6 +296,9 @@ def score(category,facts,result):
     confidence=facts.get('overall_confidence',0)
     if explicitly_reversed_sources(facts):state,reason='待复核','双边来源标注矛盾，不能确认'
     elif confidence<.55:state,reason='待补充证据','图片可见性不足，勾选条件尚不能核实'
+    elif (identity.get('verdict')=='SIMILAR' and backed(identity.get('design_comparison'))
+          and identity['design_comparison']['relation']=='SIMILAR' and not unknown and visible):
+        state,reason='相似款','整体款式接近，但可见设计细节不满足同一基础款：'+identity.get('reason','')
     elif hard:state,reason='不同款','已勾选条件明确不同：'+'、'.join(hard)
     elif unknown:state,reason='待补充证据','已勾选条件缺少双方一致证据：'+'、'.join(unknown)
     elif not visible:state,reason='待补充证据','尚未选择可核实的外观身份条件，不能仅凭同类规格确认同款'

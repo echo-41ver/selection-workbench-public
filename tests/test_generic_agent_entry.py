@@ -120,5 +120,10 @@ def test_web_generation_cli_writes_compiled_policy_using_injected_response(tmp_p
     before=output.read_bytes()
     def failed(*args,**kwargs): raise generator.CategoryGenerationError('离线模拟网络失败','MODEL_NETWORK_ERROR')
     monkeypatch.setattr(generator,'model_json',failed)
+    # A completed response is now compiled locally on ordinary retry.
+    assert generator.main()==0
+    assert output.read_bytes()==before
+    # Explicitly requesting fresh rules still surfaces a genuine network error.
+    monkeypatch.setattr(sys,'argv',[*sys.argv,'--fresh-rules'])
     assert generator.main()==1
     assert output.read_bytes()==before

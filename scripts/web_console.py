@@ -416,6 +416,12 @@ class Console:
     def refresh_draft_keywords(self):
         from pipeline import build_category_keyword_plan, keyword_coverage
         category=selection.read(self.draft_path)
+        from selection_automation.match_criteria import enabled,preserve,attach
+        if enabled(category) and not self.draft_used:
+            organized=preserve(category['match_criteria'])
+            if organized!=category['match_criteria']:
+                attach(category,organized);selection.save(self.draft_path,category)
+                self.draft['match_criteria']=organized
         rows=selection.read(self.draft_amazon_path,{}).get('records',[])
         plan=build_category_keyword_plan(rows,category)
         payload={'keywords':plan,'coverage':keyword_coverage(rows,plan,category)}
@@ -554,7 +560,9 @@ class Console:
                 self.draft_path=output; self.draft_key=env['DEEPSEEK_API_KEY']; self.draft_provider=provider; self.draft_used=False
                 self.persist_draft()
             self.phase='正在生成通俗中文规则说明'
-            if not category.get('approved_rule_source'):
+            if not category.get('approved_rule_source') and not (
+                category.get('rule_summary_source')=='generated_conditions_local_summary_v1'
+                and all(category.get(k) for k in ('plain_stage1','plain_stage3','plain_rules_summary'))):
                 output=self.explain_file(output,'',env)
             category=json.loads(output.read_text('utf-8'))
             with self.lock:

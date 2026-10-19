@@ -157,7 +157,7 @@ def test_rules_and_recall_threshold_share_one_configured_api_generation(monkeypa
         return config
     monkeypatch.setattr(generator,'model_json',model)
     out=generator.generate_category('电钻',3,40,bestsellers_url=evidence['url'])
-    assert len(calls)==1 and 'SAME configuration response' in calls[0]
+    assert len(calls)==1 and 'threshold_reason_zh' in calls[0] and 'compact-category-v1' in calls[0]
     assert out['stage2']['candidate_threshold']==threshold
     assert out['stage2']['threshold_source']=='configured_rule_api'
     assert out['stage1']['attributes']
@@ -243,7 +243,7 @@ def test_truncated_output_never_silently_repeats_paid_request(monkeypatch):
     with pytest.raises(generator.CategoryGenerationError) as error:
         generator.model_json('test')
     assert error.value.code=='MODEL_OUTPUT_TRUNCATED'
-    assert budgets==[16000]
+    assert budgets==[8000]
 
 
 @pytest.mark.parametrize('url', [

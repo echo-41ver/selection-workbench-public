@@ -83,6 +83,17 @@ def load_reviews(base, expected=None, *, by_revision=False, category=None):
 
 def checked_facts(category, facts, goods_id):
     """Require all current wire fields and use the existing strict decoder."""
+    from .match_criteria import enabled
+    if enabled(category):
+        if not isinstance(facts,dict):raise ValueError('incomplete selected visual facts')
+        identity=facts['identity'];design=identity['design_comparison']
+        reverse={'SAME':'S','SIMILAR':'L','DIFFERENT':'D','UNKNOWN':'U'}
+        candidate={'i':goods_id,'c':facts['overall_confidence'],'r':reverse[identity['verdict']],
+            'a':design['amazon'],'t':design['temu'],'why':identity['reason'],
+            'q':{fid:{'r':reverse[row['relation']],'a':row['amazon'],'t':row['temu']}
+                 for fid,row in facts['condition_comparisons'].items()}}
+        if design['relation']!=identity['verdict']:raise ValueError('contradictory selected whole-product design')
+        return decode(category,{'candidates':[candidate]},[goods_id])[goods_id]
     modules = category['stage3']['modules']
     if category['stage3'].get('codex_require_module_facts'):
         required = {'overall_confidence', 'identity', 'modules'} | ({'feature_comparisons'} if category['stage3'].get('require_feature_comparisons') else set())

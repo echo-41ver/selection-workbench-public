@@ -17,7 +17,21 @@ def prepare(prompt, schema, ids):
     item = result['properties']['candidates']['items']
     item['properties'].pop('i')
     item['required'].remove('i')
-    differences = item['properties']['v']['properties']['differences']
+    differences = item['properties'].get('v',{}).get('properties',{}).get('differences')
+    if differences is not None:
+        _constrain_differences(differences)
+    result['properties']['candidates'] = {'type': 'object',
+        'properties': {identity: deepcopy(item) for identity in ids},
+        'required': list(ids), 'additionalProperties': False}
+    prompt += ('\n本机输出格式：candidates 是按固定编号取值的对象，键必须逐字为：'
+               + ','.join(ids) + '。每个编号恰好一个候选对象，项内不再写 i；'
+               + ('保留原来的全部 m/f/v/c 证据及顶层 amazon（如果要求）。' if differences is not None else '保留原协议的其余字段。') +
+               '编号绑定图片格，禁止改成 ASIN、商品ID、从1起的编号或另编编号。'
+               + ('IDENTITY/UNRESOLVED 差异的 variant_field 必须为 NONE。' if differences is not None else ''))
+    return prompt, result
+
+
+def _constrain_differences(differences):
     fields = differences['items']['properties']
     # Enforce the decoder's existing invariant during generation as well.
     alternatives = []
@@ -29,15 +43,6 @@ def prepare(prompt, schema, ids):
         alternatives.append({'type': 'object', 'properties': props,
                              'required': list(props), 'additionalProperties': False})
     differences['items'] = {'anyOf': alternatives}
-    result['properties']['candidates'] = {'type': 'object',
-        'properties': {identity: deepcopy(item) for identity in ids},
-        'required': list(ids), 'additionalProperties': False}
-    prompt += ('\n本机输出格式：candidates 是按固定编号取值的对象，键必须逐字为：'
-               + ','.join(ids) + '。每个编号恰好一个候选对象，项内不再写 i；'
-               '保留原来的全部 m/f/v/c 证据及顶层 amazon（如果要求）。'
-               '编号绑定图片格，禁止改成 ASIN、商品ID、从1起的编号或另编编号。'
-               'IDENTITY/UNRESOLVED 差异的 variant_field 必须为 NONE。')
-    return prompt, result
 
 
 def unpack(raw, ids):

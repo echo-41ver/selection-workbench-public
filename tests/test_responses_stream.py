@@ -70,7 +70,7 @@ def test_native_gpt_request_keeps_model_and_uses_low_effort(monkeypatch):
     assert generator.model_json('test')=={'ok':True}
     body=json.loads(calls[0].data)
     assert body['model']=='gpt-6.1-sol' and body['reasoning']=={'effort':'low'}
-    assert body['store'] is False and body['max_output_tokens']==16000
+    assert body['store'] is False and body['max_output_tokens']==8000
     assert 'messages' not in body and 'thinking' not in body and len(calls)==1
     assert calls[0].full_url=='https://api.daitu.cc/v1/responses'
 
