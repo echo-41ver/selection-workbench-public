@@ -138,6 +138,14 @@ def test_stopped_worker_resumes_only_after_positive_current_query_check(tmp_path
         seen.append((session['name'], query))
         return len(seen) > 1
     args = dict(children=children, finished=finished, attempts=attempts, next_at=next_at, state=state, verify=verify)
+    if status=='STOPPED_INITIAL_PRODUCTS_TIMEOUT':
+        assert not selection.hold_blocked_worker(tmp_path, {'name':'worker1'}, **args)
+        assert seen==[]  # Same-profile retry does not need a DOM verification.
+        current=selection.read(tmp_path/'temu/supervisors/worker1.json')
+        assert current['status']=='RESUMING' and current['automatic_resume_pending']
+        assert current['completed_queries']==['corded drill']
+        assert attempts['worker1']==next_at['worker1']==0
+        return
     assert selection.hold_blocked_worker(tmp_path, {'name':'worker1'}, **args)
     assert not selection.hold_blocked_worker(tmp_path, {'name':'worker1'}, **args)
     assert seen == [('worker1', 'power drill')] * 2

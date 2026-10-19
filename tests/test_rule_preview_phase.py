@@ -8,7 +8,7 @@ sys.path.insert(0,str(ROOT/'scripts'))
 from rule_editor import draft_view,edit_rules
 from selection_automation.identity_policy import compile_policy
 from selection_automation import rules
-from test_generic_agent_entry import authored_case
+from test_generic_agent_entry import authored_case, compile_authored
 import selection,pipeline
 
 CASES=['bottle_opener','desktop_rack','hanger','official_power_drill']
@@ -65,7 +65,7 @@ def test_cli_rule_edit_then_prepare_requires_and_preserves_collection_inputs(tmp
     assert not (tmp_path/'runs').exists()
     edited['temu']['max_products_per_keyword']=20;output.write_text(json.dumps(edited),encoding='utf8')
     frozen,_,base=selection.prepare(output)
-    assert rules.read_frozen(str(frozen))==edited
+    assert rules.read_frozen(str(frozen))==compile_authored(edited)
     assert selection.read(base/'stage12_config.json')['candidate_threshold']==61
     assert not (base/'stage123/paid_enabled.json').exists()
     before=frozen.read_bytes();edited['stage2']['candidate_threshold']=62

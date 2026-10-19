@@ -1,4 +1,5 @@
 """Billed Responses truncation must retain usage and respect request limits."""
+from offline_visual_api import grid
 import json
 from pathlib import Path
 import sys
@@ -54,6 +55,7 @@ def test_request_contains_one_amazon_record_and_each_bound_temu_record(tmp_path,
     monkeypatch.setenv('DEEPSEEK_API_KEY','offline')
     monkeypatch.setattr(openai,'OpenAI',Client)
     monkeypatch.setattr(runner,'_data_url',lambda p:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',grid)
     monkeypatch.setattr(runner,'protocol',lambda c,n:('fixture',{}))
     monkeypatch.setattr(runner,'decode',lambda c,raw,ids:{i:{'overall_confidence':.9} for i in ids})
     monkeypatch.setattr(runner,'score',lambda c,f:{'hard_conflicts':[]})
@@ -63,10 +65,11 @@ def test_request_contains_one_amazon_record_and_each_bound_temu_record(tmp_path,
            'pair_revision':str(i),'vision_revision_key':str(i),'attempt':1} for i in range(2)]
     runner.consume(SimpleNamespace(validate_only=False,max_requests=1,results=tmp_path/'results.jsonl'),cat,tmp_path/'blocked.json','offline',iter(rows))
     blocks=[b['text'] for b in calls[0]['input'][0]['content'] if b['type']=='input_text']
-    assert len(blocks)==3
+    assert len(blocks)==4
+    assert blocks[1].startswith('TEMU 编号拼图')
     assert blocks[0].startswith('Amazon基准') and 'Amazon 3 knives' in blocks[0]
-    assert blocks[1].startswith('C00') and 'TEMU set 0' in blocks[1]
-    assert blocks[2].startswith('C01') and 'TEMU set 1' in blocks[2]
+    assert blocks[2].startswith('C00') and 'TEMU set 0' in blocks[2]
+    assert blocks[3].startswith('C01') and 'TEMU set 1' in blocks[3]
 
 
 @pytest.mark.parametrize('invalid',[True,0,65537,'8192'])
@@ -111,6 +114,7 @@ def test_request_timeout_default_and_configuration_boundaries():
 def test_incomplete_response_records_paid_usage_without_retry(tmp_path,monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','offline-fixture')
     monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',grid)
     calls=[]
     class FakeClient:
         def __init__(self,**kwargs):
@@ -129,7 +133,8 @@ def test_incomplete_response_records_paid_usage_without_retry(tmp_path,monkeypat
     cat={'category_name_zh':'测试新品类','stage3':{'modules':{'first':60,'second':40},'max_concurrency':1,'batch_size':1}}
     pending=iter([{'asin':'A','goods_id':str(i),'amazon_image_path':'a','temu_image_path':'t',
                    'pair_revision':'p','vision_revision_key':str(i),'attempt':1} for i in range(2)])
-    runner.consume(args,cat,tmp_path/'blocked.json','fixture',pending)
+    with pytest.raises(SystemExit, match='不自动重复请求'):
+        runner.consume(args,cat,tmp_path/'blocked.json','fixture',pending)
     assert len(calls)==1
     assert calls[0]['max_output_tokens']==16384
     ledger=list(runner.rows(tmp_path/'requests.jsonl'))
@@ -154,6 +159,7 @@ def offline_consumer(tmp_path, monkeypatch):
     """Observe real request scheduling and bookkeeping without network calls."""
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-fixture')
     monkeypatch.setattr(runner, '_data_url', lambda path: 'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',grid)
     monkeypatch.setattr(runner, 'protocol', lambda cat, count: ('fixture', {}))
     monkeypatch.setattr(runner, 'decode', lambda cat, data, ids: {
         identity: {'overall_confidence': data.get('confidence', .9)} for identity in ids
@@ -247,3 +253,5 @@ def test_invalid_effort_fails_before_constructing_api_client(tmp_path, monkeypat
         runner.consume(args, cat, tmp_path/'blocked.json', 'fixture', iter([{}]))
     assert not args.results.exists()
     assert not (tmp_path/'requests.jsonl').exists()
+
+pytestmark = pytest.mark.usefixtures("offline_api_transport")

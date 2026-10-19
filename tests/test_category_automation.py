@@ -90,7 +90,8 @@ def test_keyword_plan_is_traceable_to_asins():
     plan = build_plan(rows, "bath towel set", 12, 500)
     assert plan[0]["query"] == "bath towel set"
     assert plan[0]["source_asins"] == ["A1", "A2"]
-    assert any(item["query"] == "turkish cotton bath towel set" for item in plan)
+    assert {item["query"]: item["source_asins"] for item in plan if item["query"]!="bath towel set"}=={
+        "waffle bath towel set":["A1"], "striped bath towel set":["A2"]}
     assert all(item["max_products"] == 500 for item in plan)
     assert all("source_evidence" in item for item in plan)
 

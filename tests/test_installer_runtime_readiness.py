@@ -52,6 +52,8 @@ function Test-Path {
  if ($LiteralPath.EndsWith('node.exe')) { return $true }
  return $env:TEST_COMPLETE -eq '1'
 }
+function global:Invoke-TestNode { 'v24.19.0'; $global:LASTEXITCODE=0 }
+Set-Alias -Name $env:TEST_NODE -Value Invoke-TestNode
 $result=Find-NodeToolchain
 [pscustomobject]@{ready=($null -ne $result); npm=$result.Npm} | ConvertTo-Json -Compress
 '''

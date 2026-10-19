@@ -301,7 +301,7 @@ test('terminal HTTP remains passive until CAPTCHA then requires stable same-quer
     const events=[],snapshots=[];let reads=0,sleeps=0,scans=0,sortReads=0;
     const context=vm.createContext({status:'STOPPED_HTTP_403',originalBlock:null,httpBlock:{status:403,observed_at:'first'},
       QUERY:'power drill',SORT_REQUEST:'sales',humanVerificationActive:false,stableChecks:0,previousSignature:null,
-      URL,
+      URL,isPostVerificationEmptySearchSample:()=>false,
       sleep:async()=>{sleeps++;if((!challenge&&sleeps>1)||(challenge&&sleeps>30))throw Error('test-stop');},
       bootstrapPageState:async()=>{reads++;if(reads>8)throw Error('test-stop');return {url:challenge&&reads===1?'https://www.temu.com/bgn_verification.html':url};},
       classify:state=>String(state.url||'').includes('verification')?'HUMAN_VERIFICATION':null,

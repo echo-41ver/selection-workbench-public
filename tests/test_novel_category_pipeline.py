@@ -83,7 +83,7 @@ def test_new_category_frozen_rules_visual_protocol_and_excel(tmp_path, monkeypat
     write_rows(frozen_export/f'layer3_candidates_{key}.jsonl', [pair])
     write_rows(frozen_export/f'layer12_rows_{key}.jsonl', [{**pair,'pair_status':'CANDIDATE','amazon_title':'ANSI fixture keyboard', 'temu_title':'ANSI fixture keyboard', 'stage1_text_fact':'测试属性无冲突','vector_score':95}])
     write_rows(base/'stage123'/'results.jsonl', [{**pair,'vision_revision_key':vision_revision(cat,pair),'api_status':'success','visual_facts':facts,'model':'OFFLINE_FIXTURE','usage':{}}])
-    exporter.export(frozen, 'layer123')
+    exporter.export_snapshot(frozen, 'layer123')
     book=load_workbook(base/'excel'/'测试机械键盘_第一二三层.xlsx',read_only=True,data_only=True)
     try:
         rows=list(book['全量综合结果'].values); result=dict(zip(rows[3],rows[4]))

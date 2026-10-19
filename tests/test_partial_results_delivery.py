@@ -34,7 +34,7 @@ def test_full_export_of_partial_logs_keeps_unknown_and_warning(tmp_path,monkeypa
     ledger=base/'stage123/requests.jsonl';ledger.write_bytes(b'{"request_id":"r1","status":"received","usage":{"total_tokens":8}}\n{"status":')
     (base/'stage123/request_intents.jsonl').write_text(json.dumps({'request_id':'r1','status':'started','pairs':1})+'\n')
     monkeypatch.setattr(exporter,'ROOT',tmp_path);monkeypatch.setattr(exporter,'compatible_vision_keys',lambda *a,**kw:['k'])
-    exporter.export(category,'layer123')
+    exporter.export_snapshot(category,'layer123')
     book=load_workbook(base/'excel'/f'{cat["category_name_zh"]}_第一二三层.xlsx',read_only=True)
     try:
         sheet=book['全量综合结果'];data=list(sheet.values);assert sheet.max_row==6

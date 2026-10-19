@@ -27,6 +27,7 @@ def test_agent_filled_skeleton_passes_actual_loader(tmp_path):
     # Offline fixture only: this tests parser shape, not real source verification.
     cat['amazon'].update(bestsellers_url='https://www.amazon.com/zgbs/test-fixture', target_count=3)
     cat['temu'].update(base_queries=['fixture'], keyword_limit=3, max_products_per_keyword=5)
+    cat['stage2'].update(candidate_threshold=55, threshold_reason_zh='离线测试品类的保守召回建议，尚未校准。')
     cat['stage1'].update(rule_version='fixture-v1', attributes=[{'name':'identity','hard_conflict':True,'values':{'A':['type a'],'B':['type b']}}])
     cat['stage3'].update(rule_version='fixture-v1',prompt_version='fixture-v1',schema_version='fixture-v1',modules={'identity':100},module_descriptions={'identity':'双边可见身份事实'},visual_instructions='遮挡UNKNOWN')
     cat['stage3']['identity_policy']={'version':'category-identity-policy-v2-effects','product_scope':'测试本体',

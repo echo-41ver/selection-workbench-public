@@ -9,17 +9,18 @@ class Tests(unittest.TestCase):
  def test_explicit_manual_never_rotates(self):
   p={'status':'STOPPED_PROXY_OR_NETWORK_FAILURE','manual_action_required':True,'automatic_retry':False}
   self.assertFalse(w.transport_recovery_allowed(p));self.assertIsNone(r.recovery_kind(p['status'],p,True))
- def test_target_refusal_never_rotates(self):
+ def test_target_refusal_uses_access_cooldown(self):
   for status in ['STOPPED_HTTP_403','STOPPED_ACCESS_DENIED']:
-   self.assertIsNone(r.recovery_kind(status,{},True))
+   self.assertEqual(r.recovery_kind(status,{},True),'ACCESS')
+   self.assertGreater(r.site_access_wait('ACCESS',{}),0)
  def test_confirmed_login_redirect_recovers_without_treating_captcha_as_login(self):
   for status in ['STOPPED_HTTP_403','STOPPED_ACCESS_DENIED']:
    self.assertEqual(r.recovery_kind(status,{'confirmed_login_redirect':True},True),'LOGIN')
-   self.assertIsNone(r.recovery_kind(status,{'confirmed_login_redirect':True,'manual_action_required':True},True))
+   self.assertEqual(r.recovery_kind(status,{'confirmed_login_redirect':True,'manual_action_required':True},True),'LOGIN')
   self.assertIsNone(r.recovery_kind('WAITING_CAPTCHA',{'confirmed_login_redirect':True},True))
  def test_budget_is_bounded(self):
   for kind in ['TRANSPORT','LOGIN','INITIAL_PRODUCTS','CONTROL']:
-   self.assertFalse(r.recovery_budget({'attempts_without_progress':3,'unique_goods_before':0},0,'profile',kind)[0])
+   self.assertFalse(r.recovery_budget({'attempts_without_progress':3,'unique_goods_before':0},0,'profile',kind,limit=3)[0])
   self.assertTrue(r.recovery_budget({'attempts_without_progress':3,'unique_goods_before':0},1,'profile','TRANSPORT')[0])
  def test_foreign_process_not_owned(self):
   root=pathlib.Path.cwd();args=['node',str(root/'scripts/temu_flower_collect.mjs'),'--output',str(root/'runs/task/temu/workers/worker-01-new/query')]

@@ -24,8 +24,10 @@ def test_invalid_image_creates_visible_failure_without_provider_or_intent(tmp_pa
     assert not (tmp_path/'request_intents.jsonl').exists()
     assert all(r['status']=='local_error' for r in runner.rows(tmp_path/'requests.jsonl'))
 
-def test_one_bad_candidate_does_not_block_valid_batch_member(tmp_path,monkeypatch):
+@pytest.mark.parametrize('bad_kind',['corrupt','tiff'])
+def test_one_bad_candidate_does_not_block_valid_batch_member(tmp_path,monkeypatch,bad_kind):
     monkeypatch.setenv('DEEPSEEK_API_KEY','offline-fixture');good=tmp_path/'good.img';Image.new('RGB',(16,16),'red').save(good,format='PNG');bad=tmp_path/'bad.img';bad.write_bytes(b'corrupt')
+    if bad_kind=='tiff':Image.new('RGB',(16,16),'red').save(bad,format='TIFF')
     monkeypatch.setattr(runner,'protocol',lambda *a:('offline',{}));calls=[]
     class Client:
         def __init__(self,**kwargs):self.responses=self
@@ -42,3 +44,5 @@ def test_one_bad_candidate_does_not_block_valid_batch_member(tmp_path,monkeypatc
     assert next(r for r in results if r['goods_id']=='0')['billing_state']=='NO_CHARGE'
     assert next(r for r in results if r['goods_id']=='1')['api_status']=='success'
     intents=list(runner.rows(tmp_path/'request_intents.jsonl'));assert [r['status'] for r in intents]==['started','settled']
+
+pytestmark = pytest.mark.usefixtures("offline_api_transport")

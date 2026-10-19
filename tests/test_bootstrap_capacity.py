@@ -58,7 +58,7 @@ def test_capacity_never_publishes_three_workers(setup_fixture, monkeypatch, resu
         calls.append(path)
         if '/user/list' in path: return {'data':{'list':[]}}
         if 'create' in path:
-            assert kwargs['body']['tabs'] == ['https://www.temu.com/']
+            assert kwargs['body']['tabs'] == ['about:blank']
             if created[0]==3: raise RuntimeError(CAPACITY)
             created[0]+=1; return {'data':{'profile_id':f'owned-{created[0]}'}}
         return {'data':{'webdriver':str(driver),'marionette_port':24001}}

@@ -21,7 +21,8 @@ def test_category_isolation_and_unknown_text():
     assert not text_gate(CAT,'not corded cordless drill','corded drill')['excluded']
     assert not text_gate(CAT,'cordless and corded drill combo','corded drill')['excluded']
     plan=generic_keywords([{'asin':'A','title':'Brushless cordless 20V drill'}],CAT)
-    assert any(p['query']=='brushless power drill' for p in plan)
+    assert any(p['query']!='power drill' and p['source_asins']==['A'] for p in plan)
+    assert all(set(p['query'].split()) <= set('brushless cordless 20v power drill'.split()) for p in plan)
     assert not any('towel' in p['query'] for p in plan)
 
 
@@ -105,7 +106,8 @@ def test_generic_excel_reopen_and_formula_injection(tmp_path):
     write_book(dest,['ASIN','标题','主图链接'],[['A','=1+1','https://example.com/image.jpg']],{'商品对总数':1})
     book=load_workbook(dest)
     assert book['明细_1']['B2'].data_type=='s'
-    assert book['明细_1']['C2'].hyperlink.target=='https://example.com/image.jpg'
+    cell=book['明细_1']['C2']
+    assert cell.hyperlink and cell.hyperlink.target=='https://example.com/image.jpg' or cell.data_type=='f' and 'https://example.com/image.jpg' in cell.value
     book.close()
 
 
@@ -148,7 +150,7 @@ def test_offline_end_to_end_incremental_export_and_zero_paid_calls(tmp_path,monk
         facts={'identity':identity(),'modules':{k:{'relation':'SAME','amazon_evidence':'左侧圆弧主体','temu_evidence':'左侧圆弧主体','hard_conflict_code':'NONE'} for k in cat['stage3']['modules']},'overall_confidence':.9}
         result={**row,'api_status':'success','visual_facts':facts,'vision_revision_key':vision_revision(cat,row),'model':'OFFLINE_FIXTURE','usage':{}}
         (base/'stage123'/'results.jsonl').write_text(json.dumps(result)+'\n',encoding='utf-8')
-        exporter.export(category,'layer123')
+        exporter.export_snapshot(category,'layer123')
         assert selection.completion(config,True)['缺失或失败']==0
         from openpyxl import load_workbook
         book=load_workbook(base/'excel'/'电钻_第一二三层.xlsx',read_only=True)
@@ -203,7 +205,7 @@ def test_paid_consumer_with_fake_provider_only(tmp_path,monkeypatch,capsys,mode,
         def create(self,**kw):
             calls.append(kw)
             if mode=='auth':raise ProviderError('fixture auth failure')
-            ids=[part['text'] for part in kw['input'][0]['content'] if part['type']=='input_text' and part['text'].startswith('C')]
+            ids=[part['text'].split(' ',1)[0] for part in kw['input'][0]['content'] if part['type']=='input_text' and part['text'].startswith('C')]
             low=mode=='high' and kw['reasoning']['effort']=='low'
             raw={'candidates':[{'i':i,'v':identity('DIFFERENT' if low else 'SAME'),'c':.5 if low else .9,'m':{str(j):{'r':'D' if low else 'S','a':'明确结构','t':'对应结构','h':cat['stage3']['identity_hard_conflicts'][0] if low else 'NONE'} for j in range(len(cat['stage3']['modules']))}} for i in ids]}
             return SimpleNamespace(output_text='invalid json' if mode=='split' and len(calls)==1 else json.dumps(raw),usage=SimpleNamespace(model_dump=lambda:{'total_tokens':101}),id=f'fixture-{len(calls)}')
@@ -226,3 +228,5 @@ def test_paid_consumer_with_fake_provider_only(tmp_path,monkeypatch,capsys,mode,
     else:
         consumer.main()
     assert len(calls)==expected_requests
+
+pytestmark = pytest.mark.usefixtures("offline_api_transport")

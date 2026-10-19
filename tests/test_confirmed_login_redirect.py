@@ -24,4 +24,4 @@ for (const [url,block,want] of [
     assert result.returncode==0,result.stderr
     guard=source[end:source.index('async function ',end+20)]
     assert guard.count('confirmed_login_redirect: confirmedLoginRedirect(state)')==2
-    assert source.count('confirmed_login_redirect: confirmedLoginRedirect(before)')==2
+    assert source.count('confirmed_login_redirect: confirmedLoginRedirect(before)')==3

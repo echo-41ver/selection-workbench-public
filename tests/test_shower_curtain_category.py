@@ -7,7 +7,8 @@ from selection_automation.vision import protocol
 from identity_fixtures import identity
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = ROOT / "config" / "categories" / "shower_curtain_local_union_20260922.json"
+from category_fixtures import category_path
+CONFIG = category_path("shower_curtain_local_union_20260922.json")
 
 
 def facts(relation="SAME", confidence=.9):

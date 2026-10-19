@@ -53,7 +53,7 @@ def test_collection_history_composite_export_tolerates_no_commercial_report(tmp_
     key=cat['category_key'];(frozen/f'layer12_summary_{key}.json').write_text(json.dumps({'amazon_products':1,'temu_products':1,'actual_pairs':1,'states':{'CANDIDATE':1}}))
     (frozen/f'layer12_rows_{key}.jsonl').write_text(json.dumps({'asin':'A','goods_id':'T','pair_status':'CANDIDATE','amazon_title':'drill','temu_title':'drill'})+'\n')
     monkeypatch.setattr(exporter,'ROOT',tmp_path)
-    exporter.export(category,'layer123')
+    exporter.export_snapshot(category,'layer123')
     from openpyxl import load_workbook
     book=load_workbook(base/'excel'/f'{cat["category_name_zh"]}_第一二三层.xlsx',read_only=True)
     sheet=book['全量综合结果'];assert sheet.max_row==5

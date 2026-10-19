@@ -1,3 +1,4 @@
+from offline_visual_api import OfflineTransport
 import json
 import sys
 from pathlib import Path
@@ -58,7 +59,7 @@ def test_pending_remains_total_but_eta_and_request_groups_exclude_unknown(tmp_pa
 def test_direct_transport_closed_and_only_unrequested_pairs_sent(tmp_path,monkeypatch,fail):
     intents,results=held_fixture(tmp_path);before=intents.read_bytes()
     events=[];requests=[]
-    class Transport:
+    class Transport(OfflineTransport):
         def __init__(self,**kw):
             assert kw['trust_env'] is False
             assert kw['timeout'].read==600 and kw['timeout'].connect==30
@@ -93,3 +94,5 @@ def test_direct_transport_closed_and_only_unrequested_pairs_sent(tmp_path,monkey
     assert events==['transport_created','client_closed','transport_closed']
     assert intents.read_bytes().startswith(before)
     assert runner.unresolved_request_intents(intents)>={'uncertain'}
+
+pytestmark = pytest.mark.usefixtures("offline_api_transport")

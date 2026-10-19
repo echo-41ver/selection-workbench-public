@@ -16,6 +16,7 @@ def run_installer_functions(tmp_path, scenario, elevated=False, twice=False):
     # Every network/install boundary in these functions is replaced before invocation.
     harness = r"""
 $ErrorActionPreference = 'Stop'
+$root = $env:INSTALL_TEST_ROOT
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $env:INSTALL_TEST_ROOT 'install.ps1'), [ref]$tokens, [ref]$errors)
 if ($errors) { throw ($errors | Out-String) }
@@ -139,4 +140,6 @@ def test_winget_source_is_prepared_once_for_multiple_missing_dependencies(tmp_pa
 def test_installer_keeps_bom_and_generated_skill_output():
     content = (ROOT / "install.ps1").read_bytes()
     assert content.startswith(b"\xef\xbb\xbf")
-    assert "runtime/agent-config/skills/amazon-temu-automation" in content.decode("utf-8-sig")
+    assert "scripts/generate_agent_config.py" in content.decode("utf-8-sig")
+    generator = (ROOT / "scripts/generate_agent_config.py").read_text("utf-8")
+    assert "amazon-temu-automation" in generator and "agent-config" in generator

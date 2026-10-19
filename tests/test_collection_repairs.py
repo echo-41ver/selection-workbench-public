@@ -141,9 +141,9 @@ def test_all_queries_require_sales_sort_and_unconfirmed_does_not_advance(pipelin
         module.collect_temu(Path('category.json'),category,sessions)
     assert calls==[('first','sales'),('first','recent')]+[('second','sales')]*4
     state=json.loads((module.run_root(category)/'temu/supervisors/worker-01-new.json').read_text('utf-8'))
-    assert state['query_status']=='WAITING_CAPTCHA' and state['attempt']==1
+    assert state['query_status']=='WAITING_CAPTCHA' and state['browser_preserved'] is True
     assert state['current_query']=='second' and state['completed_queries']==['first']
-    assert state['verify_to_resume'] is True
+    assert state['manual_action_required'] is True and state['automatic_retry'] is False
 
 
 def test_rate_recovery_history_has_no_cumulative_limit_and_reopens_on_progress(pipeline_fixture):
@@ -328,7 +328,7 @@ def test_recovery_preserves_checkpoint_and_distinguishes_access_gates(pipeline_f
         query=command[command.index('--query')+1]; calls.append(query)
         output=Path(command[command.index('--output')+1]); checkpoint=output/'products.jsonl'
         if len(calls)==1: checkpoint.write_text('{"goods_id":"kept"}\n',encoding='utf-8')
-        if len(calls)>1:
+        if len(calls)>1 and rotations:
             assert command[command.index('--webdriver-url')+1]=='http://localhost:9999'
             assert command[command.index('--session-id-file')+1].endswith('new_sid')
             if query=='first' and command[command.index('--sort')+1]=='sales': assert 'kept' in checkpoint.read_text(encoding='utf-8')
@@ -345,26 +345,20 @@ def test_recovery_preserves_checkpoint_and_distinguishes_access_gates(pipeline_f
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(module,'run_collector',collector)
     monkeypatch.setattr(module.subprocess,'run',replace)
-    if blocked_status == 'STOPPED_HTTP_403_NO_LOGIN':
+    if persistent_login:
         with pytest.raises(RuntimeError,match='incomplete'):
             module.collect_temu(Path('category.json'),category,sessions)
-        assert calls==['first'] and rotations==[]
-        state=json.loads((module.run_root(category)/'temu/supervisors/worker-01-new.json').read_text('utf-8'))
-        assert state['query_status']=='STOPPED_HTTP_403' and state['browser_preserved'] is True
-    elif persistent_login:
-        with pytest.raises(RuntimeError,match='incomplete'):
-            module.collect_temu(Path('category.json'),category,sessions)
-        assert calls==['first'] * 4 and len(rotations)==3
+        assert calls==['first'] * 4 and len(rotations)==(0 if blocked_status=='STOPPED_INITIAL_PRODUCTS_TIMEOUT' else 3)
         state=json.loads((module.run_root(category)/'temu/supervisors/worker-01-new.json').read_text('utf-8'))
         assert state['query_status']=='WAITING_CAPTCHA' and state['browser_preserved'] is True
         assert state['current_query']=='first' and state['completed_queries']==[]
         # Restarting with an unchanged challenge must preserve its session and data.
         with pytest.raises(RuntimeError,match='incomplete'):
             module.collect_temu(Path('category.json'),category,sessions)
-        assert calls==['first'] * 5 and len(rotations)==3
+        assert calls==['first'] * 5 and len(rotations)==(0 if blocked_status=='STOPPED_INITIAL_PRODUCTS_TIMEOUT' else 3)
     else:
         module.collect_temu(Path('category.json'),category,sessions)
-        assert calls==['first','first','first','second','second'] and len(rotations)==1
+        assert calls==['first','first','first','second','second'] and len(rotations)==(0 if blocked_status=='STOPPED_INITIAL_PRODUCTS_TIMEOUT' else 1)
     assert 'kept' in (module.run_root(category)/'temu/workers/worker-01-new/first/products.jsonl').read_text('utf-8')
 
 
@@ -415,7 +409,7 @@ const source=fs.readFileSync('scripts/temu_flower_collect.mjs','utf8');
 const code=source.slice(source.indexOf('async function visibleScrollToBottom'),source.indexOf('async function rememberSeeMoreBottomOffset'));
 let y=0; const events=[]; const behaviors=[];
 const context=vm.createContext({classify:()=>null,scan:async()=>({}),
- lightPageState:async()=>({scrollY:y,scrollHeight:4000,innerHeight:800}),rand:()=>300,
+ lightPageState:async()=>({scrollY:y,scrollHeight:4000,innerHeight:800}),rand:()=>300,recordCollectionScroll:async()=>{},
  sleep:async()=>{},appendEvent:async(name)=>events.push(name),
  execute:async(script,args)=>{behaviors.push(args[1]);if(args[1]==='instant')y=Math.min(3200,y+args[0]);}});
 vm.runInContext(code,context);

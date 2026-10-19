@@ -1,4 +1,5 @@
 """Cross-category accuracy guards and real pipeline routing; no API requests."""
+from category_fixtures import category_path
 import copy
 import json
 from pathlib import Path
@@ -88,7 +89,7 @@ def test_complete_item_view_keeps_both_ends_of_long_product():
 
 @pytest.mark.parametrize('filename',['power_drill.json','bath_towel_set.json','shower_curtain_local_union_20260922.json'])
 def test_third_layer_cannot_confirm_common_parts_with_similar_design(filename):
-    cat=json.loads((ROOT/'config/categories'/filename).read_text('utf-8'))
+    cat=json.loads(category_path(filename).read_text('utf-8'))
     fact={'identity':identity(),'overall_confidence':.95,'modules':{
         key:{'relation':'SAME','amazon_evidence':'圆弧主体和连接件','temu_evidence':'圆弧主体和连接件','hard_conflict_code':'NONE'}
         for key in cat['stage3']['modules']}}

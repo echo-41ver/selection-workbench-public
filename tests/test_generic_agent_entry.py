@@ -9,6 +9,12 @@ from selection_automation.identity_policy import VERSION,compile_policy
 import selection
 import pipeline
 
+def compile_authored(raw):
+    from selection_automation.stage1_authoring import compile_stage1_rules
+    c=compile_policy(raw) if raw['stage3'].get('identity_policy') else deepcopy(raw)
+    if raw['stage3'].get('identity_policy'):c.setdefault('visual_decision','visible_core_binary_v1')
+    return compile_stage1_rules(c)
+
 CASES=[('fixture_cap','杯盖','threaded join','snap join'),
        ('fixture_clamp','桌面夹具','fixed joint','hinged joint'),
        ('fixture_organizer','收纳盒','solid partitions','mesh partitions')]
@@ -20,7 +26,8 @@ def authored_case(key,name,left,right):
     c['stage1'].update(rule_version='authored-fixture-v1',attributes=[
         {'name':'construction','hard_conflict':True,'values':{'one':[left],'two':[right]}},
         {'name':'finish','hard_conflict':True,'values':{'red':['red'],'blue':['blue']}}])
-    c['stage2']['candidate_threshold']=60
+    c['stage2'].update(candidate_threshold=60,threshold_reason_zh='离线测试保守召回建议，未校准。')
+    c['temu'].update(category_aliases=['fixture product',name],subject_filter={'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,'exclude_subject_terms':['storage case','收纳袋']})
     c['stage3'].update(rule_version='authored-fixture-v1',prompt_version='authored-fixture-v1',schema_version='authored-fixture-v1',modules={'body':80,'finish':20},
         visual_instructions='由统一主体/颜色边界编译',identity_policy={'version':VERSION,'product_scope':name+'单件商品', 'features':[
             {'id':'construction','label':'主体构造','role':'identity','evidence':'both','region':'body','effects':['shape','connection'],'preserves':[], 'scope':'主体可见连接构造','rule':'明确不同的主体构造为不同款','modules':['body'],'required_visual':True},
@@ -36,7 +43,7 @@ def test_actual_cli_prepare_accepts_raw_agent_contract_and_matches_mcp(tmp_path,
     selection.main()
     cli=selection.read(tmp_path/'runs'/key/'category.json')
     mcp_server.execute('selection_prepare',{'category':raw})
-    assert selection.read(tmp_path/'runs'/key/'category.json')==cli==compile_policy(raw)
+    assert selection.read(tmp_path/'runs'/key/'category.json')==cli==compile_authored(raw)
     assert json.loads(incoming.read_text(encoding='utf8'))==raw
     cfg=selection.read(tmp_path/'runs'/key/'stage12_config.json')
     assert cfg['candidate_threshold']==60 and cfg['text_gate'].startswith('declarative:')
@@ -75,7 +82,7 @@ def test_human_three_layer_edits_reach_fresh_run_and_preserve_frozen_rules(tmp_p
     assert vision_revision(edited,pair)!=vision_revision(original,pair)
     source=tmp_path/'edited.json';source.write_text(json.dumps(edited),encoding='utf8')
     frozen,_,base=selection.prepare(source)
-    assert load_category(frozen)==edited
+    assert load_category(frozen)==compile_authored(edited)
     assert selection.read(base/'stage12_config.json')['candidate_threshold']==63
     assert not (base/'stage123'/'paid_enabled.json').exists()
     before=frozen.read_bytes()

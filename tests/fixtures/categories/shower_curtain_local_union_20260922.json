@@ -1,0 +1,113 @@
+{
+  "schema_version": "category-automation-v1",
+  "category_key": "shower_curtain_local_union_20260922",
+  "category_name_zh": "浴帘本地并集20260922",
+  "category_name_en": "Shower Curtains Local Union 20260922",
+  "market": "US",
+  "currency": "USD",
+  "stage12_output_dir": "stage12",
+  "amazon": {
+    "mode": "LOCAL_VERIFIED_FRONTEND_SNAPSHOT",
+    "bestsellers_url": "https://www.amazon.com/Best-Sellers-Shower-Curtains/zgbs/home-garden/13749881",
+    "target_count": 2,
+    "detail_concurrency": 1
+  },
+  "temu": {
+    "base_queries": ["shower curtain"],
+    "keyword_limit": 1,
+    "keywords_per_product": 1,
+    "max_products_per_keyword": 25000,
+    "idle_complete_rounds": 1,
+    "include_terms": ["shower curtain", "shower liner", "浴帘"],
+    "severe_exclude_terms": [],
+    "collection_source": "LOCAL_UNION_FRONTEND_AND_EXTERNAL_MERGED",
+    "merge_key": "goods_id"
+  },
+  "stage1": {
+    "text_gate": "shower_curtain_v2",
+    "rule_version": "shower-curtain-three-layer-v3.1-module-facts"
+  },
+  "stage2": {
+    "model": "torchvision/resnet50-imagenet1k-v2",
+    "candidate_threshold": 50,
+    "threshold_status": "CALIBRATED_SHOWER_CURTAIN_45_50_AUDIT",
+    "below_threshold_action": "FINAL_DIFFERENT_BY_CALIBRATED_VECTOR_THRESHOLD",
+    "included_in_final_score": false
+  },
+  "stage3": {
+    "rule_version": "shower-curtain-three-layer-v3.1-module-facts",
+    "scoring_policy": "shower_curtain_v3_1",
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com",
+    "prompt_version": "shower-openai-module-facts-v2.3-provider-neutral-batch12",
+    "schema_version": "shower-module-facts-v2.1-compact-batch12",
+    "request_mode": "one_amazon_to_many_temu",
+    "batch_size": 12,
+    "max_concurrency": 4,
+    "reasoning_effort": "low",
+    "allow_similar_relation": false,
+    "fallback_split": "halve_until_single",
+    "high_rerun_policy": {
+      "condition": "accepted_hard_conflict_and_confidence_below_threshold",
+      "confidence_below": 0.65,
+      "scope": "single_candidate_only"
+    },
+    "retry_policy": {
+      "primary_attempts_per_pair": 1,
+      "tail_retry_rounds": 1,
+      "cooldown_seconds": 15
+    },
+    "same_threshold": 86,
+    "different_score_ceiling": 71,
+    "threshold_status": "SHOWER_CURTAIN_V3_1_PRODUCTION",
+    "modules": {
+      "design_identity": 32,
+      "core_structure": 18,
+      "material_opacity": 15,
+      "function_subtype": 12,
+      "surface_details": 10,
+      "bundle_accessories": 7,
+      "spec_variants": 6
+    },
+    "module_labels": {
+      "design_identity": "主体款式图案版式",
+      "core_structure": "核心结构安装",
+      "material_opacity": "材质透明度厚度",
+      "function_subtype": "功能产品子类型",
+      "surface_details": "表面纹理工艺",
+      "bundle_accessories": "套装与配件",
+      "spec_variants": "规格与可接受变体"
+    },
+    "module_descriptions": {
+      "design_identity": "浴帘主体花型、设计文字、重复单元与版式；不同印花不是同款",
+      "core_structure": "层数、顶部、衬里、开合方式；挂钩和大环可为变体",
+      "material_opacity": "PEVA/EVA/涤纶核心材质外观及CLEAR/TRANSLUCENT/OPAQUE透明度类别",
+      "function_subtype": "内衬、装饰帘、带内衬浴帘或浴室套装等子类型",
+      "surface_details": "华夫格、纵纹、褶皱、边缝、孔眼、磁石或配重",
+      "bundle_accessories": "主体部件、挂钩、赠品与主套装构成",
+      "spec_variants": "尺寸、普通颜色、厚度、挂钩和包装等可接受SKU变体"
+    },
+    "confirmation_minimums": {
+      "design_identity": 27,
+      "core_structure": 14,
+      "material_opacity": 10,
+      "function_subtype": 9
+    },
+    "identity_hard_conflicts": [
+      "DIFFERENT_BASE_PATTERN_LAYOUT",
+      "PLAIN_VS_PATTERNED",
+      "DIFFERENT_CORE_MATERIAL",
+      "DIFFERENT_OPACITY_CLASS",
+      "DIFFERENT_PRODUCT_SUBTYPE",
+      "DIFFERENT_LAYER_STRUCTURE",
+      "DIFFERENT_MAIN_BUNDLE"
+    ],
+    "variant_fields": [
+      "design_identity", "core_structure", "material_opacity", "function_subtype",
+      "surface_details", "bundle_accessories", "spec_variants",
+      "普通颜色", "尺寸", "厚度", "挂钩或环", "包装", "水印", "展示场景"
+    ],
+    "visual_instructions": "先定位浴帘主体。忽略浴室背景、人物、裁切、镜像、调色、水印、品牌遮罩、营销文字、尺寸线、贴纸和包装标签。印在浴帘本体上的设计文字属于主体图案。全透明、半透明磨砂、不透明是三个不同身份类别。只有双边都有可定位证据才允许输出身份硬冲突。"
+  }
+}

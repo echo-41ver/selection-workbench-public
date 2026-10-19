@@ -1,4 +1,5 @@
 """Grouped wire sharing must preserve scalar cache keys and factual decisions."""
+from category_fixtures import category_path
 from copy import deepcopy
 import hashlib
 import json
@@ -24,7 +25,7 @@ def digest(value):
 
 @pytest.mark.parametrize('filename', SCALAR_HASHES)
 def test_scalar_prompt_and_schema_are_byte_identical_to_prechange(filename):
-    cat = json.loads((ROOT / 'config/categories' / filename).read_text(encoding='utf-8'))
+    cat = json.loads(category_path(filename).read_text(encoding='utf-8'))
     assert digest(protocol(cat, 1)) == SCALAR_HASHES[filename]
 
 

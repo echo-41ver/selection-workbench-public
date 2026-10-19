@@ -95,7 +95,7 @@ const page = async () => {
 const context = vm.createContext({
   ...bootstrapPolicy, decideInitialProductsWait,decideEmptyQueryResults, classify, terminalCollectionStop,
   supersededByVerification, observeHttpPageTransition, URL, humanVerificationActive:false,
-  httpBlock:null, process:{exitCode:0},
+  httpBlock:null, process:{exitCode:0},readLocalWarehouse:async()=>({}),confirmsLocalWarehouse:()=>false,
   Date:{now:()=>tick}, now:()=>new Date(tick).toISOString(),
   sleep:async ms=>{tick+=ms;}, rand:(min)=>min,
   QUERY:'towels', ENTRY_MODE:'empty_search', INITIAL_PRODUCTS_TIMEOUT_SECONDS:180, finalStatus:null,

@@ -114,6 +114,7 @@ def test_provider_block_does_not_spend_retry_budget_and_recovers(tmp_path, monke
 
 def test_start_reports_starting_and_stop_is_not_discarded(tmp_path, monkeypatch):
     monkeypatch.setattr(selection, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'os', SimpleNamespace(name='posix'))
     monkeypatch.setattr(selection, 'spawn', lambda *a, **k: SimpleNamespace(pid=os.getpid(),poll=lambda:None))
     base = tmp_path/'runs'/CAT['category_key']; base.mkdir(parents=True)
     (base/'STOP').write_text('previous stop')
@@ -126,6 +127,7 @@ def test_start_reports_starting_and_stop_is_not_discarded(tmp_path, monkeypatch)
 
 def test_already_exited_start_reports_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(selection, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'os', SimpleNamespace(name='posix'))
     monkeypatch.setattr(selection, 'spawn', lambda *a, **k: SimpleNamespace(pid=999999,poll=lambda:1,returncode=1))
     result = selection.request_start(tmp_path/'category.json', CAT, tmp_path/'runs'/CAT['category_key'], False)
     assert result['状态'] == '启动失败'
@@ -135,6 +137,7 @@ def test_already_exited_start_reports_failure(tmp_path, monkeypatch):
 def test_start_exit_race_clears_starting_state(tmp_path, monkeypatch, exit_point):
     import psutil
     monkeypatch.setattr(selection, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'os', SimpleNamespace(name='posix'))
     monkeypatch.setattr(selection, 'live_owner', lambda: None)
     checks = iter([None, 1]) if exit_point == 'after_registration' else None
     child = SimpleNamespace(pid=123456,returncode=1,poll=lambda:next(checks) if checks else None)

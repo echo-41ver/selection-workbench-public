@@ -36,6 +36,7 @@ def groups(rows, size=BATCH_SIZE):
 
 
 def render_grid(rows, cell=800):
+    from selection_workflow.api_image_input import ImageInputError, validate_api_image
     if not rows or len(rows)>BATCH_SIZE:raise ValueError('视觉分组必须包含 1–12 个候选')
     if len({amazon_key(row) for row in rows})!=1:raise ValueError('同一组必须使用同一个 Amazon 商品及基准图')
     columns=min(3,len(rows));label_height=36
@@ -44,10 +45,16 @@ def render_grid(rows, cell=800):
     for index,row in enumerate(rows):
         x=(index%columns)*cell;y=(index//columns)*(cell+label_height)
         path=Path(row['temu_image_path']).resolve()
-        with Image.open(path) as source:
-            original=ImageOps.exif_transpose(source).convert('RGB')
-            picture=ImageOps.contain(original,(cell-12,cell-12),Image.Resampling.LANCZOS)
-            canvas.paste(picture,(x+(cell-picture.width)//2,y+label_height+(cell-picture.height)//2))
+        try:
+            with Image.open(path) as source:
+                validate_api_image(source)
+                original=ImageOps.exif_transpose(source).convert('RGB')
+                picture=ImageOps.contain(original,(cell-12,cell-12),Image.Resampling.LANCZOS)
+                canvas.paste(picture,(x+(cell-picture.width)//2,y+label_height+(cell-picture.height)//2))
+        except ImageInputError:
+            raise
+        except (OSError, ValueError) as error:
+            raise ImageInputError('IMAGE_DECODE_FAILED') from error
         label=f'C{index:02}'
         draw.text((x+8,y+7),label+' | '+str(row['goods_id']),fill='black',font=font)
         mapping.append({'id':label,'asin':row['asin'],'goods_id':row['goods_id'],

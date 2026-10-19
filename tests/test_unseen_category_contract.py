@@ -22,6 +22,7 @@ def test_unseen_category_one_contract_across_edit_text_vision_and_cache(tmp_path
     c['stage1'].update(rule_version='fixture-v1',attributes=[
       {'name':'construction','hard_conflict':True,'values':{'one':[left],'two':[right]}},
       {'name':'finish','hard_conflict':True,'values':{'red':['red'],'blue':['blue']}}])
+    c['stage2'].update(candidate_threshold=55,threshold_reason_zh='离线测试建议，未校准。')
     c['stage3'].update(rule_version='fixture-v1',prompt_version='fixture-v1',schema_version='fixture-v1',modules={'body':80,'appearance':20},identity_policy={'version':VERSION,'product_scope':name+'完整商品主体','features':[
       {'id':'construction','label':'主体连接结构','role':'identity','evidence':'both','region':'body','effects':['shape','connection'],'preserves':[],'scope':'商品主体连接部位','rule':'连接构造不同是身份差异','modules':['body'],'required_visual':True},
       {'id':'finish','label':'外观颜色','role':'variant','evidence':'both','region':'body','effects':['color'],'preserves':['construction'],'scope':'本体表面颜色','rule':'主体结构一致时可变色','modules':['appearance'],'required_visual':False}]})

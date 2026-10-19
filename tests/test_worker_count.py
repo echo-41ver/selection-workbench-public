@@ -26,6 +26,7 @@ def test_default_and_eight_way_keyword_preview():
 
 
 def test_eighth_card_rotation_routes_only_to_eighth_worker(tmp_path,monkeypatch):
+    monkeypatch.setattr(web.selection,'ROOT',tmp_path)
     console=web.Console(tmp_path);console.key='fixture'
     owner={'category_key':'fixture','pid':123,'created':1.0}
     monkeypatch.setattr(console,'owner',lambda:owner)

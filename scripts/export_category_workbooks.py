@@ -504,9 +504,6 @@ def export(category_path, kind):
         if report is None:
             raise ValueError('当前任务尚未接入同款分析')
         return export_selection(ROOT,cat,report)
-    if kind=='layer123' and cat.get('stage3',{}).get('scoring_policy')=='shower_curtain_v3_1':
-        from export_shower_layer123_excel import export as export_shower_layer123
-        return export_shower_layer123(category_path)
     if kind=='amazon':
         source=json.loads((base/'amazon'/'amazon_frontend_latest.json').read_text(encoding='utf-8'))
         return export_amazon_book(base/'excel'/f'Amazon_US_{name}_Best_Sellers.xlsx', source, name, cat['amazon']['target_count'], report)
@@ -517,6 +514,21 @@ def export(category_path, kind):
                                 cat['temu']['max_products_per_keyword'],
                                 json.loads(union_summary_path.read_text(encoding='utf-8')) if union_summary_path.exists() else {}, report,
                                 samples=[row for path in sorted((base/'temu/workers').glob('*/*/products.jsonl')) for row in jsonl(path)])
+    raise ValueError('未知导出类型')
+
+
+def export_snapshot(category_path, kind):
+    """Export an existing historical analysis snapshot without changing current delivery."""
+    if kind not in ('layer12', 'layer123'):
+        raise ValueError('历史快照仅支持第一二层或三层导出')
+    cat=load_category(category_path); key=cat['category_key']; name=cat['category_name_zh']; base=ROOT/'runs'/key
+    from selection_automation.visual_decision import binary_mode
+    from selection_automation.commercial import current_report
+    binary=binary_mode(cat)
+    report=None if cat.get('execution_mode')=='collection' else current_report(ROOT,cat)
+    if kind=='layer123' and cat.get('stage3',{}).get('scoring_policy')=='shower_curtain_v3_1':
+        from export_shower_layer123_excel import export as export_shower_layer123
+        return export_shower_layer123(category_path)
     frozen=base/'stage123'/'export_frozen'
     summary=json.loads((frozen/f'layer12_summary_{key}.json').read_text(encoding='utf-8'))
     if summary['actual_pairs']!=summary['amazon_products']*summary['temu_products']: raise ValueError('pair count mismatch')

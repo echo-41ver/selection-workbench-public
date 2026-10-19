@@ -1,3 +1,5 @@
+from offline_visual_api import grid
+from offline_visual_api import OfflineTransport
 import sys
 from pathlib import Path
 import threading
@@ -12,7 +14,7 @@ import run_category_layer3 as runner
 
 def test_completed_slot_refills_while_another_request_is_still_slow(tmp_path,monkeypatch):
     third=threading.Event();guard=threading.Lock();calls=[]
-    class Transport:
+    class Transport(OfflineTransport):
         def __init__(self,**kw):pass
         def __enter__(self):return self
         def __exit__(self,*args):pass
@@ -28,6 +30,7 @@ def test_completed_slot_refills_while_another_request_is_still_slow(tmp_path,mon
     monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY')
     monkeypatch.setattr(openai,'DefaultHttpxClient',Transport);monkeypatch.setattr(openai,'OpenAI',Client)
     monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',grid)
     monkeypatch.setattr(runner,'protocol',lambda cat,n:('fixture',{}))
     monkeypatch.setattr(runner,'decode',lambda c,d,ids:{i:{'overall_confidence':.9} for i in ids})
     monkeypatch.setattr(runner,'score',lambda c,f:{'hard_conflicts':[]})
@@ -45,7 +48,7 @@ def test_one_direct_pool_is_shared_and_closed_after_workers(tmp_path,monkeypatch
     events=[];calls=[];guard=threading.Lock()
     barrier=threading.Barrier(min(width,count))
     class Crash(BaseException):pass
-    class Transport:
+    class Transport(OfflineTransport):
         def __init__(self,**kw):
             assert kw['trust_env'] is False
             assert kw['timeout'].read==600 and kw['timeout'].connect==30 and kw['timeout'].pool==30
@@ -73,6 +76,7 @@ def test_one_direct_pool_is_shared_and_closed_after_workers(tmp_path,monkeypatch
     monkeypatch.setattr(openai,'DefaultHttpxClient',Transport)
     monkeypatch.setattr(openai,'OpenAI',Client)
     monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',grid)
     monkeypatch.setattr(runner,'protocol',lambda cat,n:('fixture',{}))
     monkeypatch.setattr(runner,'decode',lambda c,d,ids:{i:{'overall_confidence':.9} for i in ids})
     monkeypatch.setattr(runner,'score',lambda c,f:{'hard_conflicts':[]})
@@ -95,7 +99,7 @@ def test_one_direct_pool_is_shared_and_closed_after_workers(tmp_path,monkeypatch
 
 def test_truncated_paid_response_pauses_without_sending_next_pair(tmp_path,monkeypatch):
     calls=[]
-    class Transport:
+    class Transport(OfflineTransport):
         def __init__(self,**kwargs):pass
         def __enter__(self):return self
         def __exit__(self,*args):return False
@@ -111,6 +115,7 @@ def test_truncated_paid_response_pauses_without_sending_next_pair(tmp_path,monke
     monkeypatch.setattr(openai,'DefaultHttpxClient',Transport)
     monkeypatch.setattr(openai,'OpenAI',Client)
     monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',grid)
     monkeypatch.setattr(runner,'protocol',lambda cat,n:('fixture',{}))
     cat={'stage3':{'modules':{'one':100},'batch_size':1,'max_concurrency':1}}
     rows=[{'asin':'A','goods_id':str(i),'amazon_image_path':'a','temu_image_path':str(i),
@@ -129,13 +134,14 @@ def test_local_service_failure_does_not_create_paid_billing_hold(tmp_path,monkey
     from selection_automation.stage3_provider import settings,apply
     from selection_automation.stage3_billing import billing_hold
     calls=[]
-    class Transport:
+    class Transport(OfflineTransport):
         def __init__(self,**kwargs):pass
         def __enter__(self):return self
         def __exit__(self,*args):return False
         def post(self,*args,**kwargs):calls.append(True);raise OSError('fixture local service down')
     monkeypatch.setattr(openai,'DefaultHttpxClient',Transport)
     monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',grid)
     monkeypatch.setattr(runner,'grid_data_url',lambda rows:('data:image/png;base64,fixture',[{'id':f'C{i:02}','goods_id':row['goods_id']} for i,row in enumerate(rows)]))
     monkeypatch.setattr(runner,'protocol',lambda cat,n:('fixture',{}))
     cat={'stage3':{'modules':{'one':100}}};apply(cat,settings({'mode':'local_model'}))
@@ -146,3 +152,5 @@ def test_local_service_failure_does_not_create_paid_billing_hold(tmp_path,monkey
         runner.consume(args,cat,tmp_path/'blocked.json','fixture',iter(rows))
     assert len(calls)==1
     assert not billing_hold(tmp_path/'request_intents.jsonl',args.results)['pairs']
+
+pytestmark = pytest.mark.usefixtures("offline_api_transport")

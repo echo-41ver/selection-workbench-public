@@ -1,4 +1,5 @@
 """Regression of decisions and exports, using synthetic facts, never a real API."""
+from category_fixtures import category_path
 import json
 from pathlib import Path
 import sys
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def category(filename='bath_towel_set.json'):
-    return json.loads((ROOT / 'config/categories' / filename).read_text('utf-8'))
+    return json.loads(category_path(filename).read_text('utf-8'))
 
 
 def facts(cat):

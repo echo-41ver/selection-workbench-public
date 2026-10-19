@@ -77,6 +77,7 @@ def test_candidate_snapshot_is_cleaned_when_credentials_missing(tmp_path, monkey
     _, category, source, _ = candidate_fixture(tmp_path)
     args = type('Args', (), dict(category=category, results=tmp_path / 'results.jsonl',
                                  validate_only=False, max_pairs=0, max_requests=0))()
+    authorize_consumer(tmp_path,monkeypatch,category)
     monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
     with pytest.raises(SystemExit, match='DEEPSEEK_API_KEY'):
         with consumer.frozen_candidates(source) as snapshot:
@@ -252,7 +253,7 @@ def test_export_rescores_visual_facts_instead_of_persisted_old_score(tmp_path, m
         **row, 'vision_revision_key': compatible_vision_keys(cat, row)[0],
         'api_status': 'success', 'visual_facts': facts,
         'module_result': {'state': 'different stale result', 'total_score': 0}}) + '\n', encoding='utf-8')
-    delivered = exporter.export(category, 'layer123')
+    delivered = exporter.export_snapshot(category, 'layer123')
     book = load_workbook(delivered['固定查看副本'], read_only=True)
     try:
         values = list(book['全量综合结果'].values)
@@ -279,7 +280,7 @@ def test_analysis_republishes_on_rule_configuration_or_usage_change(tmp_path, mo
     first = publisher.publish(category)
     assert first['errors'] == {}
     publisher.publish(category)
-    assert calls == ['layer12', 'layer123']
+    assert calls == ['layer123']
     if changed == 'category':
         cat = json.loads(category.read_text(encoding='utf-8'))
         cat['stage3']['rule_version'] = 'fixture-revised-local-scoring'
@@ -290,10 +291,10 @@ def test_analysis_republishes_on_rule_configuration_or_usage_change(tmp_path, mo
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('changed offline fixture', encoding='utf-8')
     publisher.publish(category)
-    assert calls == ['layer12', 'layer123', 'layer12', 'layer123']
+    assert calls == ['layer123', 'layer123']
 
 
-def test_unpaid_analysis_never_publishes_misleading_three_layer_workbook(tmp_path,monkeypatch):
+def test_unpaid_analysis_publishes_current_focused_workbook_without_inventing_verdicts(tmp_path,monkeypatch):
     category,base=publisher_fixture(tmp_path,monkeypatch)
     (base/'amazon/amazon_frontend_latest.json').unlink()
     db=base/'stage12/stage12.sqlite3';db.parent.mkdir();db.write_bytes(b'offline database fixture')
@@ -302,11 +303,11 @@ def test_unpaid_analysis_never_publishes_misleading_three_layer_workbook(tmp_pat
     monkeypatch.setattr(publisher.subprocess,'run',lambda *a,**kw:None)
     monkeypatch.setattr(exporter,'export',lambda category,kind:calls.append(kind) or {'固定查看副本已更新':True})
     publisher.publish(category)
-    assert calls==['layer12']
+    assert calls==['layer123']
     (base/'stage123').mkdir(exist_ok=True)
     (base/'stage123/paid_enabled.json').write_text('{}',encoding='utf-8')
     publisher.publish(category)
-    assert calls==['layer12','layer12']
+    assert calls==['layer123','layer123']
     (base/'stage123/results.jsonl').write_text('{"api_status":"success"}\n',encoding='utf-8')
     publisher.publish(category)
-    assert calls==['layer12','layer12','layer12','layer123']
+    assert calls==['layer123','layer123','layer123']

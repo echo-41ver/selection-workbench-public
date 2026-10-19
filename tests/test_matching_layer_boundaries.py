@@ -1,4 +1,5 @@
 """Offline regression cases for the three matching layers; no API or downloads."""
+from category_fixtures import category_path
 import copy
 import json
 from pathlib import Path
@@ -74,7 +75,7 @@ def test_disabled_similar_relation_is_rejected_even_if_provider_ignores_schema()
 
 @pytest.mark.parametrize('filename', ['power_drill.json', 'shower_curtain_local_union_20260922.json'])
 def test_same_relation_with_conflict_code_requires_review(filename):
-    cat = json.loads((ROOT / 'config/categories' / filename).read_text('utf-8'))
+    cat = json.loads(category_path(filename).read_text('utf-8'))
     payload = visual_payload(cat)
     payload['candidates'][0]['m']['0']['h'] = cat['stage3']['identity_hard_conflicts'][0]
     facts = decode(cat, payload, ['C00'])['C00']

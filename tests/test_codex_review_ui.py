@@ -60,7 +60,7 @@ def test_codex_pool_requires_process_script_and_category_and_keeps_counts_separa
     assert state['target'] == 768 and state['imported'] == 696
     assert state['pool']['pending_pairs'] == 1495
     assert state['pool']['running_groups'] == 6
-    assert '6路并行' in state['phase'] and '每组12对' in state['phase']
+    assert '6路并行' in state['phase'] and '每组最多12对' in state['phase']
 
     class WrongTaskProcess(FakeProcess):
         def cmdline(self): return [str(pool_script), '--category', str(tmp_path / 'other' / 'category.json')]
@@ -76,10 +76,14 @@ def test_browser_separates_codex_progress_from_stopped_paid_api():
     code = html[html.index('function stage3Button(data)'):html.index('function excelButtons(data)')]
     script = """
 const nodes=new Map();
-const $=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
+const $=id=>{if(!nodes.has(id))nodes.set(id,{style:{},value:'',replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
 let statusFresh=true,busy=false;
+function renderStage3Settings(){}
+function stage3ProviderSettings(){return undefined;}
+function stage3ActivityText(){return '';}
+function stage3AgentInputsReady(){return true;}
 CODE
-const data={category_key:'fixture',stage3_control:{enabled:false,running:false,can_stop:false,phase:'已停止',progress:{total:10855,completed:5973,pending:4879,percent:55,codex_completed:397,codex_same:0,codex_different:390,codex_unknown:7,pending_after_codex:4482},codex_review:{available:true,running:true,phase:'Codex看图复核进行中',target:4879,expected_tasks:8}}};
+const data={category_key:'fixture',stage3_control:{progress_counted:true,enabled:false,running:false,can_stop:false,phase:'已停止',progress:{api_completed:5973,total:10855,completed:5973,pending:4879,percent:55,codex_completed:397,codex_same:0,codex_different:390,codex_unknown:7,pending_after_codex:4482},codex_review:{available:true,running:true,phase:'Codex看图复核进行中',target:4879,expected_tasks:8}}};
 stage3Button(data);
 if($('stage3-phase').textContent!=='已停止'||!$('stage3-count').textContent.includes('5,973'))throw Error('paid semantics changed');
 if($('codex-review-controls').hidden||!$('codex-review-phase').textContent.includes('进行中'))throw Error('Codex hidden while API stopped');

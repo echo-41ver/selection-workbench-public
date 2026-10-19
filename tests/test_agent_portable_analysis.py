@@ -17,7 +17,7 @@ from selection_automation.category_contract import category_contract
 
 def test_new_tasks_default_to_d1_but_legacy_frozen_tasks_keep_service():
     stage=category_contract()['template']['stage3']
-    assert stage['provider']['mode']=='liquid_d1' and stage['batch_size']==1
+    assert stage['provider']['mode']=='liquid_d1' and stage['batch_size']==12
     assert settings()['mode']=='liquid_d1' and settings()['concurrency_mode']=='auto'
     old={'stage3':{'base_url':'https://api.deepseek.com','model':'deepseek-flash','max_concurrency':6}}
     assert from_category(old)['mode']=='multimodal_api'

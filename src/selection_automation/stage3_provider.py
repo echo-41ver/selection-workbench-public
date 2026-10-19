@@ -128,7 +128,10 @@ def request_key(provider):
     if key and bound == provider['base_url']:
         return key
     if provider['mode'] == 'multimodal_api' and provider['base_url'] == 'https://api.deepseek.com':
-        return os.getenv('DEEPSEEK_API_KEY', '').strip()
+        key = os.getenv('DEEPSEEK_API_KEY', '').strip()
+        if key:
+            return key
+        raise ValueError('请填写当前服务的 API key（DEEPSEEK_API_KEY）；尚未发送分析请求')
     if provider['mode'] == 'local_model':
         return ''
     raise ValueError('请填写与第三层服务地址配套的 API key')
