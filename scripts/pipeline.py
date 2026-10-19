@@ -794,7 +794,8 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
 
 
 def merge_temu(category: dict) -> None:
-    inputs = sorted((run_root(category) / "temu" / "workers").glob("*/*/products.jsonl"))
+    workers = run_root(category) / 'temu' / 'workers'
+    inputs = sorted([*workers.glob('*/*/products.jsonl'), *workers.glob('*/*/unclassified_products.jsonl')])
     provider=run_root(category)/'market/geekbi.json'
     if not inputs and not provider.is_file():
         raise SystemExit("no TEMU worker snapshots found")

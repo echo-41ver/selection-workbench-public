@@ -95,7 +95,8 @@ def publish(category_path):
         frozen = base / 'stage123' / 'export_frozen'
         codex_paths = sorted((base / 'stage123/codex_reviews').glob('*.jsonl'))
         codex_available = any(path.stat().st_size for path in codex_paths)
-        if db and db.exists():
+        database_available=bool(db and db.exists())
+        if database_available:
             paid_marker=base/'stage123'/'paid_enabled.json'
             vision_results=base/'stage123'/'results.jsonl'
             database_before = database_signature([db,db.with_name(db.name+'-wal')])
@@ -142,7 +143,7 @@ def publish(category_path):
                     except Exception as exc:
                         errors[kind] = str(exc)
         business_changed = current.get('commercial') != prior.get('commercial')
-        if db and db.exists() and (analysis_changed or business_changed) and 'analysis' not in errors:
+        if database_available and (analysis_changed or business_changed) and 'analysis' not in errors:
             try:
                 from watch_stage3_excel import source_paths, signature as stage3_signature
                 stage3_before=stage3_signature(source_paths(category_path.absolute(),base.absolute()))

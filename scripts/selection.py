@@ -433,7 +433,9 @@ def worker_snapshot(base, name):
     view={'状态':label,'采集状态':code,'关键词':query,'排序方式':{'sales':'销量最高','recent':'最近上架'}.get(worker.get('current_sort'),'销量最高'),'输出目录':output,
           '已完成关键词':worker.get('completed_queries',[]),'阻断':bool(recovery or code in {'WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_TRY_AGAIN','WAITING_SEE_MORE_CLICK','RETRYING_NETWORK'}),'需人工介入':bool(recovery),
           '建议动作':'','浏览器保留':False}
-    for key,label in [('unique_goods','唯一商品数'),('round','采集轮次'),('updated_at','采集更新时间')]:
+    for key,label in [('unique_goods','唯一商品数'),('unique_unclassified_goods','未归类商品数'),
+                      ('filtered_severe_off_topic_goods','明确排除商品数'),
+                      ('unique_progress_goods','相关及未归类商品数'),('round','采集轮次'),('updated_at','采集更新时间')]:
         value=progress.get(key,worker.get(key))
         if value is not None: view[label]=value
     if progress.get('max_products'):

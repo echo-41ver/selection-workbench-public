@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 
 // Collection recall only. These labels are not a same-product decision.
-export const CATEGORY_RELEVANCE_VERSION = 'multilingual-subject-v3';
+export const CATEGORY_RELEVANCE_VERSION = 'multilingual-subject-v4';
 export const COLLECTION_PROGRESS_VERSION = 'relevant-round-v4';
 export function restoreNoNewRounds(checkpoint, policy) {
   const count = Number(checkpoint?.consecutive_no_new_rounds);
@@ -68,6 +68,9 @@ export function createCategoryRelevance(config = {}) {
   const anchors = uniqueTerms([
     ...list(temu.include_terms), config.category_name_zh, config.category_name_en,
     ...aliases(config.category_aliases), ...aliases(temu.category_aliases),
+    // Compact authoring explicitly defines these as category-body nouns, before
+    // any per-product keyword expansion. Legacy/free-form queries stay untrusted.
+    ...(config.rule_authoring_format === 'compact-category-v1' ? list(temu.base_queries) : []),
   ]);
   const identityTerms = [];
   const approvedAttributes = new Set(['product_form', ...list(temu.relevance_identity_attributes)]);

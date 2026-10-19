@@ -6,6 +6,7 @@ import shutil
 import subprocess
 
 from .merge_temu_snapshots import atomic_write
+from .merge_temu_snapshots import observation_complete
 
 
 def filter_category_union(root, category, rows, summary, union):
@@ -22,11 +23,17 @@ def filter_category_union(root, category, rows, summary, union):
     if len(accepted)+len(excluded)+len(unknown)!=len(rows):raise ValueError('商品主体筛选记录数不一致')
     for name,values in [('excluded_products.jsonl',excluded),('unclassified_products.jsonl',unknown)]:
         atomic_write(Path(union)/name,''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in values))
-    summary={**summary,'source_unique_goods_id':len(rows),'unique_goods_id':len(accepted),
-        'frontend_unique_goods':sum(str(row.get('source','')).startswith('VISIBLE_TEMU') for row in accepted),
-        'provider_supplement_goods':sum(row.get('source')=='GEEKBI_SUPPLEMENT' for row in accepted),
+    # Vocabulary absence is not a category conflict. Preserve complete frontend
+    # observations for the actual text/image filters; never silently lose them.
+    recalled=[row for row in unknown if observation_complete(row)]
+    deliverable=accepted+recalled
+    summary={**summary,'source_unique_goods_id':len(rows),'unique_goods_id':len(deliverable),
+        'category_confirmed_goods':len(accepted),'category_recalled_unclassified_goods':len(recalled),
+        'category_incomplete_goods':len(unknown)-len(recalled),
+        'frontend_unique_goods':sum(str(row.get('source','')).startswith('VISIBLE_TEMU') for row in deliverable),
+        'provider_supplement_goods':sum(row.get('source')=='GEEKBI_SUPPLEMENT' for row in deliverable),
         'category_subject_filter':'TARGET_BODY_ONLY','category_excluded_goods':len(excluded),
         'category_unclassified_goods':len(unknown),'relevance_policy_version':data['version'],
         'relevance_policy_fingerprint':data['fingerprint'],
-        'content_sha256':hashlib.sha256(''.join(json.dumps(row,ensure_ascii=False,sort_keys=True)+'\n' for row in accepted).encode()).hexdigest()}
-    return accepted,summary
+        'content_sha256':hashlib.sha256(''.join(json.dumps(row,ensure_ascii=False,sort_keys=True)+'\n' for row in deliverable).encode()).hexdigest()}
+    return deliverable,summary

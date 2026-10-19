@@ -42,7 +42,7 @@ def category_contract() -> dict:
             "temu.keyword_features": "明确填写本品类可观察的英文结构、功能、外观或包装细化短语；不能把模板空数组当作已完成。包装短语不得当作商品本体属性，品牌和营销宣传不得当作身份特征。只在实际标题命中时生成有来源证据的查询；若确实无法支持细化词，允许空数组并明确提示缺口，后续使用通用标题数量等证据，不伪造精准覆盖。",
             "temu.include_terms": "Agent填写本品类及相关商品的纳入短语列表，不复用其他品类词典",
             "temu.category_aliases": "当前品类出售主体的英文、简体、繁体和常用地区称呼列表；不得包含配件、兼容宿主或不同形态，仅用于采集召回，不作为同款结论",
-            "temu.subject_filter": "mode=TARGET_BODY_ONLY；reject_mixed_subjects=true；exclude_subject_terms填明确其他出售主体的中英文名词，不能填共享功能词。明确不相关商品直接排除，主体信息不足保存在补采队列，不进入品类商品结果",
+            "temu.subject_filter": "mode=TARGET_BODY_ONLY；reject_mixed_subjects=true；exclude_subject_terms填明确其他出售主体的中英文名词，不能填共享功能词。明确不相关商品直接排除；未归类商品保留标记，资料完整则继续后续筛选，资料不完整则保存在补采队列",
             "temu.severe_exclude_terms": "Agent填写明确无关商品的强排除短语列表；避免排除目标变体",
             "temu.collection_source": "固定VISIBLE_TEMU_FRONTEND，标记真实TEMU前端采集来源",
             "temu.keyword_limit": "兼容旧配置的字段，不限制关键词数量；所有有商品证据的有效关键词去重后纳入",

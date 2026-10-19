@@ -72,6 +72,15 @@ test('empty or unsupported vocabulary never marks all items relevant or stalled'
   const english = createCategoryRelevance({temu:{include_terms:['kettle']}});
   assert.equal(english.countProgressRows([{title:'电热水壶'}]),1);
 });
+test('compact category-body queries supplement incomplete aliases without trusting expanded search words',()=>{
+ const config={rule_authoring_format:'compact-category-v1',category_name_zh:'U盘',
+  temu:{base_queries:['USB flash drive','flash drive'],include_terms:['USB flash drive','USB stick']}};
+ const policy=createCategoryRelevance(config);
+ for(const title of ['USB 3.0 Type C flash drive 128GB','USB-C flash drive 64GB','Rotatable 2 in 1 type c flash drive'])
+  assert.equal(policy.classify({title}).state,'RELEVANT',title);
+ assert.equal(policy.classify({title:'USB-C cable'}).state,'UNKNOWN');
+ assert.equal(createCategoryRelevance({...config,rule_authoring_format:undefined}).classify({title:'USB-C flash drive'}).state,'UNKNOWN');
+});
 test('unknown-language items count as collection progress but not relevant items', () => {
   assert.deepEqual(mouse.summarize([{title:'无线鼠标'},{title:'ラップトップ用マウス'},{title:'Keyboard'}]),
     {relevant:1,unknown:1,excluded:1,progress:2});

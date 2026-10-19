@@ -48,7 +48,8 @@ def publish_once(base, previous=None):
     pulse=threading.Thread(target=heartbeat,name='union-heartbeat',daemon=True)
     pulse.start()
     try:
-        inputs=sorted((base/'workers').glob('*/*/products.jsonl'))
+        inputs=sorted([*(base/'workers').glob('*/*/products.jsonl'),
+                       *(base/'workers').glob('*/*/unclassified_products.jsonl')])
         provider=base.parent/'market/geekbi.json'
         category_path=base.parent/'category.json'
         signature_inputs=[*inputs,*([provider] if provider.is_file() else [])]

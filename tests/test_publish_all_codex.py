@@ -8,6 +8,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import publish_all
 
 
+def test_database_created_during_first_publication_waits_until_next_round(tmp_path,monkeypatch):
+    base=tmp_path/'runs/fresh';base.mkdir(parents=True)
+    category=base/'category.json';category.write_text('{"category_key":"fresh"}')
+    database=base/'stage12/stage12.sqlite3'
+    (base/'stage12_config.json').write_text(json.dumps({'output_dir':str(database.parent)}))
+    monkeypatch.setattr(publish_all,'ROOT',tmp_path)
+    monkeypatch.setattr(publish_all.subprocess,'run',lambda *a,**k:None)
+    import selection_automation.commercial as commercial
+    def build(*args):
+        database.parent.mkdir(exist_ok=True);database.write_bytes(b'fixture');return {}
+    monkeypatch.setattr(commercial,'build_report',build)
+    import export_category_workbooks
+    exported=[]
+    monkeypatch.setattr(export_category_workbooks,'export',lambda path,kind:exported.append(kind) or {'固定查看副本已更新':True})
+    first=publish_all.publish(category)
+    assert first['errors']=={} and exported==[] and database.exists()
+    second=publish_all.publish(category)
+    assert second['errors']=={} and exported==['layer123']
+
+
 @pytest.mark.parametrize('has_reviews', [False, True])
 def test_codex_results_publish_three_layers_without_paid_authorization(tmp_path, monkeypatch, has_reviews):
     key = 'pump'
