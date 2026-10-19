@@ -16,7 +16,7 @@ LABELS = {'liquid_d1': 'Liquid D1 决策 API', 'multimodal_api': '多模态 API'
 
 def settings(value=None):
     value = value or {}
-    allowed = {'mode', 'base_url', 'model', 'protocol', 'workers', 'confidence', 'concurrency_mode', 'agent_ids','agent_models'}
+    allowed = {'mode', 'base_url', 'model', 'protocol', 'workers', 'confidence', 'concurrency_mode', 'agent_ids','agent_models','agent_efforts'}
     if not isinstance(value, dict) or set(value) - allowed:
         raise ValueError('第三层配置字段无效')
     legacy = (isinstance(value.get('base_url'),str) and bool(value['base_url']) and 'liquid.ai' not in value['base_url']
@@ -79,8 +79,13 @@ def settings(value=None):
     if not isinstance(agent_models,dict) or any(k not in IDS or not isinstance(v,str) or not v.strip() or len(v)>200 or any(ord(c)<32 for c in v) for k,v in agent_models.items()):
         raise ValueError('本机 Agent 模型选择无效')
     agent_models={k:v.strip() for k,v in agent_models.items()}
+    agent_efforts=value.get('agent_efforts',{})
+    from .agent_models import EFFORTS
+    if not isinstance(agent_efforts,dict) or any(k not in IDS or not isinstance(v,str) or v not in EFFORTS for k,v in agent_efforts.items()):
+        raise ValueError('本机 Agent 推理强度选择无效')
+    agent_efforts=dict(agent_efforts)
     workers = value['workers'] if 'workers' in value else recommended(mode,provider={
-        'mode':mode,'base_url':address,'model':model,'protocol':protocol,'agent_ids':agent_ids,'agent_models':agent_models})
+        'mode':mode,'base_url':address,'model':model,'protocol':protocol,'agent_ids':agent_ids,'agent_models':agent_models,'agent_efforts':agent_efforts})
     if type(workers) is not int or workers < 1:
         raise ValueError('分析并发数须为正整数')
     confidence = value.get('confidence', .90)
@@ -88,7 +93,7 @@ def settings(value=None):
         raise ValueError('决策确认概率须为 0.5–1')
     return {'mode': mode, 'base_url': address if mode != 'local_agent' else '', 'model': model,
             'protocol': protocol, 'workers': workers, 'confidence': float(confidence),
-            'concurrency_mode': concurrency_mode, 'agent_ids': agent_ids,'agent_models':agent_models}
+            'concurrency_mode': concurrency_mode, 'agent_ids': agent_ids,'agent_models':agent_models,'agent_efforts':agent_efforts}
 
 
 def from_category(category):

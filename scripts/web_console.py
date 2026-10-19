@@ -142,13 +142,15 @@ def agent_review_speed(base, provider, pool, *, now=None):
     now=time.time() if now is None else now
     agents=set(provider.get('agent_ids') or [])
     models=provider.get('agent_models') or {}
+    efforts=provider.get('agent_efforts') or {}
     window=min(900,max(1,now-float(pool.get('created') or now-900)))
     completed=set();durations=[]
     for path in (Path(base)/'stage123/codex_pool/jobs').glob('*/job.json'):
         job=selection.read(path,{})
         agent=job.get('agent_id','codex')
         if (job.get('state')!='complete' or agent not in agents
-                or job.get('observation_only') or job.get('model')!=models.get(agent,job.get('model'))):continue
+                or job.get('observation_only') or job.get('model')!=models.get(agent,job.get('model'))
+                or agent in efforts and job.get('effort')!=efforts[agent]):continue
         identities=job.get('identities') or []
         count=job.get('imported',0);start=job.get('started_at',0);end=job.get('finished_at',0)
         if (type(count) is not int or count<=0 or count!=len(identities)
@@ -1499,7 +1501,7 @@ class Console:
             running=api_running or codex_state.get('running')
             pool_config=selection.read(base/'stage123/codex_pool_config.json',{})
             pool_matches=(provider['mode']!='local_agent' or not pool_config or all(
-                pool_config.get(field)==provider[field] for field in ('workers','concurrency_mode','agent_ids','agent_models')))
+                pool_config.get(field,{} if field=='agent_efforts' else None)==provider[field] for field in ('workers','concurrency_mode','agent_ids','agent_models','agent_efforts')))
             if running and not provider_changed and pool_matches:
                 if configure_only:return {'ok':True,'provider':provider,'message':'第三层方案已保存，运行状态保持不变'}
                 from selection_automation.stage3_runtime import resume_dispatch
@@ -1534,10 +1536,12 @@ class Console:
             folder=base/'stage123'; folder.mkdir(parents=True,exist_ok=True)
             if provider['mode']=='local_agent':
                 from selection_automation.local_agents import ready_agents, discover
-                from selection_automation.agent_models import validate_selection
+                from selection_automation.agent_models import validate_selection,validate_efforts
                 installed={a['id'] for a in discover(self.root) if a['installed']}
                 choices={k:v for k,v in provider['agent_models'].items() if k in installed and (not provider['agent_ids'] or k in provider['agent_ids'])}
-                try:validate_selection(self.root,choices)
+                try:
+                    validate_selection(self.root,choices)
+                    validate_efforts(self.root,choices,{k:v for k,v in provider['agent_efforts'].items() if k in installed and (not provider['agent_ids'] or k in provider['agent_ids'])})
                 except ValueError as error:raise ConsoleError('INVALID_MODEL',str(error),409) from None
                 agents=ready_agents(self.root,provider['agent_ids'],connect=not configure_only,models=provider['agent_models'])
                 if not configure_only and not agents:
@@ -1577,6 +1581,7 @@ class Console:
                     'workers':provider['workers'],'model':provider['model'],'group_size':12,
                     'agent_ids':[agent['id'] for agent in agents],
                     'agent_models':provider['agent_models'],
+                    'agent_efforts':provider['agent_efforts'],
                     # A still-running older manager may read max_parallel.
                     # Give it the requested global width, never the old fixed six.
                     'agent_backends':[{**agent,'max_parallel':provider['workers']} for agent in agents],

@@ -10,7 +10,9 @@ def profile(provider):
     if provider['mode']=='local_agent':
         ids=sorted(provider.get('agent_ids') or ['codex'])
         return {'mode':'local_agent','agent_ids':ids,
-                'agent_models':{key:provider.get('agent_models',{}).get(key,'') for key in ids}}
+                'agent_models':{key:provider.get('agent_models',{}).get(key,'') for key in ids},
+                **({'agent_efforts':{key:provider['agent_efforts'].get(key,'default') for key in ids}}
+                   if provider.get('agent_efforts') else {})}
     return {key:provider.get(key,'') for key in ('mode','base_url','model','protocol')}
 
 
@@ -57,7 +59,7 @@ def profile_samples(provider,root=None):
             if provider['mode']=='local_agent':
                 config=read_samples(prior.parent.parent/'codex_pool_config.json')
                 source={'mode':'local_agent','agent_ids':config.get('agent_ids') or [a['id'] for a in config.get('agent_backends',[])],
-                        'agent_models':config.get('agent_models',{})}
+                        'agent_models':config.get('agent_models',{}),'agent_efforts':config.get('agent_efforts',{})}
                 try:configuration=json.loads(value.get('configuration','null'))
                 except ValueError:continue
                 if not isinstance(configuration,list) or not configuration or configuration[0]!=source['agent_models']:continue

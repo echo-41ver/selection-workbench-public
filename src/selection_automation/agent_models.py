@@ -11,6 +11,9 @@ import time
 
 _cache={}
 _lock=threading.RLock()
+EFFORTS={'default','none','minimal','low','medium','high','xhigh','max','ultra'}
+# Only advertise overrides implemented by the native execution adapter.
+REASONING_AGENTS={'codex'}
 
 
 class Peer:
@@ -204,7 +207,8 @@ def _doubao(root,agent):
 def catalog(root,agent_id,refresh=False,agent=None):
     from .local_agents import discover
     agent=agent or next(a for a in discover(root) if a['id']==agent_id)
-    result={'id':agent_id,'name':agent['name'],'models':[],'default':None,'source':None,'status':'unavailable','message':'尚未读取模型'}
+    result={'id':agent_id,'name':agent['name'],'models':[],'default':None,'source':None,'status':'unavailable','message':'尚未读取模型',
+            'reasoning_configurable':agent_id in REASONING_AGENTS}
     if not agent['installed']:return {**result,'status':'not_installed','message':'未安装'}
     if agent.get('authenticated') is False:return {**result,'message':'请先在该 Agent 中登录'}
     stamp=Path(agent['executable']).stat()
@@ -258,3 +262,15 @@ def validate_selection(root,models):
         chosen=next((row for row in data['models'] if row['id']==model),None)
         if not chosen:raise ValueError('所选模型不在该本机 Agent 的可用列表中，请重新检测模型')
         if chosen.get('vision') is False:raise ValueError('所选模型不支持图片，不能用于商品看图分析')
+
+
+def validate_efforts(root,models,efforts):
+    for agent_id,effort in efforts.items():
+        if effort=='default':continue
+        if effort not in EFFORTS or agent_id not in REASONING_AGENTS:
+            raise ValueError('当前 Agent 未开放此推理强度设置，请使用原生默认')
+        data=catalog(root,agent_id)
+        model=models.get(agent_id) or data.get('default')
+        chosen=next((row for row in data['models'] if row['id']==model),None)
+        if not chosen or effort not in (chosen.get('efforts') or []):
+            raise ValueError('所选模型不支持该推理强度，请重新选择或使用默认')

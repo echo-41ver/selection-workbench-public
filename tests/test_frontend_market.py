@@ -21,12 +21,18 @@ def test_displayed_quantity_not_review_or_missing(raw,expected):
     assert displayed_sales(raw)==expected
 
 
-def test_passes_are_separate_and_missing_sales_not_zero(tmp_path):
+@pytest.mark.parametrize('same_mtime',[False,True])
+def test_passes_are_separate_and_missing_sales_not_zero(tmp_path,same_mtime):
     rows=[{'goods_id':'a','sales_text':'1K+ sold'}, {'goods_id':'b','sales_text':''},
           {'goods_id':'c','sales_text':'0 sold'}]
+    rows=[{**row,'observed_at':'2026-10-01T00:00:00Z'} for row in rows]
     write_pass(tmp_path,'drill','recent',rows)
     write_pass(tmp_path,'drill','recent',rows,worker='worker-02-new')
-    write_pass(tmp_path,'drill','sales',[{'goods_id':'a','sales_text':'2K+ sold'}])
+    write_pass(tmp_path,'drill','sales',[{'goods_id':'a','sales_text':'2K+ sold','observed_at':'2026-10-01T00:00:01Z'}])
+    if same_mtime:
+        import os
+        for path in tmp_path.glob('temu/workers/*/*/*.json*'):
+            os.utime(path,ns=(1_700_000_000_000_000_000,)*2)
     result=build_frontend_market(tmp_path)['queries'][0]
     assert result['recent']['sample_products']==3
     assert result['recent']['interpretable_sales_products']==2

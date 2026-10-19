@@ -216,7 +216,8 @@ def analysis_command(agent, job, model=None, effort='medium'):
     directories=list(dict.fromkeys([str(job),*(os.path.commonpath(folders) for folders in per_drive.values())]))
     if agent['id']=='codex':
         args = ['exec','--ignore-user-config','--ephemeral','--skip-git-repo-check',
-                '-m',model or 'gpt-6.1-sol','-c',f'model_reasoning_effort="{effort}"',
+                '-m',model or 'gpt-6.1-sol',
+                *(['-c',f'model_reasoning_effort="{effort}"'] if effort not in (None,'default') else []),
                 '-c','service_tier="default"','-c','approval_policy="never"',
                 '-c','sandbox_mode="danger-full-access"','--json',
                 '--output-last-message',str(job/'summary.txt')]
@@ -285,7 +286,7 @@ def check_connection(root, agent_id,model=None):
         (job/'transport-result.json').write_text(json.dumps({'type':'vision_probe','path':str(answer_path)}),encoding='utf-8')
         request = (f'Open/read the image at {image}. Read its six digits and write ONLY those digits '
                    f'to {answer_path} using the file write tool. Then return the digits. Do not use shell commands.')
-        command = analysis_command(agent,job)
+        command = analysis_command(agent,job,effort='default')
         # Non-Codex agents use their native image-reading tool or attachment.
         try:
             response = _run(command,[],job,timeout=120,text=request)

@@ -81,10 +81,11 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
 <option value="liquid_d1" selected>1 · Liquid D1 决策 API</option><option value="multimodal_api">2 · DeepSeek / 其他多模态 API</option>
 <option value="local_model">3 · 本地部署的模型</option><option value="local_agent">4 · Agent 分析</option></select>
 <div id="stage3-agents" hidden>
- <div class="agent-toolbar"><p class="small">先选择 Agent，再选择它使用的模型。</p><button id="stage3-agents-refresh" type="button">重新识别</button></div>
+ <div class="agent-toolbar"><p class="small">选择 Agent、模型及推理强度；默认跟随模型设置。</p><button id="stage3-agents-refresh" type="button">重新识别</button></div>
  <div class="agent-primary"><div class="agent-fields">
   <div><label for="stage3-agent">选择 Agent</label><select id="stage3-agent" data-agent-select="primary"><option value="">请选择本机 Agent</option></select></div>
   <div id="stage3-model-box" hidden><label for="stage3-agent-model">选择模型</label><select id="stage3-agent-model" disabled><option value="">请先选择 Agent</option></select></div>
+  <div id="stage3-effort-box" hidden><label for="stage3-agent-effort">推理强度</label><select id="stage3-agent-effort" disabled><option value="default">默认（跟随模型）</option></select></div>
  </div><p id="stage3-agent-status" class="small" role="status">只会使用你选择的 Agent。</p>
  <p id="stage3-agent-note" class="small" hidden>通过 WorkBuddy 内置 CLI 分析，任务记录保存在工作台；桌面端不会新增聊天任务。</p>
  <div id="stage3-agent-actions" class="agent-inline-actions"><button id="stage3-agent-connect" data-agent-action="connect" type="button" disabled>连接测试</button><button id="stage3-agent-login" data-agent-action="login" type="button" disabled>登录</button><button id="stage3-enable-doubao" type="button" hidden>启用豆包连接</button></div></div>
@@ -105,13 +106,15 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
 'use strict';
 
 let stage3SettingsDirty=false,stage3SettingsRun=null;
-let stage3AgentSelection=[],stage3AgentModels={},stage3AgentLoadedFor=null,stage3ModelReadGeneration=0;
+let stage3AgentSelection=[],stage3AgentModels={},stage3AgentEfforts={},stage3AgentLoadedFor=null,stage3ModelReadGeneration=0;
 let stage3DetectedAgents=[],stage3AgentCatalogs={};
 async function boundedAgentRead(url,options){const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),25000);try{const response=await fetch(url,{...options,signal:controller.signal});const data=await response.json();return {response,data};}catch(error){if(error.name==='AbortError')throw Error('本机 Agent 读取超时，任务和已保存模型保持，请稍后重新识别。');throw error;}finally{clearTimeout(deadline);}}
+function reasoningSettingsSupported(){return typeof lastStatus==='undefined'||!lastStatus?.stage3_provider||Object.hasOwn(lastStatus.stage3_provider,'agent_efforts');}
 function stage3ProviderSettings(){
  const mode=$('stage3-mode').value,ids=mode==='local_agent'?[...new Set(stage3AgentSelection.filter(Boolean))]:[];
  const models=Object.fromEntries(ids.filter(id=>stage3AgentModels[id]).map(id=>[id,stage3AgentModels[id]]));
- return {mode,base_url:$('stage3-base-url').value.trim(),model:$('stage3-model').value.trim(),protocol:$('stage3-protocol').value,workers:Number($('stage3-workers').value),confidence:Number($('stage3-confidence').value)/100,concurrency_mode:$('stage3-auto')?.checked?'auto':'manual',agent_ids:ids,agent_models:models};
+ const efforts=Object.fromEntries(ids.map(id=>[id,stage3AgentEfforts[id]||'default']));
+ return {mode,base_url:$('stage3-base-url').value.trim(),model:$('stage3-model').value.trim(),protocol:$('stage3-protocol').value,workers:Number($('stage3-workers').value),confidence:Number($('stage3-confidence').value)/100,concurrency_mode:$('stage3-auto')?.checked?'auto':'manual',agent_ids:ids,agent_models:models,...(reasoningSettingsSupported()?{agent_efforts:efforts}:{})};
 }
 function stage3ProviderFields(){
  if($('stage3-local-tools'))$('stage3-local-tools').hidden=$('stage3-mode').value!=='local_model';
@@ -155,16 +158,17 @@ async function repairLocalModelConnection(){
 function chooseLocalModel(){const option=localModelOptions[Number($('stage3-local-model').value)];if($('stage3-local-model').value===''||!option)return;for(const [id,key] of [['stage3-base-url','base_url'],['stage3-model','id'],['stage3-protocol','protocol']])$(id).value=option[key];stage3SettingsDirty=true;refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);}
 function localAgentSettingsLocked(){return Boolean(lastStatus?.stage3_runtime?.switch_pending);}
 function stage3AgentInputsReady(){return stage3AgentSelection.length>0&&stage3AgentSelection.every(id=>{
- const catalog=stage3AgentCatalogs[id],model=stage3AgentModels[id];return catalog?.status==='ready'&&(!model||catalog.models.some(m=>m.id===model&&m.vision!==false));
+ const catalog=stage3AgentCatalogs[id],model=stage3AgentModels[id],effort=stage3AgentEfforts[id]||'default';return catalog?.status==='ready'&&(!model||catalog.models.some(m=>m.id===model&&m.vision!==false))&&(effort==='default'||agentEffortInfo(id).efforts.includes(effort));
 });}
 function renderStage3Settings(data){
  data=data||{};const changedRun=stage3SettingsRun!==data.category_key;
  if(changedRun){stage3SettingsDirty=false;stage3SettingsRun=data.category_key;$('stage3-api-key').value='';}
  const p=data.stage3_provider;
  if(p&&!stage3SettingsDirty){
-  const before=JSON.stringify([stage3AgentSelection,stage3AgentModels]);stage3ManualConcurrency=p.concurrency_mode==='manual';
+  const before=JSON.stringify([stage3AgentSelection,stage3AgentModels,stage3AgentEfforts]);stage3ManualConcurrency=p.concurrency_mode==='manual';
   $('stage3-mode').value=p.mode;$('stage3-base-url').value=p.base_url;$('stage3-model').value=p.model;$('stage3-protocol').value=p.protocol;$('stage3-workers').value=p.workers;$('stage3-confidence').value=Math.round(p.confidence*100);if($('stage3-auto'))$('stage3-auto').checked=p.concurrency_mode==='auto';stage3AgentSelection=[...(p.agent_ids||[])];stage3AgentModels={...(p.agent_models||{})};
-  if(before!==JSON.stringify([stage3AgentSelection,stage3AgentModels])||changedRun)renderAgentControls();
+  stage3AgentEfforts={...(p.agent_efforts||{})};
+  if(before!==JSON.stringify([stage3AgentSelection,stage3AgentModels,stage3AgentEfforts])||changedRun)renderAgentControls();
  }
  stage3ProviderFields();const locked=Boolean(data.stage3_runtime?.switch_pending);
  for(const id of ['stage3-local-repair','stage3-local-model'])if($(id))$(id).disabled=locked;
@@ -172,6 +176,7 @@ function renderStage3Settings(data){
  for(const id of ['stage3-mode','stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-api-key','stage3-auto'])if($(id))$(id).disabled=locked||(id==='stage3-workers'&&Boolean($('stage3-auto')?.checked));
  for(const select of document.querySelectorAll('[data-agent-select]'))select.disabled=locked;
  for(const select of document.querySelectorAll('[data-agent-model]'))select.disabled=locked||select.dataset.available!=='true';
+ for(const select of document.querySelectorAll('[data-agent-effort]'))select.disabled=locked||select.dataset.available!=='true';
  for(const button of document.querySelectorAll('[data-agent-action]'))button.disabled=locked||!button.dataset.agent;
  if($('stage3-add-agent'))$('stage3-add-agent').disabled=locked||!stage3AgentSelection.length||!stage3DetectedAgents.some(a=>a.installed&&!stage3AgentSelection.includes(a.id));
  if(p?.mode==='local_agent'&&stage3AgentLoadedFor!==(data.category_key||'')){stage3AgentLoadedFor=data.category_key||'';refreshLocalAgents();}
@@ -194,6 +199,20 @@ function populateAgentModel(select,id){
  const saved=stage3AgentModels[id]||'';if(saved&&!catalog.models.some(m=>m.id===saved))agentOption(select,saved,'已保存模型当前不可用，请重新选择',true);
  select.value=saved;select.disabled=localAgentSettingsLocked();
 }
+function agentEffortLabel(value){return ({default:'默认',none:'无',minimal:'最低',low:'低',medium:'中',high:'高',xhigh:'极高',max:'最高',ultra:'超高'})[value]||value;}
+function agentEffortInfo(id){
+ const catalog=stage3AgentCatalogs[id],model=catalog?.models?.find(m=>m.id===(stage3AgentModels[id]||catalog.default));
+ const supported=reasoningSettingsSupported();
+ return {ready:catalog?.status==='ready',serviceSupported:supported,configurable:supported&&catalog?.reasoning_configurable===true,
+  efforts:supported&&catalog?.reasoning_configurable===true?(model?.efforts||[]):[],default: model?.default_effort};
+}
+function populateAgentEffort(select,id){
+ const info=agentEffortInfo(id),saved=stage3AgentEfforts[id]||'default';select.replaceChildren();select.dataset.agentEffort=id||'';
+ agentOption(select,'default',!info.serviceSupported?'默认（网页服务更新后可设置）':info.default?'默认（模型默认：'+agentEffortLabel(info.default)+' · '+info.default+'）':!info.ready?'默认（等待读取模型）':!info.configurable?'默认（使用 Agent 原生设置）':'默认（跟随模型）');
+ for(const effort of info.efforts)agentOption(select,effort,agentEffortLabel(effort)+' · '+effort);
+ if(saved!=='default'&&!info.efforts.includes(saved))agentOption(select,saved,'已保存：'+saved+'（当前模型不支持，请重新选择）',true);
+ select.value=saved;select.dataset.available=String(info.ready&&info.efforts.length>0);select.disabled=localAgentSettingsLocked()||select.dataset.available!=='true';
+}
 function renderAgentStatus(node,id){
  const agent=stage3DetectedAgents.find(a=>a.id===id),catalog=stage3AgentCatalogs[id];
  if(!node)return;node.dataset??={};node.dataset.agentStatus=id||'';
@@ -215,6 +234,7 @@ function liveStage3Fresh(data){
 function renderAgentControls(){
  if(!$('stage3-agent'))return;
  const id=stage3AgentSelection[0]||'';populateAgentSelect($('stage3-agent'),id);$('stage3-model-box').hidden=!id;populateAgentModel($('stage3-agent-model'),id);renderAgentStatus($('stage3-agent-status'),id);
+ $('stage3-effort-box').hidden=!id;populateAgentEffort($('stage3-agent-effort'),id);
  $('stage3-agent-note').hidden=id!=='workbuddy';
  for(const button of $('stage3-agent-actions').querySelectorAll('[data-agent-action]')){button.dataset.agent=id;button.disabled=!id||localAgentSettingsLocked();}
  $('stage3-enable-doubao').hidden=id!=='doubao'||!stage3DetectedAgents.find(a=>a.id===id)?.requires_enable;
@@ -223,10 +243,11 @@ function renderAgentControls(){
   const index=offset+1,row=document.createElement('div'),heading=document.createElement('div'),title=document.createElement('strong'),remove=document.createElement('button');row.className='agent-extra';heading.className='agent-extra-heading';title.textContent='额外 Agent '+index;remove.type='button';remove.textContent='移除';remove.disabled=localAgentSettingsLocked();
   remove.addEventListener('click',()=>{stage3AgentSelection.splice(index,1);agentSelectionChanged();});heading.append(title,remove);row.append(heading);
   const fields=document.createElement('div');fields.className='agent-fields';
-  for(const [kind,text] of [['agent','Agent'],['model','模型']]){
+  for(const [kind,text] of [['agent','Agent'],['model','模型'],['effort','推理强度']]){
    const group=document.createElement('div'),label=document.createElement('label'),select=document.createElement('select');select.id='stage3-extra-'+kind+'-'+index;label.htmlFor=select.id;label.textContent=text;
    if(kind==='agent'){select.dataset.agentSelect='extra';populateAgentSelect(select,agentId);select.addEventListener('change',()=>{if(!select.value)return;stage3AgentSelection[index]=select.value;agentSelectionChanged(true);});}
-   else{populateAgentModel(select,agentId);select.addEventListener('change',()=>{setAgentModel(agentId,select.value);});}
+   else if(kind==='model'){populateAgentModel(select,agentId);select.addEventListener('change',()=>{setAgentModel(agentId,select.value);});}
+   else{populateAgentEffort(select,agentId);select.addEventListener('change',()=>setAgentEffort(agentId,select.value));}
    group.append(label,select);fields.append(group);
   }
   row.append(fields);const status=document.createElement('p');status.className='small';renderAgentStatus(status,agentId);row.append(status);
@@ -240,7 +261,8 @@ function renderAgentControls(){
 function agentSelectionChanged(readModels=false){stage3SettingsDirty=true;renderAgentControls();refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);if(readModels)refreshAgentModels();}
 function choosePrimaryAgent(){const id=$('stage3-agent').value;stage3AgentSelection=id?[id,...stage3AgentSelection.slice(1).filter(a=>a!==id)]:[];agentSelectionChanged(true);}
 function addAnalysisAgent(){const next=stage3DetectedAgents.find(a=>a.installed&&!stage3AgentSelection.includes(a.id));if(!stage3AgentSelection.length||!next)return;stage3AgentSelection.push(next.id);agentSelectionChanged(true);}
-function setAgentModel(id,model){if(model)stage3AgentModels[id]=model;else delete stage3AgentModels[id];agentSelectionChanged();}
+function setAgentModel(id,model){if(model)stage3AgentModels[id]=model;else delete stage3AgentModels[id];delete stage3AgentEfforts[id];agentSelectionChanged();}
+function setAgentEffort(id,effort){stage3AgentEfforts[id]=effort;agentSelectionChanged();}
 async function refreshAgentModels(){
  const ids=stage3AgentSelection.filter(id=>stage3DetectedAgents.some(a=>a.id===id&&a.installed));const generation=++stage3ModelReadGeneration;
  if(!ids.length){renderAgentControls();return;}
@@ -559,6 +581,7 @@ $('stage3-local-model').addEventListener('change',chooseLocalModel);
 $('stage3-agents-refresh').addEventListener('click',refreshLocalAgents);
 $('stage3-agent').addEventListener('change',choosePrimaryAgent);
 $('stage3-agent-model').addEventListener('change',()=>setAgentModel(stage3AgentSelection[0],$('stage3-agent-model').value));
+$('stage3-agent-effort').addEventListener('change',()=>setAgentEffort(stage3AgentSelection[0],$('stage3-agent-effort').value));
 $('stage3-add-agent').addEventListener('click',addAnalysisAgent);
 $('stage3-agent-connect').addEventListener('click',()=>agentAction('connect',stage3AgentSelection[0],$('stage3-agent-connect')));
 $('stage3-agent-login').addEventListener('click',()=>agentAction('login',stage3AgentSelection[0],$('stage3-agent-login')));

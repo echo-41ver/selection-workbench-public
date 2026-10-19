@@ -193,7 +193,7 @@ def pending_rows(category, task):
 
 def command(executable, job, model='gpt-6.1-sol', effort='medium'):
     args = [executable, 'exec', '--ignore-user-config', '--ephemeral', '--skip-git-repo-check',
-            '-m', model, '-c', f'model_reasoning_effort="{effort}"',
+            '-m', model, *(['-c', f'model_reasoning_effort="{effort}"'] if effort not in (None,'default') else []),
             '-c', 'service_tier="default"', '-c', 'approval_policy="never"',
             '-c', 'sandbox_mode="danger-full-access"', '--json',
             '--output-last-message', str(job / 'summary.txt')]
@@ -513,7 +513,7 @@ class Pool:
         backend=next((a for a in self.config.get('agent_backends',[]) if a['id']==agent),None)
         if not backend:return
         from selection_automation.local_agents import analysis_command
-        cli=analysis_command(backend,folder,job.get('model'),self.config.get('effort','medium'))+['--observe-only']
+        cli=analysis_command(backend,folder,job.get('model'),job.get('effort',self.config.get('effort','medium')))+['--observe-only']
         if not stop_owned_job(job):
             job['health']='读取进程身份不匹配，保留原组且不重发';return
         import psutil
@@ -595,6 +595,8 @@ class Pool:
                 raise RuntimeError('Agent 分组必须在创建图片凭据前限制')
         selected=task.get('required_model') or (agent or {}).get('selected_model') or self.config.get('agent_models',{}).get(agent_id)
         model=selected or (self.config.get('model','gpt-6.1-sol') if agent_id=='codex' else 'agent-default')
+        effort=task.get('required_effort',self.config.get('agent_efforts',{}).get(agent_id,self.config.get('effort','medium')))
+        if native_pending:effort=read(reused_from/'job.json',{}).get('effort',effort)
         if agent:agent={**agent,'selected_model':selected}
         text = prompt(job, len(rows), model, self.category_path)
         text += '\n如果当前 Agent 没有命令执行工具，写完 reviews.jsonl 后结束，由父进程运行严格校验；不要伪造校验通过。'
@@ -604,9 +606,9 @@ class Pool:
             env.update(workbuddy_environment(agent['executable']))
         if agent:
             from selection_automation.local_agents import analysis_command
-            cli = analysis_command(agent,job,model if model!='agent-default' else None,self.config.get('effort','medium'))
+            cli = analysis_command(agent,job,model if model!='agent-default' else None,effort)
         else:
-            cli = command(codex_executable(self.config),job,model,self.config.get('effort','medium'))
+            cli = command(codex_executable(self.config),job,model,effort)
         if native_pending:cli+=['--observe-only']
         command_marker = str(job/'summary.txt') if agent_id=='codex' else str(job/'contacts/contact-001.jpg') if agent_id=='opencode' else str(job)
         with (job / 'events.jsonl').open('ab') as stdout, (job / 'stderr.log').open('ab') as stderr:
@@ -620,7 +622,7 @@ class Pool:
                'state':'running', 'identities':[list(key(value)) for value in rows],
                'digest':digest, 'attempt':attempt, 'schema_revision':POOL_SCHEMA_REVISION,
                'reused_reviews_from':str(reused_from) if reused_from else None,
-               'agent_id':agent_id,'model':model,'command_marker':command_marker,
+               'agent_id':agent_id,'model':model,'effort':effort,'command_marker':command_marker,
                'observation_only':bool(native_pending),
                'member_tasks':{member['task_id']:member['assigned_identities'] for member in task.get('members',[])}}
         save(job / 'job.json', row)
@@ -758,6 +760,7 @@ class Pool:
             if not identities<=source_by_key.keys():held_pending+=len(identities-completed-active);continue
             group=list(read_jsonl(path.parent/'manifest.jsonl'))
             resume=grouped_task(group,prior.get('agent_id'));resume['required_model']=prior.get('model')
+            resume['required_effort']=prior.get('effort',self.config.get('effort','medium'))
             waiting.append((resume,group))
         group_size=int(self.config.get('group_size',12))
         if self.config.get('agent_backends'):group_size=min(group_size,max(int(a.get('max_group_size',12)) for a in self.config['agent_backends']))
@@ -775,7 +778,8 @@ class Pool:
             from selection_automation.analysis_concurrency import ThroughputTuner,stable_best,record_sample
             auto=self.config.get('concurrency_mode')=='auto'
             measured_provider={'mode':'local_agent','agent_ids':self.config.get('agent_ids') or [a['id'] for a in self.config.get('agent_backends',[])],
-                               'agent_models':self.config.get('agent_models',{})}
+                               'agent_models':self.config.get('agent_models',{}),
+                               **({'agent_efforts':self.config['agent_efforts']} if self.config.get('agent_efforts') else {})}
             tuning_key=json.dumps([measured_provider,sorted(paused),group_size,workers,auto],sort_keys=True)
             tuning_path=self.folder/'concurrency.json'
             if self.tuning_key!=tuning_key:
@@ -848,7 +852,7 @@ class Pool:
                 'external_pending':external_pending, 'held_pending':held_pending,'paused':bool(control.get('paused')),'paused_agents':paused,'retry_exhausted':retry_exhausted,
                 'workers':workers, 'group_size':int(self.config.get('group_size',12)),
                 'model':self.config.get('model','gpt-6.1-sol'), 'effort':self.config.get('effort','medium'),
-                'agents':[{'id':a['id'],'name':a['name'],'paused':a['id'] in paused,'running':sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())} for a in self.config.get('agent_backends',[])],
+                'agents':[{'id':a['id'],'name':a['name'],'effort':self.config.get('agent_efforts',{}).get(a['id'],self.config.get('effort','medium')),'paused':a['id'] in paused,'running':sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())} for a in self.config.get('agent_backends',[])],
                 'service_tier':'default', 'completed_groups':self.completed_groups,
                 'jobs':list(self.jobs.values()), 'errors':self.errors, 'api_requests_sent':0,
                 'last_result_at':latest_result or None,'seconds_since_result':round(time.time()-latest_result) if latest_result else None,
