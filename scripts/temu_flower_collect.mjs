@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import {atomicSnapshot} from './snapshot_atomic.mjs';
 import {createRawCounter,RAW_COUNT_VERSION} from './temu_raw_count.mjs';
 import {inspectHumanVerification} from './temu_verification.mjs';
-import {createCategoryRelevance, COLLECTION_PROGRESS_VERSION, restoreNoNewRounds} from './category_relevance.mjs';
+import {createCategoryRelevance, COLLECTION_PROGRESS_VERSION} from './category_relevance.mjs';
 import {readInitialWindowHandles} from './browser_control_bootstrap.mjs';
 import {parseProductCardMetrics} from './product_card_metrics.mjs';
 import {hasLocalWarehouseLabel,inspectLocalWarehouse,confirmsLocalWarehouse,selectLocalWarehouse,loadLocalWarehouseEvidence} from './temu_local_warehouse.mjs';
@@ -278,12 +278,8 @@ try {
   const progress = JSON.parse(await fs.readFile(PROGRESS, 'utf8'));
   round = Number(progress.round) || 0;
   clicks = Number(progress.see_more_clicks) || 0;
-  // v1 measured only the rows discovered immediately after a click. Rows that
-  // arrived late were first seen while positioning for the next click, so ten
-  // v1 "empty" clicks could still increase the global product set. Never carry
-  // that invalid saturation counter into the corrected round-based logic.
-  // A changed language/identity policy invalidates prior saturation evidence.
-  consecutiveNoNewRounds = restoreNoNewRounds(progress, categoryRelevance);
+  // Older no-new counters are diagnostic history, never a completion condition.
+  consecutiveNoNewRounds = 0;
   startedAt = progress.started_at || startedAt;
   seeMoreBottomOffset = Number(progress.see_more_bottom_offset_px) || null;
   clicksSinceRecovery = Number.isFinite(Number(progress.clicks_since_recovery))
@@ -329,13 +325,14 @@ async function writeSnapshot(status, extra = {}) {
     unique_progress_goods: relevanceCounts.progress,
     filtered_severe_off_topic_goods: filteredRows.length,
     filtered_severe_off_topic_file: FILTERED_OFF_TOPIC,
-    no_new_definition: 'NO_NEW_RELEVANT_OR_UNCLASSIFIED_GOODS_FOR_QUERY',
+    completion_policy_version: 'RAW_QUOTA_OR_EXPLICIT_END_V2',
+    no_new_definition: 'DISABLED_EXPLICIT_END_ONLY',
     consecutive_no_new_progress_rounds: consecutiveNoNewRounds,
     consecutive_no_new_relevant_rounds: consecutiveNoNewRounds,
-    required_no_new_relevant_rounds: IDLE_REQUIRED,
-    consecutive_no_new_rounds: consecutiveNoNewRounds, required_no_new_rounds: IDLE_REQUIRED,
+    required_no_new_relevant_rounds: null,
+    consecutive_no_new_rounds: 0, required_no_new_rounds: null,
     // Compatibility aliases for the existing read-only dashboard/heartbeat.
-    consecutive_no_new_clicks: consecutiveNoNewRounds, required_no_new_clicks: IDLE_REQUIRED,
+    consecutive_no_new_clicks: 0, required_no_new_clicks: null,
     clicks_since_recovery: clicksSinceRecovery,
     required_clicks_after_recovery: IDLE_REQUIRED,
     see_more_bottom_offset_px: seeMoreBottomOffset,
@@ -363,11 +360,11 @@ async function writeSnapshot(status, extra = {}) {
     network_usage_file: NETWORK_USAGE,
     http_block: httpBlock, browser_reused: !bootstrapFromSafeTab, navigated_or_refreshed: bootstrapFromSafeTab,
     started_at: startedAt, updated_at: now(), output_directory: OUT,
-    coverage_claim: status === 'KEYWORD_COMPLETE' ? 'KEYWORD_FRONTEND_COMPLETE_BY_STOP_RULE' : 'CURRENT_SESSION_IN_PROGRESS',
+    coverage_claim: noMoreResultsConfirmed ? 'KEYWORD_FRONTEND_COMPLETE_BY_EXPLICIT_END' : rawCounter.count>=MAX_PRODUCTS ? 'CONFIGURED_RAW_CARD_QUOTA_REACHED' : 'CURRENT_SESSION_IN_PROGRESS',
     platform_complete: false,
-    keyword_complete: ['KEYWORD_COMPLETE','KEYWORD_LIMIT_REACHED','KEYWORD_NO_RESULTS'].includes(status),
-    completion_basis: status === 'KEYWORD_COMPLETE' ? (noMoreResultsConfirmed ? 'NO_MORE_RESULTS_CONFIRMED' : 'CONFIGURED_COMPLETE_ROUNDS_WITHOUT_NEW_RELEVANT_OR_UNCLASSIFIED_GOODS') : status === 'KEYWORD_LIMIT_REACHED' ? 'CONFIGURED_PRODUCT_LIMIT_REACHED' : null,
-    completion_scope: status === 'KEYWORD_COMPLETE' || status === 'KEYWORD_LIMIT_REACHED' ? 'TEMU_US_VISIBLE_SEARCH_RESULTS_FOR_SINGLE_QUERY' : null,
+    keyword_complete: status==='KEYWORD_COMPLETE'&&noMoreResultsConfirmed||status==='KEYWORD_LIMIT_REACHED'&&rawCounter.count>=MAX_PRODUCTS,
+    completion_basis: status==='KEYWORD_COMPLETE'&&noMoreResultsConfirmed ? 'NO_MORE_RESULTS_CONFIRMED' : rawCounter.count>=MAX_PRODUCTS ? 'CONFIGURED_PRODUCT_LIMIT_REACHED' : null,
+    completion_scope: noMoreResultsConfirmed||rawCounter.count>=MAX_PRODUCTS ? 'TEMU_US_VISIBLE_SEARCH_RESULTS_FOR_SINGLE_QUERY' : null,
     max_products: MAX_PRODUCTS,
     ...extra,
     ...phase,
@@ -1238,10 +1235,11 @@ async function guardInitialProducts(state, phase) {
   const emptyDecision=decideEmptyQueryResults({state,query:QUERY,previous:emptyResultsWait,nowMs:Date.now()});
   emptyResultsWait=emptyDecision.clock;
   if(products.size===0 && emptyDecision.confirmed) {
-    finalStatus='KEYWORD_NO_RESULTS';
-    const details={phase,manual_action_required:false,browser_preserved:true,
-      completion_basis:'EXPLICIT_EMPTY_QUERY_RESULTS',stop_reason:'EXPLICIT_EMPTY_QUERY_RESULTS',
-      completion_scope:'TEMU_US_VISIBLE_SEARCH_RESULTS_FOR_SINGLE_QUERY',finished_at:now(),
+    finalStatus='STOPPED_EMPTY_QUERY_RESULTS';
+    const details={phase,manual_action_required:false,browser_preserved:true,automatic_retry:true,
+      automatic_recovery_eligible:true,keyword_complete:false,
+      completion_basis:null,stop_reason:'EMPTY_RESULTS_BELOW_QUOTA',
+      completion_scope:null,finished_at:now(),
       no_results_evidence:{confirmed:true,protocol:'VISIBLE_EMPTY_RESULTS_STABLE_V2',loading:false,
         stable_ms:emptyDecision.stableMs,samples:emptyDecision.samples,query:QUERY,url:state.url,text:String(state.text||'').slice(0,2000),observed_at:now()}};
     await appendEvent(finalStatus,details);await writeSnapshot(finalStatus,details);
@@ -1936,7 +1934,7 @@ if (!finalStatus && !collectionStarted) {
 }
 
 try {
-while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRecovery < IDLE_REQUIRED) && rawCounter.count < MAX_PRODUCTS) {
+while (!finalStatus && rawCounter.count < MAX_PRODUCTS) {
   await ensurePageGuards(false);
   // A round is exactly one successful See more expansion cycle. The baseline
   // is captured before positioning/scrolling, so late rows from the preceding
@@ -2018,6 +2016,8 @@ while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRec
         finalStatus = 'KEYWORD_COMPLETE';
         await appendEvent('NO_MORE_RESULTS_CONFIRMED', {query:QUERY, sort:SORT_REQUEST,
           visible_goods:secondEnd.visibleGoodsCount, stable_observations:2});
+        await writeSnapshot(finalStatus,{no_more_results_evidence:{query:QUERY,sort:SORT_REQUEST,
+          visible_goods:secondEnd.visibleGoodsCount,stable_observations:2}});
         break;
       }
     }
@@ -2086,13 +2086,14 @@ while (!finalStatus && (consecutiveNoNewRounds < IDLE_REQUIRED || clicksSinceRec
   const newRelevance = categoryRelevance.summarize(roundNewRows);
   const roundNewRelevantCount = newRelevance.relevant;
   const roundNewUnclassifiedCount = newRelevance.unknown;
-  consecutiveNoNewRounds = rawCounter.count===roundBaselineRaw ? consecutiveNoNewRounds+1 : 0;
+  consecutiveNoNewRounds = 0;
   await appendEvent('ROUND_COMPLETE', {
     round, click: clicks, new_goods: roundNewCount, post_click_new_goods: postClickNewCount,
     new_relevant_goods: roundNewRelevantCount,
     new_unclassified_goods: roundNewUnclassifiedCount,
     new_progress_goods: newRelevance.progress,
-    unique_goods: products.size, consecutive_no_new_rounds: consecutiveNoNewRounds,
+    raw_before:roundBaselineRaw,raw_after:rawCounter.count,
+    unique_goods: products.size, consecutive_no_new_rounds: 0,
     consecutive_no_new_relevant_rounds: consecutiveNoNewRounds,
     consecutive_no_new_clicks: consecutiveNoNewRounds, image_requests_blocked: imageBlocked,
     images_backfilled: Number(after?.imageBackfilled) || 0,
@@ -2133,12 +2134,18 @@ await writeSnapshot('RUNNING',{recovered_after_verification:true,query:QUERY,
   http_block_cleared_after_challenge:true,sort_confirmed:true,stable_sort_checks:3});
 continue collectionLifecycle;
 }
-finalStatus ||= rawCounter.count >= MAX_PRODUCTS ? 'KEYWORD_LIMIT_REACHED' : 'KEYWORD_COMPLETE';
+finalStatus ||= rawCounter.count >= MAX_PRODUCTS ? 'KEYWORD_LIMIT_REACHED' : 'STOPPED_COLLECTION_BELOW_QUOTA';
+if(finalStatus==='KEYWORD_COMPLETE'&&!noMoreResultsConfirmed)finalStatus='STOPPED_COLLECTION_BELOW_QUOTA';
+if(finalStatus==='STOPPED_COLLECTION_BELOW_QUOTA') {
+  await writeSnapshot(finalStatus,{keyword_complete:false,automatic_retry:true,
+    manual_action_required:false,automatic_recovery_eligible:true,
+    stop_reason:'BELOW_QUOTA_WITHOUT_EXPLICIT_END'});
+}
 if (finalStatus === 'KEYWORD_COMPLETE' || finalStatus === 'KEYWORD_LIMIT_REACHED') {
-  const stopReason = finalStatus === 'KEYWORD_LIMIT_REACHED' ? 'CONFIGURED_PRODUCT_LIMIT_REACHED' : noMoreResultsConfirmed ? 'NO_MORE_RESULTS_CONFIRMED' : 'CONFIGURED_COMPLETE_ROUNDS_WITHOUT_NEW_RELEVANT_OR_UNCLASSIFIED_GOODS';
+  const stopReason = finalStatus === 'KEYWORD_LIMIT_REACHED' ? 'CONFIGURED_PRODUCT_LIMIT_REACHED' : 'NO_MORE_RESULTS_CONFIRMED';
   await appendEvent('KEYWORD_COLLECTION_COMPLETE', { round, clicks, unique_goods: products.size, stop_reason: stopReason, query: QUERY });
   await writeSnapshot(finalStatus, { finished_at: now(), stop_reason: stopReason });
 }
 if (bidi) await bidi.close();
 console.log(JSON.stringify({ status: finalStatus, output: OUT, unique_goods: products.size, clicks, imageBlocked }));
-if (!['KEYWORD_COMPLETE', 'KEYWORD_LIMIT_REACHED','KEYWORD_NO_RESULTS'].includes(finalStatus)) process.exitCode = 2;
+if (!['KEYWORD_COMPLETE', 'KEYWORD_LIMIT_REACHED'].includes(finalStatus)) process.exitCode = 2;

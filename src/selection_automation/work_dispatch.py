@@ -66,8 +66,9 @@ def _ensure_pass_states(job):
     job['complete']=all(state.get('complete') for state in job['sort_passes'].values())
 
 
-def sync(run, keywords, names, resume_queries=()):
+def sync(run, keywords, names, resume_queries=(), repair_queries=()):
     resume_queries=set(resume_queries)
+    repair_queries=set(repair_queries)
     with locked(run):
         data=read(run)
         if 'jobs' not in data:
@@ -102,7 +103,8 @@ def sync(run, keywords, names, resume_queries=()):
                     evidence.append(item);known_evidence.add(asin)
             if 'source_evidence' in existing or 'source_evidence' in row:
                 existing['source_evidence']=evidence
-            if existing.get('complete') and row['query'] in resume_queries and new_limit>old_limit:
+            if existing.get('complete') and (row['query'] in repair_queries
+                    or (new_limit>old_limit and row['query'] in resume_queries)):
                 existing['complete']=False
                 existing.pop('completed_at',None)
                 _ensure_pass_states(existing)
@@ -171,6 +173,8 @@ def claim_pass(run, worker):
 
 def complete_empty_query(run,worker,query,evidence):
     """A confirmed empty search needs neither sort; retain prior collected passes."""
+    from .empty_results import verified_empty_evidence
+    if not verified_empty_evidence(evidence,query):raise ValueError('Empty results require two independent searches')
     with locked(run):
         data=read(run);job=next(row for row in data['jobs'] if row['query']==query)
         _ensure_pass_states(job)
@@ -192,9 +196,8 @@ def requeue_unsettled_empty_queries(run):
         for job in data.get('jobs',[]):
             evidence=job.get('no_results_evidence') or {}
             if not job.get('complete') or not evidence:continue
-            if (evidence.get('protocol')=='VISIBLE_EMPTY_RESULTS_STABLE_V2'
-                    and evidence.get('loading') is False and (evidence.get('stable_ms') or 0)>=15000
-                    and (evidence.get('samples') or 0)>=3):continue
+            from .empty_results import verified_empty_evidence
+            if verified_empty_evidence(evidence,job['query']):continue
             _ensure_pass_states(job);reset=False
             for state in job['sort_passes'].values():
                 if state.get('skipped') and state.get('completion_reason')=='EXPLICIT_EMPTY_QUERY_RESULTS':
@@ -203,7 +206,7 @@ def requeue_unsettled_empty_queries(run):
             if reset:
                 job['complete']=False;job['started']=any(s.get('started') for s in job['sort_passes'].values())
                 job.pop('completed_at',None)
-                job.pop('no_results_evidence',None);job['empty_requeued_at']=time.time()
+                job['previous_no_results_evidence']=job.pop('no_results_evidence',None);job['empty_requeued_at']=time.time()
                 changed.append(job['query'])
         if changed:save(run,data)
     return changed

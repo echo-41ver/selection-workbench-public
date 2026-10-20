@@ -12,7 +12,7 @@ loop=next(n for n in ast.walk(owned) if isinstance(n,ast.While) and isinstance(n
 # Execute actual post-collector branch statements in an isolated mock harness.
 start=next(i for i,n in enumerate(loop.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='status' for t in n.targets))
 body=loop.body[start:]
-fn=ast.FunctionDef(name='branch',args=ast.arguments(posonlyargs=[],args=[ast.arg(arg='progress')],kwonlyargs=[],kw_defaults=[],defaults=[]),body=[ast.Assign(targets=[ast.Name(id='recovery_record',ctx=ast.Store())],value=ast.Dict(keys=[],values=[])),ast.Assign(targets=[ast.Name(id='attempt',ctx=ast.Store())],value=ast.Constant(0)),ast.While(test=ast.Compare(left=ast.Name(id='attempt',ctx=ast.Load()),ops=[ast.Lt()],comparators=[ast.Constant(3)]),body=[ast.AugAssign(target=ast.Name(id='attempt',ctx=ast.Store()),op=ast.Add(),value=ast.Constant(1))]+body,orelse=[])],decorator_list=[])
+fn=ast.FunctionDef(name='branch',args=ast.arguments(posonlyargs=[],args=[ast.arg(arg='progress'),ast.arg(arg='returncode')],kwonlyargs=[],kw_defaults=[],defaults=[ast.Constant(1)]),body=[ast.Assign(targets=[ast.Name(id='recovery_record',ctx=ast.Store())],value=ast.Dict(keys=[],values=[])),ast.Assign(targets=[ast.Name(id='attempt',ctx=ast.Store())],value=ast.Constant(0)),ast.While(test=ast.Compare(left=ast.Name(id='attempt',ctx=ast.Load()),ops=[ast.Lt()],comparators=[ast.Constant(3)]),body=[ast.AugAssign(target=ast.Name(id='attempt',ctx=ast.Store()),op=ast.Add(),value=ast.Constant(1))]+body,orelse=[])],decorator_list=[])
 code=compile(ast.fix_missing_locations(ast.Module(body=[fn],type_ignores=[])),'actual_pipeline_branch','exec')
 class Tests(unittest.TestCase):
  def args(self,root,task='current',worker='worker-01-new'):
@@ -36,8 +36,8 @@ class Tests(unittest.TestCase):
   forbidden=Mock(side_effect=AssertionError('automatic action invoked'))
   repair=types.ModuleType('repair_browser_control');repair.repair=forbidden;sys.modules['repair_browser_control']=repair
   env={'write_worker_state':Mock(),'session':{'name':'worker-01-new'},'query':'q','output':pathlib.Path('out'),'log':pathlib.Path('out/log'),'returncode':1,'lease':types.SimpleNamespace(check_stop=forbidden),'classify_recovery_kind':forbidden,'recovery_budget':forbidden,'collector_block':Mock(return_value=None),'interruptible_wait':forbidden,'completed':forbidden}
-  from empty_results_checkpoint import confirmed_empty_checkpoint
-  env.update(confirmed_empty_checkpoint=confirmed_empty_checkpoint,completed_queries=[],item_index=1,items=[])
+  from empty_results_checkpoint import confirmed_empty_checkpoint,confirmed_empty_observation
+  env.update(confirmed_empty_checkpoint=confirmed_empty_checkpoint,confirmed_empty_observation=confirmed_empty_observation,completed_queries=[],item_index=1,items=[])
   exec(code,env);return env,forbidden
  def test_cross_status_terminal_flags_prevent_all_actions(self):
   statuses=['STOPPED_BOOTSTRAP_NAVIGATION','STOPPED_BROWSER_CONTROL_FAILURE','STOPPED_PROXY_OR_NETWORK_FAILURE','OTHER_TRANSIENT','KEYWORD_COMPLETE']

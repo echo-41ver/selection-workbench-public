@@ -24,6 +24,9 @@ def recovery_budget(previous, goods, profile_id, kind, limit=None):
 def site_access_wait(kind, previous, worker_number=1):
     # A login redirect cannot heal by waiting in that environment. Only an
     # access refusal without a login redirect uses the site cooldown.
+    if kind in {'EMPTY_RESULTS','BELOW_QUOTA'}:
+        used=max(0,int(previous.get('attempts_without_progress',0)))
+        return (15,30,60,120,300)[min(used,4)]+max(0,worker_number-1)*3
     if kind != 'ACCESS': return 0
     used = max(0, int(previous.get('attempts_without_progress', 0)))
     delay = (30, 120, 600, 1800, 3600, 7200, 21600)[min(used, 6)]
@@ -67,6 +70,8 @@ def recovery_kind(status, progress, transport_allowed=False):
         return None
     if progress.get('automatic_recovery_eligible') is False:
         return None
+    if status in {'STOPPED_EMPTY_QUERY_RESULTS','KEYWORD_NO_RESULTS'}:return 'EMPTY_RESULTS'
+    if status in {'STOPPED_RESULTS_BELOW_QUOTA','STOPPED_COLLECTION_BELOW_QUOTA'}:return 'BELOW_QUOTA'
     if status == 'STOPPED_SALES_SORT_UNCONFIRMED': return 'SORT'
     if status == 'STOPPED_INITIAL_PRODUCTS_TIMEOUT': return 'INITIAL_PRODUCTS'
     if status == 'STOPPED_SEE_MORE_UNAVAILABLE' and not progress.get('http_block'): return 'CONTROL'

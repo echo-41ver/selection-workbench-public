@@ -6,6 +6,14 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 
 
+def empty_evidence(query):
+    from urllib.parse import quote
+    return {'confirmed':True,'protocol':'INDEPENDENT_EMPTY_SEARCH_V3','query':query,'checks':[
+        {'profile_id':profile,'evidence':{'confirmed':True,'protocol':'VISIBLE_EMPTY_RESULTS_STABLE_V2',
+            'loading':False,'stable_ms':15000,'samples':3,'query':query,
+            'url':'https://www.temu.com/search_result.html?search_key='+quote(query)}} for profile in ('first','second')]}
+
+
 def test_recent_follows_same_keyword_sales_before_next_keyword(tmp_path):
     dispatch.sync(tmp_path,[{'query':'first spatula','max_products':100},
                             {'query':'next spatula','max_products':100}],['w1'])
@@ -21,7 +29,7 @@ def test_confirmed_empty_query_skips_both_sorts_and_preserves_next_job(tmp_path)
     dispatch.sync(tmp_path,[{'query':'empty spatula','max_products':100},
                             {'query':'next spatula','max_products':100}],['w1'])
     empty=dispatch.claim_pass(tmp_path,'w1')
-    dispatch.complete_empty_query(tmp_path,'w1',empty['query'],{'confirmed':True})
+    dispatch.complete_empty_query(tmp_path,'w1',empty['query'],empty_evidence(empty['query']))
     job=next(row for row in dispatch.read(tmp_path)['jobs'] if row['query']==empty['query'])
     assert job['complete'] and all(state['skipped'] for state in job['sort_passes'].values())
     assert dispatch.claim_pass(tmp_path,'w1')['query']=='next spatula'
@@ -30,9 +38,7 @@ def test_confirmed_empty_query_skips_both_sorts_and_preserves_next_job(tmp_path)
 def test_empty_checkpoint_requires_matching_query_and_explicit_source_evidence(tmp_path):
     from pipeline import confirmed_empty_checkpoint
     progress={'status':'KEYWORD_NO_RESULTS','unique_goods':0,'completion_basis':'EXPLICIT_EMPTY_QUERY_RESULTS',
-              'no_results_evidence':{'confirmed':True,'protocol':'VISIBLE_EMPTY_RESULTS_STABLE_V2',
-                'loading':False,'stable_ms':15000,'samples':3,'query':'empty spatula',
-                'url':'https://www.temu.com/search_result.html?search_key=empty%20spatula'}}
+              'no_results_evidence':empty_evidence('empty spatula')}
     assert confirmed_empty_checkpoint(progress,'empty spatula')
     assert not confirmed_empty_checkpoint(progress,'another spatula')
     assert not confirmed_empty_checkpoint({**progress,'unique_goods':1},'empty spatula')
@@ -44,7 +50,9 @@ def test_empty_checkpoint_requires_matching_query_and_explicit_source_evidence(t
 def test_requeue_old_empty_skips_preserves_real_completed_passes(tmp_path):
     dispatch.sync(tmp_path,[{'query':'old empty','max_products':10},{'query':'collected','max_products':10}],['w1'])
     job=dispatch.claim_pass(tmp_path,'w1')
-    dispatch.complete_empty_query(tmp_path,'w1',job['query'],{'confirmed':True})
+    dispatch.complete_empty_query(tmp_path,'w1',job['query'],empty_evidence(job['query']))
+    legacy=dispatch.read(tmp_path);legacy['jobs'][0]['no_results_evidence']={'confirmed':True,'protocol':'VISIBLE_EMPTY_RESULTS_STABLE_V2'}
+    dispatch.save(tmp_path,legacy)
     data=dispatch.read(tmp_path);other=next(row for row in data['jobs'] if row['query']!=job['query'])
     other['sort_passes']['sales'].update(started=True,complete=True);dispatch.save(tmp_path,data)
     assert dispatch.requeue_unsettled_empty_queries(tmp_path)==[job['query']]
@@ -199,10 +207,12 @@ def test_upgrade_requeue_requires_current_confirmed_limit_and_skips_true_no_more
     checkpoint=json.loads((sales/'progress.json').read_text())
     assert not confirmed_checkpoint_meets_budget(sales,checkpoint,query,'sales',1200)
     checkpoint['status']='KEYWORD_COMPLETE'
+    checkpoint['stop_reason']='NO_MORE_RESULTS_CONFIRMED'
     assert confirmed_checkpoint_meets_budget(sales,checkpoint,query,'sales',1200)
     for sort in ('sales','recent'):
         output=run/'temu/workers/w1'/(query+('--recent' if sort=='recent' else ''))
         checkpoint=json.loads((output/'progress.json').read_text());checkpoint['status']='KEYWORD_COMPLETE'
+        checkpoint['stop_reason']='NO_MORE_RESULTS_CONFIRMED'
         (output/'progress.json').write_text(json.dumps(checkpoint))
     assert limit_upgrade_resume_queries(run,target)==set()
 

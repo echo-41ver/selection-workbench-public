@@ -25,7 +25,8 @@ from selection_automation.proxy_activity import ProxyActivityLease
 from selection_automation.background_launch import run_background_launcher
 from selection_automation.product_keywords import candidates as product_candidates, contains as title_contains
 from cleanup_completed_worker import cleanup_completed_worker
-from empty_results_checkpoint import confirmed_empty_checkpoint
+from empty_results_checkpoint import confirmed_empty_checkpoint,confirmed_empty_observation,record_empty_observation
+from selection_automation.collection_quota import collected_cards,quota_reached
 from selection_automation import work_dispatch
 from selection_automation.runtime_audit import process_version, record_start, recovery_event
 LOADED_VERSION=process_version(str(ROOT))
@@ -253,9 +254,8 @@ def confirmed_sales_checkpoint(output: Path, progress: dict, query: str, sort: s
 
 
 def legacy_relevance_completion(progress: dict) -> bool:
-    return progress.get('status') == 'KEYWORD_COMPLETE' and (
-        progress.get('stop_reason') == 'CONFIGURED_COMPLETE_ROUNDS_WITHOUT_NEW_RELEVANT_GOODS'
-        or progress.get('completion_basis') == 'CONFIGURED_COMPLETE_ROUNDS_WITHOUT_NEW_RELEVANT_GOODS')
+    return progress.get('status')=='KEYWORD_COMPLETE' and 'NO_MORE_RESULTS_CONFIRMED' not in (
+        progress.get('stop_reason'),progress.get('completion_basis'))
 
 
 def confirmed_checkpoint_meets_budget(output: Path, progress: dict, query: str, sort: str, target: int) -> bool:
@@ -263,7 +263,7 @@ def confirmed_checkpoint_meets_budget(output: Path, progress: dict, query: str, 
     status=str(progress.get('status') or '')
     if status not in {'KEYWORD_COMPLETE','KEYWORD_LIMIT_REACHED'}:
         return False
-    if legacy_relevance_completion(progress):
+    if legacy_relevance_completion(progress) and not quota_reached(progress,int(target)):
         return False
     if not confirmed_sales_checkpoint(output,progress,query,sort):
         return False
@@ -279,16 +279,16 @@ def limit_upgrade_resume_queries(run: Path, keywords: list[dict]) -> set[str]:
     for job in old.get('jobs',[]):
         target=targets.get(job.get('query'))
         if not job.get('complete') or target is None:continue
-        worker=job.get('owner')
-        if not worker:continue
         for sort in ('sales','recent'):
+            worker=((job.get('sort_passes') or {}).get(sort) or {}).get('owner') or job.get('owner')
+            if not worker:continue
             output=Path(run)/'temu'/'workers'/str(worker)/(slug(job['query'])+('--recent' if sort=='recent' else ''))
             try:progress=json.loads((output/'progress.json').read_text('utf-8'))
             except (OSError,ValueError):continue
-            if legacy_relevance_completion(progress):
+            if legacy_relevance_completion(progress) and not quota_reached(progress,target):
                 resume.add(job['query']);break
             if (progress.get('status')=='KEYWORD_LIMIT_REACHED'
-                    and int(progress.get('raw_collected_count',progress.get('unique_goods')) or 0)<target
+                    and collected_cards(progress)<target
                     and confirmed_sales_checkpoint(output,progress,job['query'],sort)):
                 resume.add(job['query']);break
     return resume
@@ -413,7 +413,7 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
     plan = plan_document['keywords']
     resume_queries=limit_upgrade_resume_queries(run_root(category),plan)
     work_dispatch.requeue_unsettled_empty_queries(run_root(category))
-    assignment=work_dispatch.sync(run_root(category),plan,[s['name'] for s in sessions],resume_queries=resume_queries)
+    assignment=work_dispatch.sync(run_root(category),plan,[s['name'] for s in sessions],repair_queries=resume_queries)
     queues=[[r for r in assignment['jobs'] if r['owner']==session['name'] or any(
         state.get('owner')==session['name'] and not state.get('complete')
         for state in (r.get('sort_passes') or {}).values())] for session in sessions]
@@ -640,6 +640,17 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                         recovery_event(run_root(category),session['name'],'LOCAL_CONTROL_REPAIR_RETRY',query=query,sort=sort,attempt=attempt)
                     interruptible_wait(5*attempt,lease)
                     continue
+                if confirmed_empty_observation(progress,query):
+                    evidence=record_empty_observation(output/'empty_search_checks.json',progress,query,session.get('profile_id'))
+                    if evidence:
+                        progress={**progress,'status':'KEYWORD_NO_RESULTS','completion_basis':'EXPLICIT_EMPTY_QUERY_RESULTS',
+                            'no_results_evidence':evidence,'keyword_complete':True}
+                        status='KEYWORD_NO_RESULTS';returncode=0
+                    else:
+                        status='STOPPED_EMPTY_QUERY_RESULTS'
+                        progress={**progress,'status':status,'keyword_complete':False,'automatic_retry':True,
+                            'manual_action_required':False,'automatic_recovery_eligible':True}
+                    atomic_write(progress_path,json.dumps(progress,ensure_ascii=False))
                 if returncode==0 and confirmed_empty_checkpoint(progress,query):
                     work_dispatch.complete_empty_query(run_root(category),session['name'],query,progress['no_results_evidence'])
                     completed_queries.append(query) if query not in completed_queries else None
@@ -648,8 +659,15 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                             completed_passes.append({'query':query,'sort':empty_sort,'skipped':True,'reason':'EXPLICIT_EMPTY_QUERY_RESULTS'})
                     write_worker_state(session['name'],{'status':'QUERY_COMPLETE','current_query':query,
                         'query_status':status,'unique_goods':0,'completed_queries':completed_queries,
-                        'message':'页面明确无结果，直接进入下一个关键词'})
+                        'message':'两次独立搜索均确认无结果，进入下一个关键词'})
                     break
+                if returncode==0 and status in {'KEYWORD_COMPLETE','KEYWORD_LIMIT_REACHED'} and (
+                        status=='KEYWORD_COMPLETE' and legacy_relevance_completion(progress) and not quota_reached(progress,int(item['max_products']))
+                        or status=='KEYWORD_LIMIT_REACHED' and not quota_reached(progress,int(item['max_products']))):
+                    status='STOPPED_COLLECTION_BELOW_QUOTA'
+                    progress={**progress,'status':status,'keyword_complete':False,'automatic_retry':True,
+                        'manual_action_required':False,'automatic_recovery_eligible':True}
+                    atomic_write(progress_path,json.dumps(progress,ensure_ascii=False))
                 if returncode == 0 and status in {"KEYWORD_COMPLETE", "KEYWORD_LIMIT_REACHED"}:
                     completed(query, sort)
                     write_worker_state(session["name"], {
@@ -683,7 +701,7 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                     cooldown_path = output / 'session_cooldown.json'
                     prior_cooldown = json.loads(cooldown_path.read_text('utf-8')) if cooldown_path.exists() else {}
                     cooldown = rate_limit_wait(progress, prior_cooldown)
-                    if cooldown is None and recovery_kind == 'ACCESS':
+                    if cooldown is None and recovery_kind in {'ACCESS','EMPTY_RESULTS','BELOW_QUOTA'}:
                         delay = max(site_access_wait(recovery_kind, recovery_record, worker_number),
                                     float(prior_cooldown.get('retry_at', 0)) - time.time())
                         cooldown = {'wait_seconds': delay, 'retry_at': time.time() + delay}
