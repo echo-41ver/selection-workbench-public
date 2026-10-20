@@ -39,7 +39,11 @@ function Get-ChildItem {
  return [pscustomobject]@{FullName='fixture-port';LastWriteTimeUtc=$stamp;LastWriteTime=$stamp}
 }
 function Get-Content {if($script:mode -eq 'bad_port'){'99999'}else{'58791'}}
-function Get-NetTCPConnection { [pscustomobject]@{OwningProcess=$(if($script:mode -eq 'foreign_port'){202}else{101})} }
+function Get-LocalTcpListener {
+ param($LocalPort)
+ if($LocalPort -ne 58791){throw 'unexpected listener port'}
+ [pscustomobject]@{OwningProcess=$(if($script:mode -eq 'foreign_port'){202}else{101})}
+}
 function Get-ProfileBrowserTree {return @(101)}
 $clock=[Diagnostics.Stopwatch]::StartNew()
 try {

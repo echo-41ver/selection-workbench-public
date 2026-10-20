@@ -7,7 +7,8 @@ def test_incomplete_binding_reclaims_only_matching_profile_and_browser(tmp_path)
     shell=shutil.which('pwsh') or shutil.which('powershell')
     if not shell:pytest.skip('PowerShell unavailable')
     source=(ROOT/'scripts/bind_flower_worker.ps1').read_text('utf-8')
-    decision=source[source.index('$incompleteOwnedBinding ='):source.index('\n        if (-not $incompleteOwnedBinding)')]
+    decision_start=source.index('$sameOwnedProfile =')
+    decision=source[decision_start:source.index('if (-not $incompleteOwnedBinding',decision_start)]
     script=tmp_path/'binding-ownership.ps1'
     script.write_text('''$ProfileId='selected'
 $script:expectedProfileBrowserPid=100
