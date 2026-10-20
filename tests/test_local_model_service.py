@@ -94,6 +94,7 @@ def test_stopped_installed_service_is_started_once_without_downloading_models(tm
     monkeypatch.setattr(service, '_endpoints', lambda: ['http://127.0.0.1:11434'])
     monkeypatch.setattr(service, '_installed', lambda: 'fixture-ollama')
     monkeypatch.setattr(service, '_tags', lambda base: [] if started else None)
+    monkeypatch.setattr(service, '_probe', lambda base: None)
     monkeypatch.setattr(service, '_start', lambda root: started.append(root) or True)
 
     def disconnected(*args, **kwargs):
@@ -119,6 +120,7 @@ def test_start_throttle_does_not_spawn_repeated_servers(tmp_path, monkeypatch):
 def test_read_only_discovery_does_not_start_missing_service(tmp_path, monkeypatch):
     monkeypatch.setattr(service, '_endpoints', lambda: ['http://127.0.0.1:11434'])
     monkeypatch.setattr(service, '_tags', lambda base: None)
+    monkeypatch.setattr(service, '_probe', lambda base: None)
     monkeypatch.setattr(service, '_installed', lambda: None)
     monkeypatch.setattr(service, '_start', lambda root: pytest.fail('No launch during read-only discovery'))
     result = service.catalog(tmp_path)

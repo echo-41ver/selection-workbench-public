@@ -2113,6 +2113,9 @@ class Handler(BaseHTTPRequestHandler):
             self.trusted()
             if self.path=='/api/health':
                 return self.send_json({'ok':True,'service':'selection-workbench','pid':os.getpid(),'time':time.time()})
+            if self.path=='/api/local-models/scan':
+                from selection_automation.local_model_inventory import scan_status
+                return self.send_json({'ok':True,**scan_status(self.server.console.root)})
             if self.path=='/api/status':
                 state=self.server.console.status()
                 if getattr(self.server,'release',None):
@@ -2180,7 +2183,7 @@ class Handler(BaseHTTPRequestHandler):
             body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
             if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market',
-                    '/api/local-agents/models','/api/local-agents/refresh','/api/local-models/repair','/api/stage3/api-reasoning','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
+                    '/api/local-agents/models','/api/local-agents/refresh','/api/local-models/repair','/api/local-models/scan','/api/stage3/api-reasoning','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)
@@ -2201,6 +2204,12 @@ class Handler(BaseHTTPRequestHandler):
                 from selection_automation.stage3_provider import settings
                 from selection_automation.analysis_concurrency import recommendation
                 return self.send_json({'ok':True,**recommendation(settings(body),self.server.console.root)})
+            if self.path=='/api/local-models/scan':
+                from selection_automation.local_model_inventory import start_scan,cancel_scan
+                if set(body)-{'action','restart'} or body.get('action','start') not in ('start','cancel') or type(body.get('restart',False)) is not bool:
+                    raise ConsoleError('INVALID_INPUT','本机模型扫描参数无效')
+                result=cancel_scan(self.server.console.root) if body.get('action')=='cancel' else start_scan(self.server.console.root,restart=body.get('restart',False))
+                return self.send_json({'ok':True,**result})
             if self.path=='/api/local-models/repair':
                 from selection_automation.stage3_provider import settings
                 from selection_automation.local_model_service import repair_provider

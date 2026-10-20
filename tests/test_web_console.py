@@ -68,8 +68,9 @@ def test_fast_review_reader_does_not_scan_batch_tree(tmp_path,monkeypatch):
     assert state['running'] and state['pool']['running_groups']==8
 
 
-def test_invalid_live_gate_is_an_error_instead_of_a_cleared_captcha(tmp_path):
+def test_invalid_live_gate_is_an_error_instead_of_a_cleared_captcha(tmp_path,monkeypatch):
     console=web.Console(tmp_path);console.key='fixture'
+    monkeypatch.setattr(console,'current_run_key',lambda:('fixture',True))
     folder=tmp_path/'runs/fixture/stage123';folder.mkdir(parents=True)
     (folder.parent/'category.json').write_text('{}')
     (folder/'runtime_control.json').write_text('{incomplete')
