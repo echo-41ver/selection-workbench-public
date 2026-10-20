@@ -4,6 +4,8 @@
 
 目标电脑使用 Windows 10/11 x64，预留至少 12 GB 可用空间，并开启该机可用的公司 VPN／代理。安装绝对路径不超过 100 字符，支持中文和空格。不要在 ZIP 内直接运行。缺少 VC++ 运行库时，Windows 可能显示管理员安装确认。
 
+从具有打包应用文件视图的 Agent 宿主启动时，一键入口会检测上下文，并把部署转到当前 Windows 用户的交互桌面任务；普通资源管理器启动沿用正常入口。此处理不更改系统 MSIX、权限或安全设置，也不代替后续真实安装检查。涉及公司配置的导入仍使用同一用户；需要确认的窗口和管理员提示请按实际提示处理。
+
 完整包随带固定版本 Python 3.12.10 安装器、便携 Node.js 24.19.0、便携 PowerShell 7.6.5、VC++ 安装器、Python 依赖、Playwright 模块和 Chromium、AdsPower 8.7.23 安装器、第二层 ResNet50 模型和 Codex CLI。先核对随包文件的 SHA256，再执行安装器；不要求目标电脑预装 Python、Python Launcher、Node、Git 或 WinGet。AdsPower 的账号授权、Firefox 153 内核准备和实际站点访问需要联网。
 
 完整内部包会自动导入随包的公司配置，在目标电脑按当前 Windows 用户重新加密。AdsPower 使用公司 API Key 启动后台服务；代理和默认分析 API 使用公司配置，无需同事逐一登录这些服务。程序不复制原电脑的账号登录缓存。使用本机 Agent 时，由同事使用该机自己的 Agent 账号；部署期间不会强制弹出 Codex 登录。普通内部基础包和公开包不含公司凭据，不能代替完整公司配置包。
@@ -35,6 +37,8 @@
 发布构建使用 `scripts/build_incremental_update.py --base-package <已发布完整包.zip>`；后续可以用 `--base-manifest <上一更新包的update-base.json>`。构建只读取指定 Git 提交的发行源码，不读取本机公司密钥或运行数据。内部更新包发布到私密仓库，公开更新包发布到公共仓库。
 
 安装失败会恢复本次替换前的项目虚拟环境、Node 依赖、便携工具和已导入的公司密钥，保留采集数据、断点和 Excel。旧环境与失败环境保存在 `.deployment-backup/`。错误阶段、脚本行号、异常类型及命令退出码写入脱敏的 `runtime/install-failure.json`，修复原因后可再次运行 `deploy.cmd`。系统级 Python 或 VC++ 安装不会因项目回滚而卸载。
+
+原生安装器的退出码另存于 `runtime/installer-logs/process-*.json`，失败时同时保存在 `install-failure.json` 的 `command` 内。Python 官方安装日志指定到同目录；记录分别标明日志路径及文件是否实际生成。无法取得退出码或非允许退出码都会停止部署，不会把安装器启动成功当成安装完成。这些记录及已有环境上的重试不能代替恢复干净系统后的首装复验。
 
 只读准备检查：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1 -PreflightOnly`。外部另行提供的配置仍显示导入确认；管理员明确授权的命令部署可使用 `-AcceptCompanyConfig`。
 

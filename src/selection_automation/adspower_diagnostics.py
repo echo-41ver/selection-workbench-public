@@ -1,6 +1,6 @@
 """Allowlisted operational diagnostics; no raw provider messages or URLs."""
 import re
-OPERATIONS={'/api/v1/browser/start':'BROWSER_START','/api/v1/browser/stop':'BROWSER_STOP','/api/v1/user/list':'PROFILE_LIST','/api/v2/browser-profile/create':'PROFILE_CREATE','/api/v2/browser-profile/delete':'PROFILE_DELETE'}
+OPERATIONS={'/status':'API_STATUS','/api/v1/browser/start':'BROWSER_START','/api/v1/browser/stop':'BROWSER_STOP','/api/v1/user/list':'PROFILE_LIST','/api/v1/user/create':'PROFILE_CREATE','/api/v1/user/delete':'PROFILE_DELETE','/api/v2/browser-profile/create':'PROFILE_CREATE','/api/v2/browser-profile/delete':'PROFILE_DELETE'}
 def safe_code(value):
  if isinstance(value,bool):return None
  if isinstance(value,int) and abs(value)<=999999:return value

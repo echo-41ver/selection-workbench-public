@@ -1,12 +1,18 @@
 {
   "source_commit": "8cab02d787004908683563bac23f5d59000fd99a",
-  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/full-deployment-8cab02d",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-private/releases/tag/full-deployment-8cab02d",
   "artifacts": [
     {
-      "name": "selection-workbench-8cab02d-public.zip",
-      "bytes": 1384922308,
-      "sha256": "98671b18534ddd7dca71c69976b58f1c6f74307fc845e721b3f6c20e455978b0",
+      "name": "selection-workbench-8cab02d-internal.zip",
+      "bytes": 1384922994,
+      "sha256": "1166adbcc5fd2ad3746d7d33d8fb37b4e6354d162353a6c4df4855b3b3f8cc78",
       "contains_company_credentials": false
+    },
+    {
+      "name": "selection-workbench-8cab02d-full-company.zip",
+      "bytes": 1384923602,
+      "sha256": "419a0b45e2535673e0d388e3effd703878f90df0131cf10c69d554840b28ab41",
+      "contains_company_credentials": true
     }
   ]
 }

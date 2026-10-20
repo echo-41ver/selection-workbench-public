@@ -27,6 +27,8 @@ from selection_automation.identity_policy import compile_policy
 from selection_automation.identity_profiles import reviewed_profile
 from selection_automation.merge_temu_snapshots import atomic_write
 from selection_automation.model_transport import open_model_url
+from selection_automation.rule_model_evidence import (RuleModelEvidence, RuleModelEvidenceError,
+    provider_metadata, safe_identifier, numeric_usage)
 from selection_automation.amazon_listing_url import listing_identity
 
 
@@ -111,6 +113,18 @@ def compile_generated_policy(config, *, model=None):
 
 
 def model_json(prompt: str, *, max_tokens: int = 8000, retry_truncated: bool = True, images=None) -> dict:
+    evidence = RuleModelEvidence(ROOT, secret=os.getenv('DEEPSEEK_API_KEY', '').strip())
+    try:
+        with evidence:
+            return _model_json(prompt, max_tokens=max_tokens, retry_truncated=retry_truncated, images=images, _evidence=evidence)
+    finally:
+        if MODEL_PROGRESS_REPORTER:
+            try:MODEL_PROGRESS_REPORTER(model_evidence_id=evidence.record['logical_call_id'], model_evidence_state=evidence.storage_state,
+                **({'model_evidence_error_code': 'MODEL_EVIDENCE_WRITE_FAILED'} if evidence.storage_state != 'recorded' else {}))
+            except Exception:pass
+
+
+def _model_json(prompt: str, *, max_tokens: int, retry_truncated: bool, images, _evidence) -> dict:
     from selection_automation.rule_provider import settings,request_protocol,authoring_output_budget
     from selection_automation.model_stream import read_chat_completion,ModelStreamError
     try:
@@ -143,18 +157,33 @@ def model_json(prompt: str, *, max_tokens: int = 8000, retry_truncated: bool = T
         'Content-Type':'application/json','User-Agent':'selection-workbench/1.0','Accept':'text/event-stream, application/json'})
     started=time.monotonic();started_at=time.time()
     def notify(**fields):
+        for name in ('response_id', 'model_request_id'):
+            if name in fields:
+                identifier = safe_identifier(fields[name], key)
+                if identifier is None:
+                    fields.pop(name)
+                else:
+                    fields[name] = identifier
+        if 'model_usage' in fields:
+            fields['model_usage'] = numeric_usage(fields['model_usage'])
+        _evidence.observe(**fields)
         if MODEL_PROGRESS_REPORTER:
             try:MODEL_PROGRESS_REPORTER(model_started_at=started_at,model_waiting=True,**fields)
             except OSError:pass
-    notify(events=0,characters=0,model_protocol=protocol,model_output_budget=max_tokens)
+    notify(events=0,characters=0,model_protocol=protocol,model_output_budget=max_tokens,
+           model_evidence_id=_evidence.record['logical_call_id'], model_evidence_state=_evidence.storage_state)
     try:
+        if urlparse(endpoint).scheme != 'https':
+            _evidence.observe(model_network={'route':'default_transport','attempt':1,'phase':'connecting'})
         with open_model_url(request, timeout=600, notify=notify) as response:
+            _evidence.http_status(getattr(response, 'status', None) or getattr(response, 'code', None))
             request_id=(getattr(response,'headers',{}) or {}).get('x-request-id','')
             if request_id and re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}',request_id):notify(model_request_id=request_id)
             if protocol=='responses':
                 from selection_automation.responses_stream import read_responses
                 result=read_responses(response,notify,started=started)
             else:result = read_chat_completion(response,notify,started=started)
+            _evidence.observe(**provider_metadata(result))
         if MODEL_PROGRESS_REPORTER:
             try:MODEL_PROGRESS_REPORTER(model_waiting=False,message='模型回答已接收，正在检查完整规则')
             except OSError:pass
@@ -167,6 +196,7 @@ def model_json(prompt: str, *, max_tokens: int = 8000, retry_truncated: bool = T
     except CategoryGenerationError:
         raise
     except urllib.error.HTTPError as error:
+        _evidence.http_status(error.code)
         raise model_http_error(error,key) from None
     except ModelStreamError as error:
         detail=str(error).replace(key,'[密钥已隐藏]')
@@ -646,7 +676,7 @@ def main():
         temporary.replace(args.output)
         report(stage='complete', message='本品类配置已生成并通过检查')
         print(json.dumps({'status':'GENERATED', 'output':str(args.output)}, ensure_ascii=False))
-    except CategoryGenerationError as error:
+    except (CategoryGenerationError, RuleModelEvidenceError) as error:
         previous = last.get('stage', 'input')
         depth = last.get('depth')
         report(stage='error', message=str(error), error_code=error.code,

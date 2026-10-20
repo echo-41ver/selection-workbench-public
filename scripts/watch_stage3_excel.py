@@ -94,12 +94,14 @@ def publisher_phase(base,phase):
 
 
 def source_paths(category_path, base):
+    from selection_automation.selection_delivery import delivery_source_paths
     folder = base / 'stage123'
     frozen = folder / 'export_frozen'
     return [category_path, folder / 'results.jsonl', folder / 'requests.jsonl',
             folder / 'request_intents.jsonl', folder / 'paid_enabled.json',
             base / 'stage12_config.json', base / 'commercial_report.json',
-            *sorted(frozen.glob('*.json*')), *sorted((folder/'codex_reviews').glob('*.jsonl')), *export_code_paths()]
+            *sorted(frozen.glob('*.json*')), *sorted((folder/'codex_reviews').glob('*.jsonl')),
+            *delivery_source_paths(base), *export_code_paths()]
 
 
 def export_code_paths():

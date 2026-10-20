@@ -89,6 +89,38 @@ class ConsoleError(ValueError):
         self.code, self.message, self.status = code, message, status
 
 
+def require_excel_open_association():
+    """Check the user's effective default, without installing or changing it.
+
+    A missing UserChoice key does not imply no default. Query the Shell's ProgID
+    rather than an executable: packaged/COM handlers need not have one.
+    ShellExecute/startfile returning still cannot prove a workbook was opened.
+    """
+    if sys.platform != 'win32':
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        query = ctypes.WinDLL('Shlwapi.dll').AssocQueryStringW
+        query.argtypes = [wintypes.DWORD, ctypes.c_int, wintypes.LPCWSTR,
+                          wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        query.restype = ctypes.c_long
+        value = ctypes.create_unicode_buffer(32768)
+        length = wintypes.DWORD(len(value))
+        # NOFIXUPS | INIT_IGNOREUNKNOWN | NOTRUNCATE: read only, and do not
+        # mistake the generic "Unknown"/Open With fallback for an application.
+        result = query(0x520, 20, '.xlsx', None, value, ctypes.byref(length)) & 0xffffffff
+    except (AttributeError, OSError):
+        raise ConsoleError('EXCEL_ASSOCIATION_CHECK_FAILED',
+                           '无法检查 Windows 的 Excel 文件关联，请使用下载入口，或稍后重试', 500) from None
+    if result == 0x80070483 or (result == 0 and value.value.casefold() in ('', 'unknown')):
+        raise ConsoleError('EXCEL_APPLICATION_REQUIRED',
+                           'Windows 尚未设置 .xlsx 的默认打开程序。请在“设置 → 应用 → 默认应用”中选择已安装的表格程序后重试，或下载文件后选择打开程序', 409)
+    if result != 0:
+        raise ConsoleError('EXCEL_ASSOCIATION_CHECK_FAILED',
+                           f'无法检查 Windows 的 Excel 文件关联（0x{result:08X}），请使用下载入口，或稍后重试', 500)
+
+
 def check_stage3_local_service(provider, root=None):
     """Check connectivity without submitting inference or changing dispatch state."""
     if provider['mode'] != 'local_model':
@@ -575,6 +607,7 @@ class Console:
         try:
             folder=self.root/'runtime'/'web-console'; folder.mkdir(parents=True,exist_ok=True)
             output=folder/f'category-{uuid.uuid4().hex}.json'
+            env['SELECTION_MODEL_DRAFT_CONTEXT'] = output.stem
             self.progress_file=output.with_suffix('.progress.json')
             generated=self.invoke([str(self.root/'scripts/generate_category.py'),'--category-name',body['category_name'],
                 '--amazon-count',str(body['amazon_count']),'--per-keyword',str(body['per_keyword']),'--output',str(output),'--progress-file',str(self.progress_file),
@@ -1154,6 +1187,7 @@ class Console:
             self.refresh_excel(kind)
             path=self.excel_workbook(kind)
         if not path: raise ConsoleError('EXCEL_NOT_READY','当前任务的这份 Excel 尚未生成',404)
+        require_excel_open_association()
         # WPS can launch another process for a path already locked by its first
         # process. Give each open its own finished copy, outside publisher files.
         directory=self.root/'runtime/web-console/opened-excel'

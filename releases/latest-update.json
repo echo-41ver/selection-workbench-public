@@ -1,12 +1,12 @@
 {
   "base_commit": "6146f0ce4727d0e79ea3ab97ca34dfcdb05e9e4c",
   "target_commit": "19757b575e8387706dca7583de326fcee82162e7",
-  "sha256": "221680fafe9d1e02d62a68cd7ab70aa9118e8dc74e5549b7a30058913a7e4dd5",
-  "bytes": 55173,
-  "channel": "public",
-  "changed_files": 6,
+  "sha256": "22b7d8175f8ebe866084229d9271cd0bffbdb3438354f6968bcfeaeccf904e85",
+  "bytes": 59337,
+  "channel": "internal",
+  "changed_files": 7,
   "deleted_files": 0,
   "contains_company_credentials": false,
-  "name": "selection-workbench-update-6146f0c-to-19757b5-public.zip",
-  "url": "https://github.com/echo-41ver/selection-workbench-public/releases/download/incremental-update-19757b5/selection-workbench-update-6146f0c-to-19757b5-public.zip"
+  "name": "selection-workbench-update-6146f0c-to-19757b5-internal.zip",
+  "url": "https://github.com/echo-41ver/selection-workbench-private/releases/download/incremental-update-19757b5/selection-workbench-update-6146f0c-to-19757b5-internal.zip"
 }

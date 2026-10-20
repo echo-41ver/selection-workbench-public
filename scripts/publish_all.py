@@ -97,6 +97,7 @@ def publish(category_path):
         codex_available = any(path.stat().st_size for path in codex_paths)
         database_available=bool(db and db.exists())
         if database_available:
+            from selection_automation.selection_delivery import delivery_source_paths
             paid_marker=base/'stage123'/'paid_enabled.json'
             vision_results=base/'stage123'/'results.jsonl'
             database_before = database_signature([db,db.with_name(db.name+'-wal')])
@@ -106,7 +107,8 @@ def publish(category_path):
                                 ROOT / 'src' / 'selection_automation' / 'rules.py',
                                 ROOT / 'src' / 'selection_automation' / 'vision.py',
                                 ROOT / 'scripts' / 'export_incremental_layer123_excel.py',
-                                ROOT / 'src/selection_automation/codex_visual_review.py', *codex_paths])
+                                ROOT / 'src/selection_automation/codex_visual_review.py', *codex_paths,
+                                *delivery_source_paths(base)])
             if before != prior.get('analysis'):
                 try:
                     files_ready=all((frozen/name).exists() for name in (

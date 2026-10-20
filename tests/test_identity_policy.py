@@ -254,6 +254,54 @@ def test_curtain_print_cannot_inherit_towel_pattern_variation():
         compile_policy(c)
 
 
+def curtain_local_color_policy():
+    c = curtain_policy()
+    c['stage3']['identity_policy']['features'].append({
+        'id': 'print_color', 'label': '印花局部配色', 'region': 'decoration',
+        'effects': ['color'], 'role': 'variant', 'preserves': ['print'],
+        'evidence': 'image', 'scope': '相同印花元素及版式下的局部配色',
+        'rule': '印花元素和排列对应时仅允许局部配色不同，不允许改变主体印花版式',
+        'modules': ['appearance'], 'required_visual': False})
+    return c
+
+
+def test_curtain_local_color_keeps_print_without_requiring_unrelated_opacity():
+    c = compile_policy(curtain_local_color_policy())
+    validate(c)
+    fs = {f['id']: f for f in c['stage3']['identity_policy']['features']}
+    assert fs['print_color']['preserves'] == ['print']
+    assert fs['opacity']['role'] == 'identity'
+    assert not fs['opacity']['required_visual']
+    assert text_gate(c, 'clear curtain', 'opaque curtain')['excluded']
+    assert not text_gate(c, 'clear curtain', 'curtain')['excluded']
+
+
+@pytest.mark.parametrize('feature', ['print', 'opacity'])
+def test_curtain_local_color_does_not_relax_global_identity_boundaries(feature):
+    c = curtain_local_color_policy()
+    fs = {f['id']: f for f in c['stage3']['identity_policy']['features']}
+    fs[feature].update(role='variant', required_visual=False, preserves=['body_type'])
+    with pytest.raises(ValueError):
+        compile_policy(c)
+
+
+def test_curtain_local_color_cannot_drop_its_print_preservation_condition():
+    c = curtain_local_color_policy()
+    c['stage3']['identity_policy']['features'][-1]['preserves'] = ['body_type']
+    with pytest.raises(ValueError, match='print_color.*body/surface_pattern'):
+        compile_policy(c)
+
+
+@pytest.mark.parametrize('missing', ['weave', 'band'])
+def test_towel_decoration_still_requires_each_reviewed_preservation_condition(missing):
+    c = towel_policy()
+    fs = {f['id']: f for f in c['stage3']['identity_policy']['features']}
+    fs['motif']['preserves'].remove(missing)
+    effect = 'body/body_weave' if missing == 'weave' else 'decoration/layout'
+    with pytest.raises(ValueError, match=effect):
+        compile_policy(c)
+
+
 def test_old_unreviewed_policy_cannot_be_relabelled_as_v2():
     c = category()
     c['stage3']['identity_policy']['version'] = 'category-identity-policy-v1'

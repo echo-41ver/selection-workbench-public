@@ -72,19 +72,28 @@ def setup(root, n=2):
     base=root/'runs/fixture'
     (base/'amazon').mkdir(parents=True)
     (base/'temu/union').mkdir(parents=True)
-    cat={'category_key':'fixture','category_name_zh':'测试商品','commercial':{'same_limit':n},'stage3':{'modules':{'design':100}}}
+    cat={'category_key':'fixture','category_name_zh':'测试商品','commercial':{'same_limit':n},'stage3':{'modules':{'design':100}},'amazon':{'target_count':3}}
     amazon=[{'asin':a,'title':a+' title','price_usd':12,'product_url':'https://www.amazon.com/dp/'+a,
              'monthly_sales_text':'100+ bought in past month','rating':4.5,'review_count':10,
              'specifications':[{'label':'材质','value':'棉'}]} for a in ['A1','A2','A3']]
-    (base/'amazon/amazon_frontend_latest.json').write_text(json.dumps({'records':amazon,'observed_at':'2026-10-14T01:00:00Z'}),encoding='utf-8')
+    for rank,row in enumerate(amazon,1):row['rank']=rank
+    (base/'amazon/amazon_frontend_latest.json').write_text(json.dumps({'records':amazon,'status':'COMPLETE','observed_at':'2026-10-14T01:00:00Z'}),encoding='utf-8')
     temu=[{'goods_id':str(g),'title':'same product','price_usd':4,'rating':4.7,'review_count':0,
            'product_url':'https://www.temu.com/goods.html?goods_id='+str(g),'sales_text':'1K+ sold',
            'price_range':{'min':3,'max':8,'currency':'USD','basis':'页面明确区间'},
            'specifications':{'材质':'棉'},'long_detail':'证据'*18000} for g in [1,2]]
     (base/'temu/union/products.jsonl').write_text('\n'.join(json.dumps(p,ensure_ascii=False) for p in temu),encoding='utf-8')
+    worker=base/'temu/workers/worker-01/session/products.jsonl';worker.parent.mkdir(parents=True)
+    worker.write_text((base/'temu/union/products.jsonl').read_text('utf-8'),encoding='utf-8')
+    (base/'category.json').write_text(json.dumps(cat),encoding='utf-8')
+    (base/'temu/keyword_plan.json').write_text(json.dumps({'finalized':True,'keywords':[{'query':'fixture'}]}),encoding='utf-8')
+    (base/'temu/supervisors').mkdir()
+    (base/'temu/supervisors/assignments.json').write_text(json.dumps({'jobs':[{'query':'fixture','complete':True,'sort_passes':{'sales':{'complete':True},'recent':{'complete':True}}}]}),encoding='utf-8')
+    from watch_temu_union import snapshot_signature
+    (base/'temu/union/watch_state.json').write_text(json.dumps({'status':'PUBLISHED','signature':snapshot_signature([worker,base/'category.json'])}),encoding='utf-8')
     products=[]
     for a,gids,state,pending in [('A1',['1'],'SAMPLE_PASS',0),('A2',['1','2'],'SAMPLE_PASS',0),('A3',[],'UNKNOWN',2)]:
-        products.append({'asin':a,'confirmed_goods_ids':gids,'match':{'confirmed':len(gids),'state':state,'pending':pending,'possible':0},
+        products.append({'asin':a,'confirmed_goods_ids':gids,'match':{'confirmed':len(gids),'state':state,'pending':pending,'possible':0,'expected':2},
                          'confirmed_pairs':[{'goods_id':g,'state':'确认同款','reason':'fixture visual fact','model':'fixture-model'} for g in gids]})
     return cat,{'products':products,'market':{},'as_of':'2026-10-14T02:00:00Z'}
 
@@ -92,20 +101,107 @@ def setup(root, n=2):
 def test_strict_threshold_and_unfinished_evidence(tmp_path):
     cat,report=setup(tmp_path)
     data=build_delivery(tmp_path,cat,report)
-    assert [p['asin'] for p in data['products']]==['A1','A3']
+    assert [p['asin'] for p in data['products']]==['A1']
     assert [(p['asin'],p['goods_id']) for p in data['pairs']]==[('A1','1'),('A2','1'),('A2','2')]
-    assert data['products'][1]['advice']['conclusion']=='待完成同款核验'
-    assert data['products'][1]['advice']['confidence']=='未知'
+    assert data['progress'][2]['advice']['conclusion']=='待完成同款核验'
+    assert data['progress'][2]['advice']['confidence']=='未知'
+    assert data['progress'][2]['analysis_status']=='分析未完成'
     assert data['products'][0]['amazon']['price']['min'] is None
+
+
+def test_zero_unexecuted_analysis_is_progress_not_selection(tmp_path):
+    cat,report=setup(tmp_path)
+    report['products']=[{'asin':'A1','confirmed_goods_ids':[],
+        'match':{'state':'UNKNOWN','expected':0,'confirmed':0,'similar':0,'different':0,
+                 'possible':0,'pending':0,'unanalysed':0}}]
+    assignments=tmp_path/'runs/fixture/temu/supervisors/assignments.json'
+    assignments.unlink()
+    delivered=export(tmp_path,cat,report)
+    book=load_workbook(delivered['固定查看副本'])
+    assert book['选品结论'].max_row==4 and delivered['入选Amazon数']==0
+    progress=book['采集分析进度'];headers=[cell.value for cell in progress[4]]
+    assert progress['A5'].value=='A1'
+    assert progress['D5'].value=='采集未完成' and progress['E5'].value=='分析未执行'
+    assert '零计数不表示零竞争' in progress['F5'].value
+    assert [progress.cell(5,headers.index(h)+1).value for h in
+            ('同款数','类似款数','不同款数','无法判断数','未分析数')]==[0,0,0,0,0]
+    assert '零计数不表示已核验或零竞争' in book['选品结论']['A2'].value
+    book.close()
+
+
+@pytest.mark.parametrize('missing',['amazon','details','plan','sales','recent','union','worker'])
+def test_incomplete_source_cannot_publish_pass_as_selection(tmp_path,missing):
+    cat,report=setup(tmp_path);base=tmp_path/'runs/fixture'
+    if missing in ('amazon','details'):
+        path=base/'amazon/amazon_frontend_latest.json';data=json.loads(path.read_text('utf-8'))
+        if missing=='amazon':data['status']='PARTIAL'
+        else:data['missing_details']=['A1']
+    elif missing=='plan':
+        path=base/'temu/keyword_plan.json';data=json.loads(path.read_text('utf-8'));data['finalized']=False
+    elif missing in ('sales','recent'):
+        path=base/'temu/supervisors/assignments.json';data=json.loads(path.read_text('utf-8'))
+        data['jobs'][0]['sort_passes'][missing]['complete']=False
+    elif missing=='union':
+        path=base/'temu/union/watch_state.json';data=json.loads(path.read_text('utf-8'));data['signature']='stale'
+    else:
+        (base/'temu/workers/worker-01/session/products.jsonl').unlink();path=None
+    if path:path.write_text(json.dumps(data),encoding='utf-8')
+    result=build_delivery(tmp_path,cat,report)
+    assert result['products']==[] and result['collection']['complete'] is False
+    assert result['progress'][0]['analysis_status']=='本次采样核验完成'
+    assert len(result['pairs'])==3  # Saved final relations remain available in a partial export.
+
+
+@pytest.mark.parametrize('state,expected,pending,possible,label',[
+    ('UNKNOWN',0,0,0,'分析未执行'),('UNKNOWN',2,1,0,'分析未完成'),
+    ('UNKNOWN',2,0,1,'待补充证据'),('UNKNOWN',2,0,0,'分析状态未确认'),
+    ('SAMPLE_PASS',2,1,0,'分析未完成'),('SAMPLE_PASS',2,0,1,'待补充证据')])
+def test_unfinished_analysis_never_qualifies_from_zero_counts(tmp_path,state,expected,pending,possible,label):
+    cat,report=setup(tmp_path);report['products']=report['products'][:1]
+    report['products'][0]['match'].update(state=state,expected=expected,pending=pending,possible=possible)
+    result=build_delivery(tmp_path,cat,report)
+    assert result['collection']['complete'] and result['products']==[]
+    assert result['progress'][0]['analysis_status']==label
+
+
+def test_existing_screening_and_strict_limit_are_unchanged(tmp_path):
+    cat,report=setup(tmp_path)
+    report['products'][0]['match'].update(screened_out=1,unanalysed=1)
+    result=build_delivery(tmp_path,cat,report)
+    assert [p['asin'] for p in result['products']]==['A1']
+    assert result['products'][0]['same_count']==1 and result['limit']==2
+    # Screened-out vectors are not pending analysis; an exact-limit item remains excluded.
+    assert result['progress'][1]['same_count']==2
+
+
+def test_publication_tracks_completion_revisions_without_heartbeat(tmp_path):
+    from watch_stage3_excel import source_paths,signature
+    from selection_automation.selection_delivery import delivery_source_paths
+    cat,report=setup(tmp_path);base=tmp_path/'runs/fixture'
+    paths=delivery_source_paths(base)
+    assert base/'temu/keyword_plan.json' in paths
+    assert base/'temu/supervisors/assignments.json' in paths
+    assert base/'temu/union/watch_state.json' not in paths
+    before=signature(source_paths(base/'category.json',base))
+    path=base/'temu/supervisors/assignments.json'
+    data=json.loads(path.read_text('utf-8'));data['jobs'][0]['complete']=False
+    path.write_text(json.dumps(data),encoding='utf-8')
+    assert signature(source_paths(base/'category.json',base))!=before
+    before=signature(source_paths(base/'category.json',base))
+    path=base/'temu/union/watch_state.json'
+    data=json.loads(path.read_text('utf-8'));data['heartbeat_at']=1
+    path.write_text(json.dumps(data),encoding='utf-8')
+    assert signature(source_paths(base/'category.json',base))==before
 
 
 def test_reopen_focused_excel_and_full_fields(tmp_path):
     cat,report=setup(tmp_path)
     delivered=export(tmp_path,cat,report)
     book=load_workbook(delivered['固定查看副本'],read_only=False,data_only=False)
-    assert book.sheetnames==['选品结论','同款商品明细','商品完整字段']
-    assert book['选品结论'].max_row==6 and book['同款商品明细'].max_row==7
-    assert book['选品结论']['A5'].value=='A1' and book['选品结论']['A6'].value=='A3'
+    assert book.sheetnames==['选品结论','采集分析进度','同款商品明细','商品完整字段']
+    assert book['选品结论'].max_row==5 and book['同款商品明细'].max_row==7
+    assert book['选品结论']['A5'].value=='A1'
+    assert book['采集分析进度']['A7'].value=='A3' and book['采集分析进度']['E7'].value=='分析未完成'
     detail=book['同款商品明细'];headers=[c.value for c in detail[4]]
     assert detail.cell(5,headers.index('TEMU最低价(USD)')+1).value==3
     assert detail.cell(5,headers.index('TEMU最高价(USD)')+1).value==8
@@ -139,9 +235,10 @@ def test_summary_has_five_counts_and_visible_collected_parameters(tmp_path):
     delivered=export(tmp_path,cat,report)
     book=load_workbook(delivered['固定查看副本'])
     sheet=book['选品结论'];headers=[cell.value for cell in sheet[4]]
-    assert [sheet.cell(row,headers.index('同款数')+1).value for row in (5,6,7)]==[1,0,0]
+    assert [sheet.cell(row,headers.index('同款数')+1).value for row in (5,6)]==[1,0]
     assert sheet.cell(6,headers.index('不同款数')+1).value==2
-    assert sheet.cell(7,headers.index('未分析数')+1).value==2
+    progress=book['采集分析进度'];progress_headers=[cell.value for cell in progress[4]]
+    assert progress.cell(7,progress_headers.index('未分析数')+1).value==2
     assert all(h in headers for h in ['类似款数','无法判断数','Amazon规格参数','Amazon页面销量','Amazon评分'])
     assert not sheet.column_dimensions[get_column_letter(headers.index('Amazon评分')+1)].hidden
     assert len(book['同款商品明细'].cell(5,12-1).value)<=140
@@ -175,7 +272,8 @@ def test_combined_same_and_similar_threshold_and_embedded_picture_order(tmp_path
     prefix=['Amazon ASIN','Amazon标题','Amazon图片','TEMU图片','同款+类似款数量','Amazon商品链接','TEMU商品链接']
     assert [c.value for c in book['同款商品明细'][4]][:7]==prefix
     assert [c.value for c in book['选品结论'][4]][:3]==prefix[:3]
-    assert len(book['选品结论']._images)==3
+    assert len(book['选品结论']._images)==2
+    assert len(book['采集分析进度']._images)==3
     assert {(image.anchor._from.col) for image in book['选品结论']._images}=={2}
     assert len(book['同款商品明细']._images)==8
     assert {(image.anchor._from.col) for image in book['同款商品明细']._images}=={2,3}

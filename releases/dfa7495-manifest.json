@@ -1,12 +1,18 @@
 {
   "source_commit": "dfa7495089d3c5eae8327e2e9d0ede8eed793e54",
-  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/deployment-dfa7495",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-private/releases/tag/deployment-dfa7495",
   "artifacts": [
     {
-      "name": "selection-workbench-dfa7495-public.zip",
-      "bytes": 537460778,
-      "sha256": "3820be7007126be90990d6f66cc809182e7ded6bd1bfa9c19661f895bc0349ee",
+      "name": "selection-workbench-dfa7495-internal.zip",
+      "bytes": 537461771,
+      "sha256": "ac8ce16eb4fcd38923e0ec5bf3b875dc39a35cc76276eebb72ba68d0eea0e94d",
       "contains_company_credentials": false
+    },
+    {
+      "name": "selection-workbench-dfa7495-full-company.zip",
+      "bytes": 537462450,
+      "sha256": "4cb8f4e83dcb4dbcff15fa7f8b297448cf30bfda01b5ed74b74b6b8970ece063",
+      "contains_company_credentials": true
     }
   ]
 }

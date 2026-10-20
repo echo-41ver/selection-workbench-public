@@ -1,12 +1,18 @@
 {
   "source_commit": "df1cd5d37bdb1ce4a753fe2e2f185fc49a73178c",
-  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/full-deployment-df1cd5d",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-private/releases/tag/full-deployment-df1cd5d",
   "artifacts": [
     {
-      "name": "selection-workbench-df1cd5d-public.zip",
-      "bytes": 1384873706,
-      "sha256": "eb82a201f4aa44ca56e896823dd3cebdb455e45d0cf2d1faf19fcbd06ecf4664",
+      "name": "selection-workbench-df1cd5d-internal.zip",
+      "bytes": 1384874025,
+      "sha256": "7910d665f2380be66d7d43f2b2183ec285cc7678d45e750f8d254abd15f8e86a",
       "contains_company_credentials": false
+    },
+    {
+      "name": "selection-workbench-df1cd5d-full-company.zip",
+      "bytes": 1384874635,
+      "sha256": "2b91b2e43ecb047483906dc3e20ff1543dfee06aa49ec9aa1cfae08eadff5945",
+      "contains_company_credentials": true
     }
   ]
 }

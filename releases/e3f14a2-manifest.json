@@ -1,12 +1,18 @@
 {
   "source_commit": "e3f14a2c523522c8079ac3002cd7521c98dffd8a",
-  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/deployment-e3f14a2",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-private/releases/tag/deployment-e3f14a2",
   "artifacts": [
     {
-      "name": "selection-workbench-e3f14a2-public.zip",
-      "bytes": 1389315353,
-      "sha256": "f9f3a4aa949542b500f797dce9c8edf522ec2abb10e52cd4dea5ff6a936e2ea8",
+      "name": "selection-workbench-e3f14a2-internal.zip",
+      "bytes": 1389315672,
+      "sha256": "80bd324c667d9e163d98fcfd94e6de7ee709dbe8ff400f28e66ad9451df16de0",
       "contains_company_credentials": false
+    },
+    {
+      "name": "selection-workbench-e3f14a2-full-company.zip",
+      "bytes": 1389316283,
+      "sha256": "7056fcb1d6e7131c44c2ffbb1b67605fcb7c5a3ee07332fb05e31ff6d47f7b8a",
+      "contains_company_credentials": true
     }
   ]
 }

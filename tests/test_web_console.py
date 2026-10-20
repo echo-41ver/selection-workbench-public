@@ -685,6 +685,7 @@ def test_local_http_rejects_cross_origin_and_serves_status(tmp_path,monkeypatch)
 
 
 def test_four_excel_buttons_use_current_run_and_newest_view(tmp_path,monkeypatch):
+    monkeypatch.setattr(web,'require_excel_open_association',lambda:None)
     console=web.Console(tmp_path);console.key='drill_run'
     monkeypatch.setattr(console,'owner',lambda:None)
     base=tmp_path/'runs/drill_run';excel=base/'excel';excel.mkdir(parents=True)
@@ -717,6 +718,7 @@ def test_four_excel_buttons_use_current_run_and_newest_view(tmp_path,monkeypatch
 
 
 def test_finished_run_excel_button_opens_published_file_without_refresh(tmp_path,monkeypatch):
+    monkeypatch.setattr(web,'require_excel_open_association',lambda:None)
     console=web.Console(tmp_path);console.key='drill_run'
     monkeypatch.setattr(console,'owner',lambda:None)
     base=tmp_path/'runs/drill_run';excel=base/'excel';excel.mkdir(parents=True)
@@ -737,6 +739,7 @@ def test_finished_run_excel_button_opens_published_file_without_refresh(tmp_path
 
 
 def test_excel_http_download_and_open_only_allow_current_task(tmp_path,monkeypatch):
+    monkeypatch.setattr(web,'require_excel_open_association',lambda:None)
     console=web.Console(tmp_path);console.key='drill_run'
     monkeypatch.setattr(console,'owner',lambda:None)
     base=tmp_path/'runs/drill_run';excel=base/'excel';excel.mkdir(parents=True)
@@ -937,6 +940,7 @@ def test_completed_stage3_uses_configured_key_without_paid_request(tmp_path,monk
 
 
 def test_repeated_excel_open_uses_independent_copies(tmp_path,monkeypatch):
+    monkeypatch.setattr(web,'require_excel_open_association',lambda:None)
     console=web.Console(tmp_path)
     source=tmp_path/'runs/fixture/excel/产品_第一二三层_查看快照_20261005.xlsx'
     source.parent.mkdir(parents=True)
@@ -952,6 +956,73 @@ def test_repeated_excel_open_uses_independent_copies(tmp_path,monkeypatch):
     assert opened[0].read_bytes()==b'first-published-workbook'
     assert opened[1].read_bytes()==source.read_bytes()
     assert all(path.parent==tmp_path/'runtime/web-console/opened-excel' for path in opened)
+
+
+@pytest.mark.parametrize('progid',['ET.Xlsx.6','AppXSpreadsheetHandler'])
+def test_excel_effective_association_accepts_desktop_and_packaged_handlers(monkeypatch,progid):
+    import ctypes
+    calls=[]
+    class Query:
+        def __call__(self,*args):
+            calls.append(args[:4])
+            args[4].value=progid
+            return 0
+    monkeypatch.setattr(web.sys,'platform','win32')
+    monkeypatch.setattr(ctypes,'WinDLL',lambda name:SimpleNamespace(AssocQueryStringW=Query()),raising=False)
+    assert web.require_excel_open_association() is None
+    assert calls==[(0x520,20,'.xlsx',None)]
+
+
+@pytest.mark.parametrize('result,progid,code',[
+    (-2147023741,'','EXCEL_APPLICATION_REQUIRED'), # HRESULT_FROM_WIN32(ERROR_NO_ASSOCIATION)
+    (0,'Unknown','EXCEL_APPLICATION_REQUIRED'),
+    (0,'','EXCEL_APPLICATION_REQUIRED'),
+    (-2147024891,'','EXCEL_ASSOCIATION_CHECK_FAILED'), # E_ACCESSDENIED is not proof of no app
+    (1,'','EXCEL_ASSOCIATION_CHECK_FAILED'),
+])
+def test_excel_association_missing_and_query_failure_are_distinct(monkeypatch,result,progid,code):
+    import ctypes
+    class Query:
+        def __call__(self,*args):
+            args[4].value=progid
+            return result
+    monkeypatch.setattr(web.sys,'platform','win32')
+    monkeypatch.setattr(ctypes,'WinDLL',lambda name:SimpleNamespace(AssocQueryStringW=Query()),raising=False)
+    with pytest.raises(web.ConsoleError) as exc:
+        web.require_excel_open_association()
+    assert exc.value.code==code
+    assert exc.value.status==(409 if code=='EXCEL_APPLICATION_REQUIRED' else 500)
+
+
+def test_excel_association_api_load_failure_is_not_success(monkeypatch):
+    import ctypes
+    monkeypatch.setattr(web.sys,'platform','win32')
+    def unavailable(name):raise OSError('unavailable')
+    monkeypatch.setattr(ctypes,'WinDLL',unavailable,raising=False)
+    with pytest.raises(web.ConsoleError) as exc:
+        web.require_excel_open_association()
+    assert exc.value.code=='EXCEL_ASSOCIATION_CHECK_FAILED'
+
+
+def test_excel_association_check_keeps_non_windows_behavior(monkeypatch):
+    import ctypes
+    monkeypatch.setattr(web.sys,'platform','linux')
+    monkeypatch.setattr(ctypes,'WinDLL',lambda name:pytest.fail('not a Windows machine'),raising=False)
+    assert web.require_excel_open_association() is None
+
+
+def test_missing_excel_association_does_not_launch_shell_or_change_download(tmp_path,monkeypatch):
+    console=web.Console(tmp_path)
+    source=tmp_path/'published.xlsx';source.write_bytes(b'published-workbook')
+    monkeypatch.setattr(console,'excel_workbook',lambda kind:source)
+    def missing():raise web.ConsoleError('EXCEL_APPLICATION_REQUIRED','请选择默认表格程序',409)
+    monkeypatch.setattr(web,'require_excel_open_association',missing)
+    monkeypatch.setattr(web.os,'startfile',lambda path:pytest.fail('must not launch Open With'),raising=False)
+    with pytest.raises(web.ConsoleError) as exc:
+        console.open_excel('amazon')
+    assert exc.value.code=='EXCEL_APPLICATION_REQUIRED'
+    assert console.excel_workbook('amazon').read_bytes()==b'published-workbook'
+    assert not (tmp_path/'runtime/web-console/opened-excel').exists()
 
 
 def test_stage3_button_authorizes_only_current_active_run(tmp_path,monkeypatch):

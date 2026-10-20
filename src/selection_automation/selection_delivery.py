@@ -225,18 +225,80 @@ def short_reason(value,limit=140):
     return text if len(text)<=limit else text[:limit-1]+'…'
 
 
+def delivery_source_paths(base):
+    """Stable source revisions; exclude the union watcher's periodic heartbeat."""
+    return [base/'amazon/amazon_frontend_latest.json',base/'temu/keyword_plan.json',
+            base/'temu/supervisors/assignments.json',base/'temu/union/products.jsonl',
+            base/'market/geekbi.json',base/'category.json',
+            *sorted((base/'temu/workers').glob('*/*/products.jsonl')),
+            *sorted((base/'temu/workers').glob('*/*/unclassified_products.jsonl'))]
+
+
+def collection_progress(base, category, source):
+    """Read source completion evidence without relying on the final publish status."""
+    from watch_temu_union import snapshot_signature
+    reasons=[]
+    rows=source.get('records',[])
+    target=(category.get('amazon') or {}).get('target_count')
+    if (type(target) is not int or len(rows)!=target
+            or len({r.get('asin') for r in rows})!=target
+            or sorted(r.get('rank',0) for r in rows)!=list(range(1,target+1))
+            or source.get('status')!='COMPLETE' or source.get('missing_details')):
+        reasons.append('Amazon采集未完成')
+    plan=read_json(base/'temu/keyword_plan.json')
+    assignments=read_json(base/'temu/supervisors/assignments.json')
+    queries={r.get('query') for r in plan.get('keywords',[]) if isinstance(r,dict) and r.get('query')}
+    jobs=assignments.get('jobs',[])
+    def complete(job):
+        passes=job.get('sort_passes')
+        return (job.get('complete') is True and (passes is None or
+            all((passes.get(order) or {}).get('complete') is True for order in ('sales','recent'))))
+    if (plan.get('finalized') is not True or not queries or not jobs
+            or not queries.issubset({job.get('query') for job in jobs})
+            or not all(complete(job) for job in jobs)):
+        reasons.append('TEMU关键词采集未完成')
+    state=read_json(base/'temu/union/watch_state.json')
+    snapshots=sorted([*(base/'temu/workers').glob('*/*/products.jsonl'),
+                      *(base/'temu/workers').glob('*/*/unclassified_products.jsonl')])
+    provider=base/'market/geekbi.json';category_path=base/'category.json'
+    inputs=[*snapshots,*([provider] if provider.is_file() else []),
+            *([category_path] if category_path.is_file() else [])]
+    try:
+        current=bool(snapshots and state.get('status')=='PUBLISHED'
+                     and state.get('signature')==snapshot_signature(inputs)
+                     and (base/'temu/union/products.jsonl').is_file())
+    except OSError:
+        current=False
+    if not current:reasons.append('TEMU汇总尚未确认当前采集快照')
+    return {'complete':not reasons,'label':'本次采集已完成' if not reasons else '采集未完成',
+            'reason':'；'.join(reasons) or '本次配置范围的Amazon与TEMU采集已完成；不代表全站覆盖'}
+
+
+def analysis_progress(match):
+    """Only the existing sampled pass can qualify; zero unexecuted pairs cannot."""
+    if not match.get('expected'):
+        return False,'分析未执行','尚无可核验的TEMU候选来源，零计数不表示零竞争'
+    if match.get('pending'):
+        return False,'分析未完成','仍有候选尚未完成分析'
+    if match.get('possible'):
+        return False,'待补充证据','仍有候选无法判断'
+    if match.get('state')=='SAMPLE_PASS':
+        return True,'本次采样核验完成','本次采样已完成核验；不代表TEMU全站数量'
+    if match.get('state')=='FAIL':
+        return False,'未通过数量门槛','同款与类似款数量未通过原有门槛'
+    return False,'分析状态未确认','现有报告尚未形成可交付的采样核验结论'
+
+
 def build_delivery(root, category, report):
     root = Path(root)
     base = root / 'runs' / category['category_key']
     limit = settings(category.get('commercial'))['same_limit']
     source = read_json(base / 'amazon/amazon_frontend_latest.json')
     amazon = {str(r['asin']): r for r in source.get('records', [])}
-    # Strictly less than N, including historical runs whose older operator was <=.
-    selected = [p for p in report.get('products', []) if p['match']['confirmed']+p['match'].get('similar',0) < limit]
+    collection=collection_progress(base,category,source)
     needed = {str(g) for p in report.get('products',[]) for g in p.get('confirmed_goods_ids', [])+p.get('similar_goods_ids',[])}
     temu = {str(r['goods_id']): r for r in jsonl(base / 'temu/union/products.jsonl') if str(r['goods_id']) in needed}
-    products, pairs = [], []
-    selected_ids={str(entry['asin']) for entry in selected}
+    products, pairs, progress = [], [], []
     for entry in report.get('products',[]):
         asin = str(entry['asin'])
         if asin not in amazon:
@@ -254,7 +316,12 @@ def build_delivery(root, category, report):
                 'advice': advice, 'temu_goods_ids': gids}
         if len(same_ids)!=entry['match']['confirmed'] or len(similar_ids)!=entry['match'].get('similar',0):
             raise ValueError('同款或类似款数量与去重商品ID不一致，拒绝发布')
-        if asin in selected_ids:products.append(item)
+        analysed,analysis_label,analysis_reason=analysis_progress(entry['match'])
+        item.update(collection_status=collection['label'],analysis_status=analysis_label,
+                    status_reason=collection['reason']+'；'+analysis_reason)
+        progress.append(item)
+        # Keep the original strict threshold, including historical <= runs.
+        if collection['complete'] and analysed and item['same_count']<limit:products.append(item)
         evidence = {str(p['goods_id']): p for p in entry.get('confirmed_pairs', [])+entry.get('similar_pairs',[])}
         for gid in gids:
             pairs.append({'asin': asin, 'goods_id': gid, 'amazon': card,
@@ -262,6 +329,6 @@ def build_delivery(root, category, report):
                           'amazon_raw': raw, 'temu_raw': temu.get(gid), 'same_count': len(gids),
                           'relation':'相似款' if gid in similar_ids else '确认同款',
                           'advice': advice, 'evidence': evidence.get(gid, {})})
-    return {'products': products, 'pairs': pairs, 'limit': limit,
+    return {'products': products, 'pairs': pairs, 'progress':progress,'collection':collection,'limit': limit,
             'category_name': category['category_name_zh'], 'as_of': report.get('as_of'),
             'amazon_count': len(amazon), 'excluded': len(amazon)-len(products)}

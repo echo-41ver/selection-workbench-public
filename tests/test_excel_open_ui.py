@@ -29,10 +29,13 @@ CODE
  if(requests!==1)throw Error('duplicate open request');
  resolveRequest({ok:true,json:async()=>({ok:true,filename:'最新.xlsx',updated_at:1000})});
  await pending;
- if(!$('excel-open-status').textContent.includes('已交给本机表格程序打开')||buttons.get('layer123').disabled)throw Error('no success feedback');
+ if(!$('excel-open-status').textContent.includes('已向 Windows 发送打开请求')||!$('excel-open-status').textContent.includes('选择应用')||buttons.get('layer123').disabled)throw Error('no accurate dispatch feedback');
  fetch=async()=>({ok:false,json:async()=>({error:{message:'本机打开失败'}})});
  await openExcel('layer123');
  if(!$('excel-open-status').textContent.includes('下载最新 Excel')||$('excel-download').hidden)throw Error('missing failure fallback');
+ fetch=async()=>({ok:false,json:async()=>({error:{code:'EXCEL_APPLICATION_REQUIRED',message:'Windows 尚未设置 .xlsx 的默认打开程序'}})});
+ await openExcel('layer123');
+ if(!$('excel-open-status').textContent.includes('尚未设置')||$('excel-download').hidden||$('excel-download').href!=='/api/excel/layer123')throw Error('missing association fallback');
  fetch=async()=>{const error=Error('aborted');error.name='AbortError';throw error;};
  await openExcel('layer123');
  if(!$('excel-open-status').textContent.includes('超时')||buttons.get('layer123').disabled)throw Error('timeout did not recover');

@@ -1,12 +1,18 @@
 {
   "source_commit": "ea524c867177c638b58190217c0ef5abcbac3042",
-  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/full-deployment-ea524c8",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-private/releases/tag/full-deployment-ea524c8",
   "artifacts": [
     {
-      "name": "selection-workbench-ea524c8-public.zip",
-      "bytes": 1384869620,
-      "sha256": "f85f82eb47bc1a71a324fbf7f0401a72a2d817d4c95298e620024e04b02e523e",
+      "name": "selection-workbench-ea524c8-internal.zip",
+      "bytes": 1384869940,
+      "sha256": "1f25790b1ac77cf2ad7ebf387d978688e40f940e94e47d273a93602c0ca2e886",
       "contains_company_credentials": false
+    },
+    {
+      "name": "selection-workbench-ea524c8-full-company.zip",
+      "bytes": 1384870550,
+      "sha256": "7b06197853d034da1df40c63afe4750686f24b877d0c9ddf106b1252d5b48e4f",
+      "contains_company_credentials": true
     }
   ]
 }

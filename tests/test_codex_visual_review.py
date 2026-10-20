@@ -349,7 +349,8 @@ def test_simple_excel_uses_api_success_unless_complete_recheck_authorized(tmp_pa
     report=current_report(tmp_path,cat)
     assert report['products'][0]['match']['confirmed']==int(with_api and not replace_api)
     output=exporter.export(tmp_path/'category.json','layer123')
-    book=load_workbook(output['固定查看副本']);sheet=book['选品结论']
+    book=load_workbook(output['固定查看副本']);sheet=book['采集分析进度']
+    assert book['选品结论'].max_row==4  # This fixture does not claim source collection completed.
     headers=[c.value for c in sheet[4]]
     assert sheet.cell(5,headers.index('Amazon ASIN')+1).value=='A'
     assert sheet.cell(5,headers.index('同款数')+1).value==int(with_api and not replace_api)

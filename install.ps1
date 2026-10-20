@@ -19,6 +19,68 @@ function Checked([string]$Exe, [string[]]$Arguments) {
         throw "安装命令失败: $Exe (exit $LASTEXITCODE)"
     }
 }
+function New-DeploymentInstallerLog {
+    param([ValidatePattern('^[a-z0-9][a-z0-9.-]*$')][string]$Name)
+    $directory = Join-Path $root 'runtime\installer-logs'
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    return Join-Path $directory ($Name + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss-ffff') + '-' + [guid]::NewGuid().ToString('N') + '.log')
+}
+function Invoke-DeploymentInstaller {
+    param([string]$Exe, [string[]]$Arguments, [int[]]$SuccessExitCodes = @(0), [string]$InstallerLog, [switch]$Elevate)
+    $directory = [IO.Path]::GetFullPath((Join-Path $root 'runtime\installer-logs'))
+    if ($InstallerLog) {
+        $InstallerLog = [IO.Path]::GetFullPath($InstallerLog)
+        if (-not $InstallerLog.StartsWith(($directory.TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase)) {
+            throw '安装器日志路径超出本项目日志目录。'
+        }
+    }
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $recordPath = Join-Path $directory ('process-' + [guid]::NewGuid().ToString('N') + '.json')
+    # Deliberately exclude arguments, environment and arbitrary exception messages.
+    $record = @{ executable = [IO.Path]::GetFileName($Exe); exit_code = $null; exit_code_available = $false;
+        succeeded = $false; reboot_required = $false; started_at = (Get-Date).ToUniversalTime().ToString('o');
+        process_id = $null; process_started_at = $null;
+        installer_log_path = $InstallerLog; installer_log_exists = $false; process_record_path = $recordPath }
+    $process = $null
+    try {
+        $launch = @{ FilePath = $Exe; ArgumentList = $Arguments; WindowStyle = 'Hidden'; PassThru = $true; ErrorAction = 'Stop' }
+        if ($Elevate) { $launch.Verb = 'RunAs' }
+        $process = Start-Process @launch
+        # Keep the native handle alive before waiting. A Process returned only
+        # after Start-Process -Wait can lose its usable ExitCode on Windows PS5.
+        $nativeHandle = $process.Handle
+        if ($nativeHandle -eq [IntPtr]::Zero) { throw '无法取得安装器进程句柄。' }
+        try {
+            if ($null -ne $process.Id) { $record.process_id = [int]$process.Id }
+            if ($null -ne $process.StartTime) { $record.process_started_at = $process.StartTime.ToUniversalTime().ToString('o') }
+        } catch {
+            $record.process_identity_error_type = $_.Exception.GetType().FullName
+        }
+        $process.WaitForExit()
+        $process.Refresh()
+        $code = $process.ExitCode
+        if ($null -eq $code) { throw '无法取得安装器原生退出码，未报告安装成功。' }
+        $record.exit_code = [int]$code
+        $record.exit_code_available = $true
+        $record.reboot_required = $record.exit_code -eq 3010
+        if ($record.exit_code -notin $SuccessExitCodes) {
+            throw "安装命令失败: $($record.executable) (exit $($record.exit_code))"
+        }
+        $record.succeeded = $true
+    } catch {
+        $record.exception_type = $_.Exception.GetType().FullName
+        $script:DeploymentCommandFailure = $record
+        throw
+    } finally {
+        $record.completed_at = (Get-Date).ToUniversalTime().ToString('o')
+        $record.installer_log_exists = [bool]($InstallerLog -and (Test-Path -LiteralPath $InstallerLog -PathType Leaf))
+        try {
+            [IO.File]::WriteAllText($recordPath, ($record | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+        } finally {
+            if ($null -ne $process) { $process.Dispose() }
+        }
+    }
+}
 function Refresh-Path {
     $appAliases = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
     $paths = [Environment]::GetEnvironmentVariable('PATH','Machine') + ';' + [Environment]::GetEnvironmentVariable('PATH','User') + ';' + $appAliases + ';' + $env:PATH
@@ -67,8 +129,7 @@ function Install-Package([string]$Id, [string]$Version) {
     $bundledVC = Join-Path $root 'deployment-assets\installers\VC_redist.x64.exe'
     if ($Id -eq 'Microsoft.VCRedist.2015+.x64' -and (Test-Path -LiteralPath $bundledVC -PathType Leaf)) {
         if ((Get-AuthenticodeSignature -LiteralPath $bundledVC).Status -ne 'Valid') { throw 'VC++ 安装器签名无效。' }
-        $process = Start-Process -FilePath $bundledVC -Verb RunAs -ArgumentList @('/install','/quiet','/norestart') -WindowStyle Hidden -Wait -PassThru
-        if ($process.ExitCode -notin @(0,3010,1638)) { throw "VC++ 安装失败：$($process.ExitCode)" }
+        Invoke-DeploymentInstaller -Exe $bundledVC -Arguments @('/install','/quiet','/norestart') -SuccessExitCodes @(0,3010,1638) -Elevate
         return
     }
     $winget = Ensure-WinGet
@@ -96,24 +157,22 @@ function Install-FixedRuntime([ValidateSet('python','node','powershell')][string
             $signature = Get-AuthenticodeSignature -LiteralPath $installer
             if ($signature.Status -ne 'Valid') { throw 'Python 3.12.10 官方安装器签名无效。' }
             $target = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312'
-            $process = Start-Process -FilePath $installer -ArgumentList @('/quiet','InstallAllUsers=0',('TargetDir="{0}"' -f $target),'PrependPath=0','Include_launcher=0','Include_pip=1','Include_test=0','SimpleInstall=1') -WindowStyle Hidden -Wait -PassThru
-            if ($process.ExitCode -notin @(0,3010)) { throw "Python 安装失败：$($process.ExitCode)" }
+            $installerLog = New-DeploymentInstallerLog 'python-3.12.10'
+            Invoke-DeploymentInstaller -Exe $installer -Arguments @('/quiet','/log',('"{0}"' -f $installerLog),'InstallAllUsers=0',('TargetDir="{0}"' -f $target),'PrependPath=0','Include_launcher=0','Include_pip=1','Include_test=0','SimpleInstall=1') -SuccessExitCodes @(0,3010) -InstallerLog $installerLog
         }
         'node' {
             $installer = Join-Path $downloads 'node-v24.19.0-x64.msi'
             Invoke-WebRequest -Uri 'https://nodejs.org/dist/v24.19.0/node-v24.19.0-x64.msi' -OutFile $installer -UseBasicParsing
             $signature = Get-AuthenticodeSignature -LiteralPath $installer
             if ($signature.Status -ne 'Valid') { throw 'Node.js 24.19.0 官方安装器签名无效。' }
-            $process = Start-Process -FilePath 'msiexec.exe' -Verb RunAs -ArgumentList @('/i',('"' + $installer + '"'),'/qn','/norestart') -WindowStyle Hidden -Wait -PassThru
-            if ($process.ExitCode -notin @(0,3010)) { throw "Node.js 安装失败：$($process.ExitCode)" }
+            Invoke-DeploymentInstaller -Exe 'msiexec.exe' -Arguments @('/i',('"' + $installer + '"'),'/qn','/norestart') -SuccessExitCodes @(0,3010) -Elevate
         }
         'powershell' {
             $installer = Join-Path $downloads 'PowerShell-7.6.5-win-x64.msi'
             Invoke-WebRequest -Uri 'https://github.com/PowerShell/PowerShell/releases/download/v7.6.5/PowerShell-7.6.5-win-x64.msi' -OutFile $installer -UseBasicParsing
             $signature = Get-AuthenticodeSignature -LiteralPath $installer
             if ($signature.Status -ne 'Valid') { throw 'PowerShell 7.6.5 官方安装器签名无效。' }
-            $process = Start-Process -FilePath 'msiexec.exe' -Verb RunAs -ArgumentList @('/i',('"' + $installer + '"'),'/qn','/norestart') -WindowStyle Hidden -Wait -PassThru
-            if ($process.ExitCode -notin @(0,3010)) { throw "PowerShell 安装失败：$($process.ExitCode)" }
+            Invoke-DeploymentInstaller -Exe 'msiexec.exe' -Arguments @('/i',('"' + $installer + '"'),'/qn','/norestart') -SuccessExitCodes @(0,3010) -Elevate
         }
     }
     Refresh-Path
@@ -378,8 +437,7 @@ if (-not $SkipAdsPower) {
         $signature = Get-AuthenticodeSignature -LiteralPath $installer
         if ($signature.Status -ne 'Valid') { throw 'AdsPower 安装器数字签名无效，停止安装。' }
         (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash | Set-Content (Join-Path $downloads 'AdsPower.sha256')
-        $process = Start-Process -FilePath $installer -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
-        if ($process.ExitCode -ne 0) { throw "AdsPower 安装失败: $($process.ExitCode)" }
+        Invoke-DeploymentInstaller -Exe $installer -Arguments @('/S')
         $installed = & $python @detectAdsPower
         if ($LASTEXITCODE -ne 0 -or -not $installed) { throw 'AdsPower 安装器结束后仍找不到程序，请检查安装目录。' }
     }

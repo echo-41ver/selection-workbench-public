@@ -1,6 +1,7 @@
 """Read standard Chat Completions SSE without exposing reasoning or partial rules."""
 import json
 import time
+from .rule_model_evidence import provider_metadata
 
 
 class ModelStreamError(RuntimeError):
@@ -11,9 +12,11 @@ class ModelStreamError(RuntimeError):
 
 def read_chat_completion(response,notify=lambda **fields:None,*,started=None,max_seconds=600):
     if 'text/event-stream' not in (getattr(response,'headers',{}) or {}).get('Content-Type','').lower():
-        return json.load(response)
+        packet = json.load(response)
+        notify(**provider_metadata(packet))
+        return packet
     started=time.monotonic() if started is None else started
-    parts=[];finish=None;done=False;lines=[];received=0;events=0;characters=0;last_update=0
+    parts=[];finish=None;done=False;lines=[];received=0;events=0;characters=0;last_update=0;metadata={}
     while True:
         line=response.readline(1024*1024)
         if time.monotonic()-started>max_seconds:
@@ -32,6 +35,10 @@ def read_chat_completion(response,notify=lambda **fields:None,*,started=None,max
             packet=json.loads(data)
             if not isinstance(packet,dict):
                 raise ModelStreamError('模型流式响应结构无效，未发布规则','MODEL_STREAM_INVALID')
+            observed = provider_metadata(packet)
+            if any(metadata.get(key) != value for key, value in observed.items()):
+                metadata.update(observed)
+                notify(**metadata)
             if packet.get('error'):
                 error=packet['error']
                 detail='服务返回流式错误'
@@ -52,4 +59,9 @@ def read_chat_completion(response,notify=lambda **fields:None,*,started=None,max
         notify(events=events,characters=characters)
         raise ModelStreamError('模型回答中途断开，规则尚未完成；服务可能已计费，请先核对调用记录，不会自动重发','MODEL_STREAM_INTERRUPTED')
     notify(events=events,characters=characters)
-    return {'choices':[{'finish_reason':finish,'message':{'content':''.join(parts)}}]}
+    result = {'choices':[{'finish_reason':finish,'message':{'content':''.join(parts)}}]}
+    if metadata.get('response_id'):
+        result['id'] = metadata['response_id']
+    if metadata.get('model_usage'):
+        result['usage'] = metadata['model_usage']
+    return result

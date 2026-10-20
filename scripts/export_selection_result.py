@@ -14,15 +14,16 @@ def export(root,category,report):
     data=build_delivery(root,category,report)
     name=data['category_name'];base=Path(root)/'runs'/category['category_key']
     destination=base/'excel'/f'{name}_选品结果.xlsx'
-    note=(f"选品结论仅保留同款＋类似款严格小于 {data['limit']} 的 Amazon，每商品一行；明细包含全部最终同款和类似款。"
-          '无法判断表示证据不足，未分析表示尚未完成。点击图片可打开原图。')
+    note=(f"{data['collection']['label']}。选品结论仅保留本次采集完成、采样核验完成且同款＋类似款严格小于 {data['limit']} 的 Amazon。"
+          '采集分析进度保留阶段性数据；零计数不表示已核验或零竞争。明细保留已完成的同款和类似款判断。点击图片可打开原图。')
     parameter_headers=['当前价(USD)','最低价(USD)','最高价(USD)','价格带口径','评分','评论数','页面销量','销量口径','真实上架时间','上架时间来源','采集时间','采集来源']
-    amazon_raw={i['asin']:i['raw'] for i in data['products']}
+    amazon_raw={i['asin']:i['raw'] for i in data['progress']}
     amazon_raw.update({p['asin']:p['amazon_raw'] for p in data['pairs']})
     temu_raw={p['goods_id']:p['temu_raw'] for p in data['pairs'] if p['temu_raw'] is not None}
     standard={'评分','评论数','页面销量','近一月页面销量','销量口径','采集时间','采集来源','当前价格(USD)','上架时间','上架时间来源'}
     extras={side:list(dict.fromkeys(k for r in records.values() for k in collected_parameters(r) if k not in standard)) for side,records in [('Amazon',amazon_raw),('TEMU',temu_raw)]}
-    summary_headers=['Amazon ASIN','Amazon标题','Amazon图片','同款数','类似款数','不同款数','无法判断数','未分析数','同款+类似款数量']+['Amazon'+h for h in parameter_headers]+['Amazon'+h for h in extras['Amazon']]+['Amazon商品链接']
+    summary_headers=['Amazon ASIN','Amazon标题','Amazon图片','同款数','类似款数','不同款数','无法判断数','未分析数','同款+类似款数量','选品状态','判断依据']+['Amazon'+h for h in parameter_headers]+['Amazon'+h for h in extras['Amazon']]+['Amazon商品链接']
+    progress_headers=['Amazon ASIN','Amazon标题','Amazon图片','采集状态','分析状态','状态说明','同款数','类似款数','不同款数','无法判断数','未分析数','同款+类似款数量','Amazon商品链接']
     prefix=['Amazon ASIN','Amazon标题','Amazon图片','TEMU图片','同款+类似款数量','Amazon商品链接','TEMU商品链接']
     pair_headers=prefix+['TEMU商品ID','TEMU标题','最终关系','判断依据','分析模型']+[side+h for side in ('Amazon','TEMU') for h in parameter_headers]+[side+h for side in ('Amazon','TEMU') for h in extras[side]]+['视觉证据','同款决策概率','辅助评分']
     local_images={}
@@ -30,7 +31,7 @@ def export(root,category,report):
         for side,id_key,wanted in [('amazon','asin',amazon_raw),('temu','goods_id',temu_raw)]:
             identity=str(row.get(id_key) or '');path=row.get(side+'_image_path')
             if identity in wanted and path and Path(path).is_file():local_images.setdefault((side,identity),path)
-    assets={('amazon',i['asin']):(i['amazon'],i['raw']) for i in data['products']}
+    assets={('amazon',i['asin']):(i['amazon'],i['raw']) for i in data['progress']}
     assets.update({('amazon',p['asin']):(p['amazon'],p['amazon_raw']) for p in data['pairs']})
     assets.update({('temu',p['goods_id']):(p['temu'],p['temu_raw']) for p in data['pairs'] if p['temu_raw'] is not None})
     def thumbnail(entry):
@@ -70,9 +71,15 @@ def export(root,category,report):
         summary=sheet('选品结论',summary_headers)
         for index,item in enumerate(data['products'],4):
             c,m=item['amazon'],item['match']
-            emit(summary,index,summary_headers,[item['asin'],c['title'],'',item['confirmed_count'],item['similar_count'],m.get('different',0),m.get('possible',0),m.get('unanalysed',m.get('pending',0)),item['same_count'],*fields(c),*extra_values('Amazon',item['raw']),c['url']])
+            emit(summary,index,summary_headers,[item['asin'],c['title'],'',item['confirmed_count'],item['similar_count'],m.get('different',0),m.get('possible',0),m.get('unanalysed',m.get('pending',0)),item['same_count'],item['analysis_status'],item['advice']['reason'],*fields(c),*extra_values('Amazon',item['raw']),c['url']])
             picture(summary,index,2,'amazon',item['asin'])
         summary.autofilter(3,0,max(3,len(data['products'])+3),len(summary_headers)-1)
+        progress=sheet('采集分析进度',progress_headers)
+        for index,item in enumerate(data['progress'],4):
+            c,m=item['amazon'],item['match']
+            emit(progress,index,progress_headers,[item['asin'],c['title'],'',item['collection_status'],item['analysis_status'],item['status_reason'],item['confirmed_count'],item['similar_count'],m.get('different',0),m.get('possible',0),m.get('unanalysed',m.get('pending',0)),item['same_count'],c['url']])
+            picture(progress,index,2,'amazon',item['asin'])
+        progress.autofilter(3,0,max(3,len(data['progress'])+3),len(progress_headers)-1)
         detail=sheet('同款商品明细',pair_headers)
         for index,item in enumerate(data['pairs'],4):
             e=item['evidence'];a,t=item['amazon'],item['temu']
@@ -89,4 +96,4 @@ def export(root,category,report):
         extra.set_column(3,3,90);extra.autofilter(3,0,max(3,count+3),len(headers)-1)
         return '选品结论',4,len(data['products'])
     delivered=_publish_formatted(destination,build)
-    return {**delivered,'交付格式':'精简选品结果','入选Amazon数':len(data['products']),'确认同款对数':sum(p['relation']=='确认同款' for p in data['pairs']),'类似款对数':sum(p['relation']=='相似款' for p in data['pairs']),'同款数门槛':data['limit']}
+    return {**delivered,'交付格式':'精简选品结果','入选Amazon数':len(data['products']),'采集状态':data['collection']['label'],'进度Amazon数':len(data['progress']),'确认同款对数':sum(p['relation']=='确认同款' for p in data['pairs']),'类似款对数':sum(p['relation']=='相似款' for p in data['pairs']),'同款数门槛':data['limit']}
