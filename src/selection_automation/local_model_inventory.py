@@ -1,5 +1,6 @@
 """Read-only local model inventory. Never load weights or execute model files."""
 import ctypes
+from collections import deque
 import json
 import os
 from pathlib import Path
@@ -190,7 +191,7 @@ def start_scan(root, restart=False):
             return _snapshot(existing)
         state = {'scan_id': uuid.uuid4().hex, 'running': True, 'status': 'scanning',
                  'started_at': time.time(), 'directories': 0, 'files': 0, 'skipped': 0,
-                 'truncated': False, 'roots': [], 'models': [], 'services': {},
+                 'truncated': False, 'roots': [], 'models': [], 'services': {}, 'current_directory': '',
                  'message': '正在读取本机服务，并扫描本地固定磁盘上的模型文件。', '_cancel': threading.Event()}
         _SCANS[key] = state
         threading.Thread(target=_run_scan, args=(root, state), name='local-model-inventory', daemon=True).start()
@@ -215,53 +216,57 @@ def _run_scan(root, state):
             state['services'] = services
             state['roots'] = [str(path) for path in roots]
         covered, found = set(), set()
-        for scan_root in roots:
-            pending = [scan_root]
-            while pending and not state['_cancel'].is_set():
-                path = pending.pop()
-                if _path_key(path) in covered:
+        root_keys = {_path_key(path) for path in roots}
+        # Breadth-first traversal visits every disk early; a large C: directory
+        # tree must not postpone D: model discovery until C: is exhausted.
+        pending = deque(roots)
+        while pending and not state['_cancel'].is_set():
+            path = pending.popleft()
+            key = _path_key(path)
+            if key in root_keys:
+                if key in covered:
                     continue
-                try:
-                    with os.scandir(path) as entries:
-                        files, folders = [], []
-                        for entry in entries:
-                            if state['_cancel'].is_set():
-                                break
-                            try:
-                                if entry.is_dir(follow_symlinks=False):
-                                    # Do not traverse junctions, mounts, or symlink cycles.
-                                    if entry.name.lower() in _SKIP or entry.is_symlink() or (
-                                            os.name == 'nt' and entry.stat(follow_symlinks=False).st_file_attributes & 0x400):
-                                        with _LOCK:
-                                            state['skipped'] += 1
-                                    else:
-                                        folders.append(Path(entry.path))
-                                elif entry.is_file():
-                                    files.append(entry.name)
-                            except OSError:
-                                with _LOCK:
-                                    state['skipped'] += 1
-                    records = inspect_directory(path, files, state['_cancel'])
-                    with _LOCK:
-                        state['directories'] += 1
-                        state['files'] += len(files)
-                        for record in records:
-                            identity = _path_key(record['path'])
-                            if identity not in found:
-                                found.add(identity)
-                                if len(state['models']) < _LIMIT:
-                                    state['models'].append(record)
+                covered.add(key)
+            with _LOCK:
+                state['current_directory'] = str(path)
+            try:
+                with os.scandir(path) as entries:
+                    files, folders = [], []
+                    for entry in entries:
+                        if state['_cancel'].is_set():
+                            break
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                # Do not traverse junctions, mounts, or symlink cycles.
+                                if entry.name.lower() in _SKIP or entry.is_symlink() or (
+                                        os.name == 'nt' and entry.stat(follow_symlinks=False).st_file_attributes & 0x400):
+                                    with _LOCK:
+                                        state['skipped'] += 1
                                 else:
-                                    state['truncated'] = True
-                    pending.extend(folders)
-                    if state['directories'] % 100 == 0:
-                        state['_cancel'].wait(.01)
-                except OSError:
-                    with _LOCK:
-                        state['skipped'] += 1
-            covered.add(_path_key(scan_root))
-            if state['_cancel'].is_set():
-                break
+                                    folders.append(Path(entry.path))
+                            elif entry.is_file():
+                                files.append(entry.name)
+                        except OSError:
+                            with _LOCK:
+                                state['skipped'] += 1
+                records = inspect_directory(path, files, state['_cancel'])
+                with _LOCK:
+                    state['directories'] += 1
+                    state['files'] += len(files)
+                    for record in records:
+                        identity = _path_key(record['path'])
+                        if identity not in found:
+                            found.add(identity)
+                            if len(state['models']) < _LIMIT:
+                                state['models'].append(record)
+                            else:
+                                state['truncated'] = True
+                pending.extend(folders)
+                if state['directories'] % 100 == 0:
+                    state['_cancel'].wait(.01)
+            except OSError:
+                with _LOCK:
+                    state['skipped'] += 1
         with _LOCK:
             state['status'] = 'cancelled' if state['_cancel'].is_set() else 'complete'
             state['message'] = ('扫描已停止，保留已发现结果。' if state['_cancel'].is_set() else

@@ -195,7 +195,7 @@ function renderLocalModelOptions(models){
  const index=localModelOptions.findIndex(model=>model.id===$('stage3-model').value&&model.base_url===$('stage3-base-url').value);select.value=index<0?'':String(index);
 }
 function renderLocalModelScan(data){
- const count=(data.models||[]).length;$('stage3-local-scan-status').textContent=(data.message||'')+(data.status==='not_started'?'':' 已扫描 '+Number(data.directories||0).toLocaleString()+' 个目录、'+Number(data.files||0).toLocaleString()+' 个文件，发现 '+count+' 处模型；跳过 '+Number(data.skipped||0).toLocaleString()+' 处。')+(data.truncated?' 发现过多，当前仅展示前 2000 处。':'')+(data.services?.partial?' 部分服务读取超时，可重新检测连接。':'');
+ const count=(data.models||[]).length;$('stage3-local-scan-status').textContent=(data.message||'')+(data.status==='not_started'?'':' 已扫描 '+Number(data.directories||0).toLocaleString()+' 个目录、'+Number(data.files||0).toLocaleString()+' 个文件，发现 '+count+' 处模型；跳过 '+Number(data.skipped||0).toLocaleString()+' 处。')+(data.running&&data.current_directory?' 当前目录：'+data.current_directory:'')+(data.truncated?' 发现过多，当前仅展示前 2000 处。':'')+(data.services?.partial?' 部分服务读取超时，可重新检测连接。':'');
  $('stage3-local-scan-stop').hidden=!data.running;$('stage3-local-scan').disabled=Boolean(data.running);
  if(data.services?.models)renderLocalModelOptions(data.services.models);
  const list=$('stage3-local-inventory-list');list.replaceChildren();

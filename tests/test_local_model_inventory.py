@@ -159,6 +159,27 @@ def test_background_scan_can_be_cancelled_without_erasing_discovered_results(tmp
     assert result['status'] == 'cancelled' and result['scan_id'] == started['scan_id']
 
 
+def test_all_disks_are_visited_before_descending_one_disks_deep_tree(tmp_path, monkeypatch):
+    first, second = tmp_path / 'disk_c', tmp_path / 'disk_d'
+    (first / 'deep/deeper/deepest').mkdir(parents=True)
+    second.mkdir()
+    (second / 'd1-3B.gguf').write_bytes(b'GGUF')
+    visited = []
+    inspect = inventory.inspect_directory
+
+    def record(path, files, cancel=None):
+        visited.append(path)
+        return inspect(path, files, cancel)
+
+    monkeypatch.setattr(inventory, 'inspect_directory', record)
+    monkeypatch.setattr(inventory, 'scan_roots', lambda: [first, second])
+    monkeypatch.setattr(service, 'catalog', lambda root, **kwargs: {'models': []})
+    inventory.start_scan(tmp_path)
+    result = wait_complete(tmp_path)
+    assert result['status'] == 'complete' and result['models'][0]['name'] == 'd1-3B.gguf'
+    assert visited.index(second) < visited.index(first / 'deep')
+
+
 def test_other_listeners_do_not_prevent_starting_stopped_ollama(tmp_path, monkeypatch):
     started = []
     monkeypatch.setattr(service, '_endpoints', lambda: ['http://127.0.0.1:11434', 'http://127.0.0.1:8765'])
