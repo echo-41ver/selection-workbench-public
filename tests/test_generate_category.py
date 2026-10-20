@@ -80,16 +80,17 @@ def test_transfer_pump_rejects_engine_parts_before_rule_generation(monkeypatch, 
     evidence = {'url': 'https://www.amazon.com/zgbs/automotive/15726131',
                 'heading': 'Best Sellers in Automotive Replacement Oil Pumps', 'rank_count': 50, 'links': []}
     monkeypatch.setattr(generator, 'read_listing', lambda _: evidence)
+    monkeypatch.setattr(generator, 'search_listing_candidates', lambda _: {'candidates':[{'url':evidence['url']}]})
     prompts = []
     def decide(prompt, **kwargs):
         prompts.append(prompt)
         assert 'Exclude engine-internal oil pump replacement parts' in prompt
-        return {'matches': True}
+        return {'url': evidence['url']}
     monkeypatch.setattr(generator, 'model_json', decide)
     with pytest.raises(generator.CategoryGenerationError, match='发动机内部机油泵配件') as error:
         generator.generate_category('抽油泵', 50, 400, bestsellers_url=evidence['url'] if manual_url else '')
     assert error.value.code == 'CATEGORY_SCOPE_MISMATCH'
-    assert len(prompts) == (0 if manual_url else 1)
+    assert len(prompts) == (0 if manual_url else 4)
 
 
 def test_transfer_scope_allows_correct_leaf_and_explicit_engine_request():
@@ -128,7 +129,8 @@ def setup(monkeypatch, config=None, decision=None):
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-secret')
     evidence = {'url':'https://www.amazon.com/zgbs/tools/123', 'title':'Best Sellers', 'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
     monkeypatch.setattr(generator, 'read_listing', lambda url:evidence)
-    responses=iter([decision or {'matches':True}, fixture_config() if config is None else config])
+    monkeypatch.setattr(generator, 'search_listing_candidates',lambda _: {'candidates':[{'url':evidence['url']}]})
+    responses=iter([{'search_query':'power drill'}, decision or {'url':evidence['url']}, {'matches':True}, fixture_config() if config is None else config])
     monkeypatch.setattr(generator, 'model_json', lambda prompt, **kwargs: next(responses))
 
 
@@ -175,7 +177,10 @@ def test_invalid_rules_fail_without_template_fallback(monkeypatch,change):
 
 
 def test_invented_link_not_followed(monkeypatch):
-    setup(monkeypatch,decision={'next_url':'https://www.amazon.com/zgbs/invented'})
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    monkeypatch.setattr(generator,'read_listing',lambda _:pytest.fail('invalid link was opened'))
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':'https://www.amazon.com/zgbs/tools/123'}]})
+    monkeypatch.setattr(generator,'model_json',lambda *a,**kw:{'url':'https://www.amazon.com/zgbs/invented'})
     with pytest.raises(generator.CategoryGenerationError,match='真实'):
         generator.generate_category('电钻',3,40)
 
@@ -277,25 +282,143 @@ def test_manual_listing_is_verified_before_generating(monkeypatch):
     assert len(calls)==1
 
 
-def test_repeated_parent_choice_corrected_without_revisiting(monkeypatch):
+def test_direct_api_link_corrected_without_directory_walk_or_revisiting(monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','fixture-secret')
-    root='https://www.amazon.com/Best-Sellers/zgbs'
-    electronics='https://www.amazon.com/zgbs/electronics/ref=one'
+    wrong='https://www.amazon.com/zgbs/pc/172493'
     child='https://www.amazon.com/zgbs/electronics/123/ref=two'
-    pages={root:{'url':root,'heading':'Best Sellers','rank_count':0,'links':[{'url':electronics,'text':'Electronics'}]},
-           electronics:{'url':electronics,'heading':'Best Sellers in Electronics','rank_count':50,'links':[{'url':electronics+'?tracking=2','text':'Electronics'},{'url':child,'text':'Remote Controls'}]},
+    pages={wrong:{'url':wrong,'heading':'Best Sellers in Computer Input Devices','rank_count':50,'links':[]},
            child:{'url':child,'heading':'Best Sellers in Remote Controls','rank_count':50,'title':'Remote Controls','links':[]}}
     reads=[];prompts=[]
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':wrong},{'url':child}]})
     monkeypatch.setattr(generator,'read_listing',lambda url:(reads.append(url) or pages[url]))
-    responses=iter([{'next_url':electronics},{'next_url':electronics+'?tracking=2'},{'next_url':child},{'matches':True},fixture_config()])
+    responses=iter([{'search_query':'remote control'},{'url':wrong},{'matches':False},{'url':'https://www.amazon.com/zgbs/electronics/172493'},
+                    {'url':child},{'matches':True},fixture_config()])
     def model(prompt,**kw):
         prompts.append(prompt)
         return next(responses)
     monkeypatch.setattr(generator,'model_json',model)
     result=generator.generate_category('遥控器',10,500)
-    assert reads==[root,electronics,child]
+    assert reads==[wrong,child]
     assert result['amazon']['bestsellers_url']==child
-    assert 'previous choice was invalid' in prompts[2]
+    assert 'already rejected' in prompts[4]
+
+
+@pytest.mark.parametrize('category,heading,node', [('鼠标垫','Mouse Pads','49080'),
+    ('浴帘','Shower Curtains','13749881'),('电钻','Power Drills','123'),('便携洗衣机','Portable Clothes Washing Machines','9709422011')])
+def test_direct_api_category_links_use_real_page_without_sidebar_links(monkeypatch,category,heading,node):
+    url='https://www.amazon.com/zgbs/home-garden/'+node
+    responses=iter([{'search_query':heading},{'url':url},{'matches':True}]);calls=[]
+    def model(prompt,**kw):
+        calls.append((prompt,kw))
+        return next(responses)
+    monkeypatch.setattr(generator,'model_json',model)
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':url}]})
+    evidence={'url':url,'heading':'Best Sellers in '+heading,'rank_count':40,'links':[]}
+    reads=[]
+    monkeypatch.setattr(generator,'read_listing',lambda value:(reads.append(value) or evidence))
+    assert generator.resolve_listing(category,lambda **kw:None)==evidence
+    assert reads==[url] and len(calls)==3
+    assert category in calls[0][0] and heading in calls[2][0]
+    assert [options['max_tokens'] for _,options in calls]==[200,800,400]
+
+
+@pytest.mark.parametrize('failure', ['not_found','unranked'])
+def test_direct_api_repairs_missing_or_unranked_candidate(monkeypatch,failure):
+    bad='https://www.amazon.com/zgbs/office-products/99999999'
+    good='https://www.amazon.com/zgbs/office-products/49080'
+    responses=iter([{'search_query':'mouse pad'},{'url':bad},{'url':good},{'matches':True}]);reads=[]
+    monkeypatch.setattr(generator,'model_json',lambda *a,**kw:next(responses))
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':bad},{'url':good,'text':'Mouse Pads'}]})
+    def read(url):
+        reads.append(url)
+        if url==bad and failure=='not_found':
+            raise generator.CategoryGenerationError('榜单不存在','INVALID_LISTING_CANDIDATE')
+        return {'url':url,'heading':'Best Sellers in Mouse Pads','rank_count':40 if url==good else 0}
+    monkeypatch.setattr(generator,'read_listing',read)
+    assert generator.resolve_listing('鼠标垫',lambda **kw:None)['url']==good
+    assert reads==[bad,good]
+
+
+def test_direct_api_uses_live_rank_links_once_to_correct_unknown_node(monkeypatch):
+    good='https://www.amazon.com/gp/bestsellers/office-products/705323011'
+    answers=iter([{'url':'https://www.amazon.com/zgbs/pc/999','search_query':'mouse pad'},
+                  {'url':good},{'matches':True}])
+    prompts=[];searches=[]
+    def model(prompt,**kw):prompts.append(prompt);return next(answers)
+    monkeypatch.setattr(generator,'model_json',model)
+    def search(query):
+        searches.append(query)
+        return {'candidates':[{'url':good,'text':'Mouse Pads','product':{'title':'Mouse Pad','asin':'B09DV56338'}}]}
+    monkeypatch.setattr(generator,'search_listing_candidates',search)
+    def read(url):
+        if url!=good:raise generator.CategoryGenerationError('404','INVALID_LISTING_CANDIDATE')
+        return {'url':url,'heading':'Best Sellers in Mouse Pads','rank_count':30}
+    monkeypatch.setattr(generator,'read_listing',read)
+    assert generator.resolve_listing('鼠标垫',lambda **kw:None)['url']==good
+    assert searches==['mouse pad'] and good in prompts[1]
+
+
+def test_direct_api_preserves_network_failure_without_spending_on_link_repairs(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(generator,'model_json',lambda *a,**kw:(calls.append(1) or {'url':'https://www.amazon.com/zgbs/office-products/49080'}))
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':'https://www.amazon.com/zgbs/office-products/49080'}]})
+    def read(url):raise generator.CategoryGenerationError('TLS connection failed','AMAZON_LISTING_READ_FAILED')
+    monkeypatch.setattr(generator,'read_listing',read)
+    with pytest.raises(generator.CategoryGenerationError,match='TLS') as error:
+        generator.resolve_listing('鼠标垫',lambda **kw:None)
+    assert error.value.code=='AMAZON_LISTING_READ_FAILED' and calls==[1,1]
+
+
+def test_short_real_node_retries_amazons_working_rank_link_path(monkeypatch,tmp_path):
+    import json,subprocess
+    monkeypatch.setattr(generator,'ROOT',tmp_path)
+    reads=[]
+    def read(url):
+        reads.append(url)
+        if len(reads)==1:
+            raise subprocess.CalledProcessError(1,['node'],stderr=json.dumps({'http_status':404}))
+        return {'url':url,'heading':'Best Sellers in Mouse Pads','rank_count':30}
+    monkeypatch.setattr(generator,'_read_listing_once',read)
+    result=generator.read_listing('https://www.amazon.com/zgbs/office-products/705323011')
+    assert reads==['https://www.amazon.com/zgbs/office-products/705323011',
+                   'https://www.amazon.com/gp/bestsellers/office-products/705323011']
+    assert result['rank_count']==30
+
+
+def test_api_cannot_open_an_invented_node_even_if_url_looks_valid(monkeypatch):
+    monkeypatch.setattr(generator,'model_json',lambda *a,**kw:{'url':'https://www.amazon.com/zgbs/pc/99999999999'})
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':'https://www.amazon.com/zgbs/office-products/705323011'}]})
+    monkeypatch.setattr(generator,'read_listing',lambda _:pytest.fail('invented node was opened'))
+    with pytest.raises(generator.CategoryGenerationError) as error:
+        generator.resolve_listing('鼠标垫',lambda **kw:None)
+    assert error.value.code=='CATEGORY_UNRESOLVED'
+
+
+def test_search_reads_official_api_and_accepts_only_us_nodes(monkeypatch):
+    from selection_automation import deepseek_web
+    monkeypatch.setenv('SELECTION_RULES_BASE_URL','https://api.deepseek.com')
+    monkeypatch.setenv('SELECTION_RULES_MODEL','deepseek-flash')
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    monkeypatch.setattr(deepseek_web,'search',lambda *a,**kw:[
+        {'url':'https://www.amazon.com/Mouse-Pads/b?node=705323011','title':'Mouse Pads'},
+        {'url':'https://www.amazon.de/Mouse-Pads/b?node=123','title':'Mauspads'},
+        {'url':'https://www.amzn.com/Best-Sellers-Mouse-Pads/zgbs/office-products/705323011','title':'Best Mouse Pads'}])
+    monkeypatch.setattr(generator,'_read_amazon_category',lambda *a,**kw:pytest.fail('unnecessary browser search'))
+    result=generator.search_listing_candidates('mouse pad')
+    assert [item['node'] for item in result['browse_nodes']]==['705323011']
+    assert result['candidates'][0]['url']=='https://www.amazon.com/Best-Sellers-Mouse-Pads/zgbs/office-products/705323011'
+
+
+@pytest.mark.parametrize('status,code',[(404,None),(410,None),(200,'AMAZON_LISTING_NOT_RANKED')])
+def test_listing_missing_candidate_is_distinct_from_transport_failure(monkeypatch,tmp_path,status,code):
+    import json,subprocess
+    monkeypatch.setattr(generator,'ROOT',tmp_path)
+    def run(*a,**kw):
+        raise subprocess.CalledProcessError(1,['node'],stderr=json.dumps({'http_status':status,'code':code}))
+    monkeypatch.setattr(generator.subprocess,'run',run)
+    with pytest.raises(generator.CategoryGenerationError) as error:
+        generator.read_listing('https://www.amazon.com/zgbs/office-products/49080')
+    assert error.value.code=='INVALID_LISTING_CANDIDATE'
 
 
 
