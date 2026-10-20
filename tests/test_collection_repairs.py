@@ -14,6 +14,17 @@ from selection_automation.worker_runtime import WorkerLease, WorkerStopRequested
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def collector_progress(command, progress):
+    # Successful collector fixtures carry the same raw quota/end evidence as
+    # production, while keeping their small distinct-product datasets.
+    progress = dict(progress)
+    if progress.get('status') == 'KEYWORD_LIMIT_REACHED':
+        progress.setdefault('raw_collected_count', int(command[command.index('--max-products') + 1]))
+    elif progress.get('status') == 'KEYWORD_COMPLETE':
+        progress.setdefault('completion_basis', 'NO_MORE_RESULTS_CONFIRMED')
+    return progress
+
+
 def test_union_primary_fields_are_one_latest_complete_observation(tmp_path):
     def row(at, price, image, **extra):
         return dict(goods_id="1", title="towel", product_url="https://www.temu.com/1", price_usd=price,
@@ -130,7 +141,7 @@ def test_all_queries_require_sales_sort_and_unconfirmed_does_not_advance(pipelin
         calls.append((query,command[command.index('--sort')+1]))
         output=Path(command[command.index('--output')+1])
         status='KEYWORD_LIMIT_REACHED' if query=='first' else ('STOPPED_SALES_SORT_UNCONFIRMED' if sum(q=='second' for q,o in calls)<=3 else 'WAITING_CAPTCHA')
-        (output/'progress.json').write_text(json.dumps({'status':status}),encoding='utf-8')
+        (output/'progress.json').write_text(json.dumps(collector_progress(command,{'status':status})),encoding='utf-8')
         return 0 if query=='first' else 2
     plan=module.keyword_plan_path(category)
     plan.write_text(json.dumps({'keywords':[{'query':q,'max_products':3} for q in ['first','second','third']]}),encoding='utf-8')
@@ -171,14 +182,14 @@ def test_recent_pass_resumes_without_redoing_sales_and_union_deduplicates(pipeli
         output = Path(command[command.index('--output')+1])
         calls.append((query, order))
         if query == 'first' and order == 'recent' and blocked[0]:
-            (output/'progress.json').write_text(json.dumps({'status':'STOPPED_SALES_SORT_UNCONFIRMED' if sum(q=='first' and o=='recent' for q,o in calls)<=3 else 'WAITING_CAPTCHA'}), encoding='utf-8')
+            (output/'progress.json').write_text(json.dumps(collector_progress(command,{'status':'STOPPED_SALES_SORT_UNCONFIRMED' if sum(q=='first' and o=='recent' for q,o in calls)<=3 else 'WAITING_CAPTCHA'})), encoding='utf-8')
             return 2
         evidence = {'requested':order, 'state':'UI_CONFIRMED', 'query':query}
         (output/'products.jsonl').write_text(json.dumps({'goods_id':'shared', 'search_query':query,
             'search_sort':evidence, 'sales_text':'100+ sold'})+'\n', encoding='utf-8')
         status='KEYWORD_COMPLETE' if query=='first' and order=='sales' else 'KEYWORD_LIMIT_REACHED'
-        (output/'progress.json').write_text(json.dumps({'status':status,
-            'sales_sort':evidence, 'unique_goods':1, 'search_query':query}), encoding='utf-8')
+        (output/'progress.json').write_text(json.dumps(collector_progress(command,{'status':status,
+            'sales_sort':evidence, 'unique_goods':1, 'search_query':query})), encoding='utf-8')
         return 0
     monkeypatch.setattr(module, 'run_collector', collect)
     monkeypatch.setattr(module.subprocess,'run',lambda *a,**kw: SimpleNamespace(returncode=0))
@@ -227,7 +238,7 @@ def test_completed_unsorted_checkpoint_is_recollected_and_archived(pipeline_fixt
             assert json.loads((directory/'progress.json').read_text('utf-8'))['keyword_complete'] is False
         evidence={'requested':order,'state':'UI_CONFIRMED','query':query}
         (directory/'products.jsonl').write_text(json.dumps({'goods_id':'new','search_sort':evidence})+'\n',encoding='utf-8')
-        (directory/'progress.json').write_text(json.dumps({'status':'KEYWORD_LIMIT_REACHED','unique_goods':1,'sales_sort':evidence}),encoding='utf-8')
+        (directory/'progress.json').write_text(json.dumps(collector_progress(command,{'status':'KEYWORD_LIMIT_REACHED','unique_goods':1,'sales_sort':evidence})),encoding='utf-8')
         return 0
     monkeypatch.setattr(module,'run_collector',run)
     module.collect_temu(Path('category.json'),category,sessions)
@@ -248,7 +259,7 @@ def test_missing_see_more_preserves_current_keyword_for_recovery(pipeline_fixtur
         calls.append(query)
         output = Path(command[command.index("--output") + 1])
         status = ("STOPPED_SEE_MORE_UNAVAILABLE" if len(calls)<=5 else "WAITING_CAPTCHA") if query == "first" else "KEYWORD_LIMIT_REACHED"
-        (output / "progress.json").write_text(json.dumps({"status": status}), "utf-8")
+        (output / "progress.json").write_text(json.dumps(collector_progress(command,{"status": status})), "utf-8")
         return 2 if query == "first" else 0
     monkeypatch.setattr(module, "run_collector", fake_collector)
     monkeypatch.setattr(module.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
@@ -271,7 +282,7 @@ def test_pipeline_recovers_transport_once_with_owned_lease(pipeline_fixture, mon
         payload = {"status": "KEYWORD_LIMIT_REACHED"} if len(calls) > 1 else {
             "status": "STOPPED_PROXY_CONNECTION", "automatic_recovery_eligible": True, "resume_requires_session_rotation": True,
         }
-        (output / "progress.json").write_text(json.dumps(payload), "utf-8")
+        (output / "progress.json").write_text(json.dumps(collector_progress(command,payload)), "utf-8")
         return 0 if len(calls) > 1 else 2
     def fake_replacement(command, **kwargs):
         recoveries.append(command)
@@ -334,9 +345,9 @@ def test_recovery_preserves_checkpoint_and_distinguishes_access_gates(pipeline_f
             if query=='first' and command[command.index('--sort')+1]=='sales': assert 'kept' in checkpoint.read_text(encoding='utf-8')
         status=('WAITING_CAPTCHA' if persistent_login and len(calls)>3 else blocked_status) if len(calls)==1 or persistent_login else 'KEYWORD_LIMIT_REACHED'
         if status == 'STOPPED_HTTP_403_NO_LOGIN': status = 'STOPPED_HTTP_403'
-        (output/'progress.json').write_text(json.dumps({'status':status,
+        (output/'progress.json').write_text(json.dumps(collector_progress(command,{'status':status,
             'http_status':403 if blocked_status in {'STOPPED_HTTP_403','STOPPED_HTTP_403_NO_LOGIN'} else None,
-            'confirmed_login_redirect':blocked_status == 'STOPPED_HTTP_403'}),encoding='utf-8')
+            'confirmed_login_redirect':blocked_status == 'STOPPED_HTTP_403'})),encoding='utf-8')
         return 0 if status=='KEYWORD_LIMIT_REACHED' else 2
     def replace(command,**kwargs):
         rotations.append(command)
@@ -474,7 +485,7 @@ def test_login_error_page_recovers_even_when_transport_budget_was_used(pipeline_
         calls.append(command)
         out=Path(command[command.index('--output')+1])
         status='STOPPED_PROXY_OR_NETWORK_FAILURE' if len(calls)==1 else 'KEYWORD_LIMIT_REACHED'
-        (out/'progress.json').write_text(json.dumps({'status':status,'confirmed_login_redirect':len(calls)==1}),encoding='utf-8')
+        (out/'progress.json').write_text(json.dumps(collector_progress(command,{'status':status,'confirmed_login_redirect':len(calls)==1})),encoding='utf-8')
         return 2 if len(calls)==1 else 0
     monkeypatch.setattr(module,'run_collector',collect)
     monkeypatch.setattr(module.subprocess,'run',lambda command,**kwargs: rotations.append(command) or SimpleNamespace(returncode=0))
@@ -494,7 +505,7 @@ def test_previous_run_progress_never_drives_current_recovery_or_success(pipeline
         query=command[command.index('--query')+1];calls.append(query)
         if len(calls)==1:return exit_code
         out=Path(command[command.index('--output')+1])
-        (out/'progress.json').write_text(json.dumps({'status':'KEYWORD_LIMIT_REACHED'}),encoding='utf-8')
+        (out/'progress.json').write_text(json.dumps(collector_progress(command,{'status':'KEYWORD_LIMIT_REACHED'})),encoding='utf-8')
         return 0
     monkeypatch.setattr(module,'run_collector',collect)
     monkeypatch.setattr(module.subprocess,'run',lambda *a,**kw:pytest.fail('stale status must not replace profile'))
@@ -524,11 +535,11 @@ def test_nonhuman_session_recovery_continues_past_three_and_retains_same_output(
         calls.append((query,str(out)))
         count=sum(q=='first' for q,o in calls)
         blocked=query=='first' and count<=5
-        (out/'progress.json').write_text(json.dumps({
+        (out/'progress.json').write_text(json.dumps(collector_progress(command,{
             'status':failure if blocked else 'KEYWORD_LIMIT_REACHED',
             'confirmed_login_redirect':blocked and failure!='STOPPED_SALES_SORT_UNCONFIRMED',
             'unique_goods':count*10 if progresses else 10,
-        }),encoding='utf-8')
+        })),encoding='utf-8')
         return 2 if blocked else 0
     monkeypatch.setattr(module,'run_collector',collect)
     monkeypatch.setattr(module.subprocess,'run',lambda command,**kwargs: rotations.append(command) or SimpleNamespace(returncode=0))
@@ -549,7 +560,7 @@ def test_provisional_plan_does_not_delete_reusable_lane(pipeline_fixture, monkey
     monkeypatch.setattr(module,'cleanup_completed_worker',lambda *args: deleted.append(args) or True)
     def collect(command,**kwargs):
         output=Path(command[command.index('--output')+1])
-        (output/'progress.json').write_text(json.dumps({'status':'KEYWORD_LIMIT_REACHED'}),encoding='utf-8')
+        (output/'progress.json').write_text(json.dumps(collector_progress(command,{'status':'KEYWORD_LIMIT_REACHED'})),encoding='utf-8')
         return 0
     monkeypatch.setattr(module,'run_collector',collect)
     module.collect_temu(Path('category.json'),category,sessions)

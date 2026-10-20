@@ -107,7 +107,8 @@ def test_pipeline_distributes_keywords_over_actual_three_workers(tmp_path, monke
     def collect(command, **kwargs):
         calls.append(command[command.index("--query") + 1])
         output = Path(command[command.index("--output") + 1])
-        (output / "progress.json").write_text('{"status":"KEYWORD_LIMIT_REACHED"}', encoding="utf-8")
+        (output / "progress.json").write_text(json.dumps({'status':'KEYWORD_LIMIT_REACHED',
+            'raw_collected_count':int(command[command.index('--max-products')+1])}), encoding="utf-8")
         return 0
     monkeypatch.setattr(module, "run_collector", collect)
     module.collect_temu(tmp_path / "category.json", category, sessions)

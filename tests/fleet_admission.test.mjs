@@ -68,6 +68,20 @@ test('healthy load more bypasses startup queue and spacing',async()=>{
  const g=createFleetAdmission({directory,pollMs:10});
  assert.equal(await g.run('load_more',()=>42),42);
 });
+
+test('Windows sharing violations retry without abandoning the startup queue',async()=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'fleet-sharing-'));
+ const original=fs.readFile;let conflicts=0;
+ fs.readFile=async(file,...args)=>{
+  if(path.basename(String(file))==='slot-0.json'&&conflicts++<2){const error=new Error('Windows sharing violation');error.code='EPERM';throw error;}
+  return original.call(fs,file,...args);
+ };
+ try{
+  const g=createFleetAdmission({directory,spacingMs:0,pollMs:5,memory:()=>[1,100]});
+  assert.equal(await g.run('startup',()=>42),42);assert.ok(conflicts>=2);
+  assert.ok(!(await fs.readdir(directory)).some(name=>name.startsWith('slot-')||name.startsWith('ticket-')));
+ }finally{fs.readFile=original;}
+});
 test('load more still honors server cooldown and can be stopped',async()=>{
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'fleet-pages-'));const stopFile=path.join(directory,'STOP');
  const g=createFleetAdmission({directory,stopFile,pollMs:10});await g.penalize(120);
