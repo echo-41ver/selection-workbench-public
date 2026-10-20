@@ -137,6 +137,7 @@ def test_completed_lane_progress_accumulates_all_passes_not_unique_or_pending_as
         'sales_sort':{'requested':'sales'},'raw_collected_count':400,'unique_goods':120})
     for raw in (400,200):
         put(output/'progress.json',{'status':'KEYWORD_LIMIT_REACHED' if raw==400 else 'KEYWORD_COMPLETE',
+            'completion_basis':'NO_MORE_RESULTS_CONFIRMED' if raw<400 else 'CONFIGURED_PRODUCT_LIMIT_REACHED',
             'search_query':'kettle','sales_sort':{'requested':'recent'},'raw_collected_count':raw,'unique_goods':205})
         row=dashboard._temu(tmp_path,{'temu':{'max_products_per_keyword':400}})['workers'][0]
         assert row['completed']==400+raw and row['total']==400+raw and row['percent']==100

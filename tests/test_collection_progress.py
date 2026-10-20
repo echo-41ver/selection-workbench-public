@@ -20,6 +20,7 @@ def snapshot(base, folder, q, n, status='RUNNING', order='sales'):
     put(base / f'temu/workers/w1/{folder}/progress.json', {
         'search_query': q, 'unique_goods': n, 'raw_collected_count':n, 'status': status,
         'sales_sort': {'requested': order},
+        'completion_basis':'NO_MORE_RESULTS_CONFIRMED' if status=='KEYWORD_COMPLETE' else None,
         'started_at': '2026-10-01T00:00:00Z', 'updated_at': '2026-10-01T01:00:00Z'})
 
 
@@ -122,6 +123,9 @@ def empty_snapshot(base, query='empty', **changes):
            'no_results_evidence': {'confirmed': True, 'protocol': 'VISIBLE_EMPTY_RESULTS_STABLE_V2',
                'query': query, 'loading': False, 'stable_ms': 31000, 'samples': 3,
                'url': 'https://www.temu.com/search_result.html?search_key=' + quote(query)}}
+    observation=row['no_results_evidence']
+    row['no_results_evidence']={'confirmed':True,'protocol':'INDEPENDENT_EMPTY_SEARCH_V3','query':query,
+        'checks':[{'profile_id':profile,'evidence':dict(observation)} for profile in ('first','fresh')]}
     row.update(changes)
     put(base / 'temu/workers/w1/empty/progress.json', row)
     return row
@@ -176,7 +180,7 @@ def test_missing_counts_are_not_completed_by_worker_complete_alone(tmp_path):
     row = collection_total(base, {})
     assert row['finished_passes'] == 0 and row['remaining'] == 400
     empty_snapshot(base, no_results_evidence={'confirmed': True})
-    assert collection_total(base, {})['finished_passes'] == 1
+    assert collection_total(base, {})['finished_passes'] == 0
 
 
 def test_loading_unrelated_or_manual_empty_evidence_cannot_complete_skipped_sort(tmp_path):
@@ -184,8 +188,18 @@ def test_loading_unrelated_or_manual_empty_evidence_cannot_complete_skipped_sort
     put(base / 'temu/supervisors/assignments.json', {'lanes': ['w1'], 'jobs': [{'query': 'empty', 'max_products': 200}]})
     for change in ({'loading': True}, {'query': 'other'}, {'samples': 1}, {'stable_ms': 1000}):
         row = empty_snapshot(base)
-        row['no_results_evidence'].update(change)
+        row['no_results_evidence']['checks'][0]['evidence'].update(change)
         put(base / 'temu/workers/w1/empty/progress.json', row)
         assert collection_total(base, {})['finished_passes'] == 0
     empty_snapshot(base, manual_action_required=True)
     assert collection_total(base, {})['finished_passes'] == 0
+
+
+def test_legacy_no_new_completion_cannot_shrink_target_or_show_full_completion(tmp_path):
+    put(tmp_path/'temu/supervisors/assignments.json',{'jobs':[{'query':'ordinary','max_products':400,'owner':'w1'}]})
+    snapshot(tmp_path,'ordinary','ordinary',200,'KEYWORD_COMPLETE')
+    p=tmp_path/'temu/workers/w1/ordinary/progress.json';row=json.loads(p.read_text())
+    row['completion_basis']='CONFIGURED_COMPLETE_ROUNDS_WITHOUT_NEW_RELEVANT_OR_UNCLASSIFIED_GOODS';put(p,row)
+    totals=collection_total(tmp_path,{},worker='w1',rate_snapshot={})
+    assert totals['total']==800 and totals['shortfall']==0 and totals['finished_passes']==0
+    assert not totals['all_passes_complete']

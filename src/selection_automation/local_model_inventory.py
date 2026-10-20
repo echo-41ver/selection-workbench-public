@@ -4,6 +4,7 @@ from collections import deque
 import json
 import os
 from pathlib import Path
+import re
 import threading
 import time
 import uuid
@@ -15,6 +16,30 @@ _LOCK = threading.RLock()
 _SCANS = {}
 _LIMIT = 2000
 _SKIP = {'$recycle.bin', 'system volume information'}
+
+
+def presentation(name, *, path='', info=None):
+    info = info or {}
+    text = f'{name} {path}'.lower()
+    size = re.search(r'(\d+(?:\.\d+)?)\s*b(?:\b|_)', text)
+    suffix = f'（{size[1]}B）' if size else ''
+    auxiliary = info.get('model_type') in {'clip', 'siglip', 'siglip2'} or bool(re.search(r'clip-vit|siglip', text))
+    if re.search(r'qwen[._-]?2[._-]?5[\s_:/-]*vl', text):
+        label = '通义千问 2.5 视觉版' + suffix
+    elif re.search(r'(?:^|[/\\\s_-])d1(?:[-_:\s]|$)', text):
+        label = 'D1' + suffix
+    elif auxiliary:
+        label = '图片特征模型'
+    elif 'llava' in text:
+        label = 'LLaVA 看图模型' + suffix
+    elif 'qwen' in text and ('vl' in text or 'vision' in text):
+        label = '通义千问视觉模型' + suffix
+    else:
+        candidate = str(info.get('display_name') or name).removesuffix('.gguf')
+        candidate = re.sub(r'[-_](?:Q\d[^\s]*|F16|BF16)$', '', candidate, flags=re.I)
+        label = candidate if len(candidate) <= 60 and not re.search(r'[a-f0-9]{24,}|[/\\]|https?:', candidate, re.I) else '其他本地模型' + suffix
+    return {'display_name': label, 'auxiliary': auxiliary,
+            'test_fixture': bool(re.search(r'[/\\]pytest-of-[^/\\]+[/\\]', str(path), re.I))}
 
 
 def vision_capability(info):
@@ -90,6 +115,8 @@ def scan_roots():
                 continue
         elif disk.fstype in {'nfs', 'nfs4', 'cifs', 'smbfs'}:
             continue
+        for folder in ('AI', 'models', 'LLM', 'LocalModels'):
+            candidates.insert(0, Path(disk.mountpoint) / folder)
         candidates.append(Path(disk.mountpoint))
     result = []
     for path in candidates:
@@ -168,6 +195,8 @@ def inspect_directory(path, files, cancel=None):
                            'vision': True if any('projector' in str(row.get('mediaType')) for row in layers) else None,
                            'status': 'files_only' if complete else 'incomplete_files',
                            'reason': '发现模型清单与权重文件；需连接模型服务。' if complete else '发现模型清单，部分权重缺失。'})
+    for row in result:
+        row.update(presentation(row['name'], path=row['path']))
     return result
 
 

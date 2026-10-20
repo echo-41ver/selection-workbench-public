@@ -39,6 +39,7 @@ input[type=checkbox],input[type=radio]{width:auto;flex:0 0 auto;margin:0}label:h
 #stage3-controls>.actions{margin:12px 0}#start-stage3{background:var(--blue);color:white}#stop-stage3{margin-left:auto}.live-concurrency{border-top:1px solid var(--line);padding-top:16px;margin-top:16px}.concurrency-grid{display:grid;grid-template-columns:minmax(160px,300px);gap:12px}.live-concurrency .actions{align-items:center;margin-top:8px}#stage3-settings{padding-top:16px}#stage3-settings>summary{font-size:14px;font-weight:600}
 .agent-block{color:var(--red);font-weight:600}#sync-detail{color:var(--muted)}.workflow-help{padding:10px 14px}.workflow-help p{margin:4px 0}#connection-warning{border-width:2px}#codex-review-controls{margin-top:12px}
 @media(max-width:600px){#stage3-controls{padding:14px}#stop-stage3{margin-left:0}.sync-bar{align-items:flex-start}.agent-fields{grid-template-columns:1fr}}
+.local-model-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:14px 0}.local-model-card{padding:16px;border:1px solid #dce5ea;border-radius:12px;background:#fff;min-width:0}.local-model-card>div{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.local-model-card strong{color:#1c3545;font-size:15px}.local-model-card p{margin:10px 0 0;color:#586b78;font-size:13px;line-height:1.7}.local-model-badge{white-space:nowrap;border-radius:20px;background:#eaf5ee;color:#256b43;padding:3px 9px;font-size:12px}.local-model-badge.pending{background:#fff3dc;color:#865f16}#stage3-local-technical{max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}#stage3-local-advanced{margin-top:16px}#stage3-local-scan-status{color:#586b78}
 </style>
 <style>
 input[type="checkbox"],input[type="radio"]{width:16px;height:16px;padding:0;margin:0;flex:0 0 16px;accent-color:var(--blue);vertical-align:middle}
@@ -99,12 +100,12 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
  <details id="stage3-multi-agent-details" class="agent-advanced"><summary>多 Agent 同时分析（可选）</summary><p class="small">添加后，多个 Agent 分担不同商品。每对商品只交给其中一个 Agent，不会重复分析。</p><div id="stage3-extra-agents"></div><button id="stage3-add-agent" type="button" disabled>＋ 添加一个 Agent</button></details>
  <p id="stage3-agent-message" class="small" role="status"></p>
 </div>
-<div id="stage3-api-fields"><div class="two"><div><label for="stage3-base-url">服务地址 / 端口</label><input id="stage3-base-url" value="https://api.liquid.ai/decisions/v1/systemone" type="url" autocomplete="off"></div>
+<div id="stage3-connection-home"><div id="stage3-connection-fields"><div id="stage3-api-fields"><div class="two"><div><label for="stage3-base-url">服务地址 / 端口</label><input id="stage3-base-url" value="https://api.liquid.ai/decisions/v1/systemone" type="url" autocomplete="off"></div>
 <div><label for="stage3-api-key">该服务的 API key</label><input id="stage3-api-key" type="password" autocomplete="new-password" placeholder="本地服务无需 Key 时可留空"></div></div>
 <label for="stage3-protocol">服务接口</label><select id="stage3-protocol"><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option><option value="decisions" selected>D1 决策接口</option></select></div>
-<div id="stage3-model-field"><label for="stage3-model">模型 ID</label><input id="stage3-model" value="d1" maxlength="200" autocomplete="off"></div>
+<div id="stage3-model-field"><label for="stage3-model">模型 ID</label><input id="stage3-model" value="d1" maxlength="200" autocomplete="off"></div></div></div>
 <div id="stage3-api-effort-box" hidden><label for="stage3-api-model">接口可用模型</label><select id="stage3-api-model"><option value="">填写服务地址和 Key 后自动读取</option></select><label for="stage3-api-effort">推理强度</label><select id="stage3-api-effort"><option value="default">默认（接口默认）</option></select><div class="actions"><button id="stage3-api-effort-refresh" type="button">重新读取模型与档位</button></div><p id="stage3-api-effort-status" class="small">填写服务地址和 API Key 后自动读取模型；选择模型后显示其推理档位。</p></div>
-<div id="stage3-local-tools" hidden><label for="stage3-local-model">可连接的本机看图模型</label><select id="stage3-local-model"><option value="">等待自动识别</option></select><div class="actions"><button type="button" id="stage3-local-repair">重新检测并修复连接</button><button type="button" id="stage3-local-scan">重新扫描整机</button><button type="button" id="stage3-local-scan-stop" hidden>停止扫描</button></div><p id="stage3-local-status" class="small" role="status"></p><p id="stage3-local-scan-status" class="small" role="status"></p><details id="stage3-local-inventory"><summary>整机模型扫描结果</summary><p class="small">扫描运行选品程序的电脑：本机监听服务与可访问的本地固定磁盘。仅有文件、缺少权重或看图能力待确认的模型不能直接开始第三层分析。</p><div id="stage3-local-inventory-list"></div></details></div>
+<div id="stage3-local-tools" hidden><label for="stage3-local-model">选择本机看图模型</label><select id="stage3-local-model"><option value="">正在查找模型…</option></select><p id="stage3-local-status" class="small" role="status"></p><div class="actions"><button type="button" id="stage3-local-repair">重新连接</button><button type="button" id="stage3-local-scan">重新查找模型</button><button type="button" id="stage3-local-scan-stop" hidden>停止查找</button></div><p id="stage3-local-scan-status" class="small" role="status"></p><div id="stage3-local-inventory-list" class="local-model-cards" aria-label="发现的本机模型"></div><details id="stage3-local-advanced"><summary>高级详情（连接设置与原始记录）</summary><div id="stage3-local-connection"></div><pre id="stage3-local-technical"></pre></details></div>
 <div id="stage3-confidence-field" hidden><label for="stage3-confidence">决策确认概率（%）</label><input id="stage3-confidence" type="number" value="90" min="50" max="100"><p class="small">仅供决策接口分流，尚未按当前品类校准；中间区间保留证据不足。</p></div>
 
 <p id="stage3-provider-hint" class="small">服务地址、Key 与模型必须来自同一服务商；提交后清空 Key。</p></details>
@@ -165,8 +166,10 @@ function stage3ProviderFields(){
  if(typeof renderApiReasoning==='function')renderApiReasoning();
  if($('stage3-local-tools'))$('stage3-local-tools').hidden=$('stage3-mode').value!=='local_model';
  const mode=$('stage3-mode').value,local=mode==='local_agent';$('stage3-api-fields').hidden=local;$('stage3-confidence-field').hidden=local||$('stage3-protocol').value!=='decisions';$('stage3-agents').hidden=!local;if($('stage3-model-field'))$('stage3-model-field').hidden=local||(mode==='multimodal_api'&&typeof stage3ApiModelInventory!=='undefined'&&stage3ApiModelInventory?.status==='ready');if($('configure-stage3'))$('configure-stage3').textContent=local?'保存方案（不启动）':'保存方案与 Key（不启动）';
+ const fields=$('stage3-connection-fields'),slot=$(mode==='local_model'?'stage3-local-connection':'stage3-connection-home');if(fields&&slot&&fields.parentElement!==slot)slot.append(fields);
+ if(mode==='local_model')$('configure-stage3').textContent='保存模型选择（不启动）';
  if($('stage3-auto')){$('stage3-workers').disabled=$('stage3-auto').checked;if($('stage3-workers-field'))$('stage3-workers-field').hidden=$('stage3-auto').checked;}
- $('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取。默认并发优先复用此前稳定且吞吐量最高的记录，可取消自动后手动修改。':mode==='local_model'?'连接已启动的本地看图模型服务。':local?'默认只使用你选中的一个 Agent；它可以按并发数同时处理多组商品。需要多个 Agent 分担时，在下方展开添加。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';
+ $('stage3-provider-hint').textContent=mode==='liquid_d1'?'默认使用 D1。Key 在本机加密保存，重启后自动读取。默认并发优先复用此前稳定且吞吐量最高的记录，可取消自动后手动修改。':mode==='local_model'?'选择已连接的模型后，点击“启动第三层”开始看图分析。':local?'默认只使用你选中的一个 Agent；它可以按并发数同时处理多组商品。需要多个 Agent 分担时，在下方展开添加。':'服务地址、Key 与模型须来自同一服务商；Key 在本机加密保存。DaiTu GPT 自动使用 Responses。';
 }
 let stage3ManualConcurrency=false,stage3DefaultRead=0;
 async function refreshConcurrencyDefault(){
@@ -188,23 +191,31 @@ function chooseStage3Mode(){
 }
 let localModelReadGeneration=0,localModelLoadedFor=null,localModelOptions=[];
 let localModelScanTimer=null,localModelScanGeneration=0;
+function localModelLabel(row){
+ if(row.display_name)return row.display_name;const raw=row.name||row.id||'',text=raw+' '+(row.path||''),size=text.match(/(\d+(?:\.\d+)?)b(?:\b|_)/i),suffix=size?'（'+size[1]+'B）':'';
+ if(/qwen[._-]?2[._-]?5[\s_:/-]*vl/i.test(text))return '通义千问 2.5 视觉版'+suffix;
+ if(/(?:^|[\/\\\s_-])d1(?:[-_:\s]|$)/i.test(text))return 'D1'+suffix;
+ return raw.length<=60&&!/[a-f0-9]{24,}|[\/\\]|https?:/i.test(raw)?raw.replace(/\.gguf$/i,''):'其他本地模型'+suffix;
+}
 function renderLocalModelOptions(models){
  localModelOptions=(models||[]).filter(model=>model.vision===true);const select=$('stage3-local-model');select.replaceChildren();
- const empty=document.createElement('option');empty.value='';empty.textContent=localModelOptions.length?'选择本机已安装的模型':'尚未发现可连接的看图模型';select.append(empty);
- localModelOptions.forEach((model,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=model.name+' · '+model.source+' · '+model.base_url;select.append(option);});
- const index=localModelOptions.findIndex(model=>model.id===$('stage3-model').value&&model.base_url===$('stage3-base-url').value);select.value=index<0?'':String(index);
+ const empty=document.createElement('option');empty.value='';empty.textContent=localModelOptions.length?'请选择模型':'暂时没有已连接的看图模型';select.append(empty);
+ const names=new Map();localModelOptions.forEach((model,index)=>{const label=localModelLabel(model),number=(names.get(label)||0)+1;names.set(label,number);const option=document.createElement('option');option.value=String(index);option.textContent=label+(number>1?' · 版本 '+number:'')+' · 已连接';select.append(option);});
+ const index=localModelOptions.findIndex(model=>(model.connections||[model]).some(connection=>connection.id===$('stage3-model').value&&connection.base_url===$('stage3-base-url').value));select.value=index<0?'':String(index);
 }
 function renderLocalModelScan(data){
- const count=(data.models||[]).length;$('stage3-local-scan-status').textContent=(data.message||'')+(data.status==='not_started'?'':' 已扫描 '+Number(data.directories||0).toLocaleString()+' 个目录、'+Number(data.files||0).toLocaleString()+' 个文件，发现 '+count+' 处模型；跳过 '+Number(data.skipped||0).toLocaleString()+' 处。')+(data.running&&data.current_directory?' 当前目录：'+data.current_directory:'')+(data.truncated?' 发现过多，当前仅展示前 2000 处。':'')+(data.services?.partial?' 部分服务读取超时，可重新检测连接。':'');
  $('stage3-local-scan-stop').hidden=!data.running;$('stage3-local-scan').disabled=Boolean(data.running);
  if(data.services?.models)renderLocalModelOptions(data.services.models);
  const list=$('stage3-local-inventory-list');list.replaceChildren();
- const rows=[...(data.services?.models||[]),...(data.services?.candidates||[]),...(data.models||[])];
- for(const row of rows){const item=document.createElement('p'),name=document.createElement('strong'),detail=document.createElement('span');name.textContent=row.name+' · '+row.source;
-  const label=row.status==='incomplete_files'?'权重不完整':row.status==='files_only'?'仅发现模型文件':row.vision===true?'服务已连接，元数据声明支持看图':row.vision===false?'未声明看图支持 / 文字或向量模型':'看图能力待确认';
-  detail.textContent=' — '+label+'；'+(row.path||row.base_url||'')+(row.reason?'；'+row.reason:'');item.append(name,detail);list.append(item);}
- for(const service of data.services?.services||[]){if(service.authentication_required){const item=document.createElement('p');item.textContent=service.base_url+' — 服务需要授权，尚未读取模型列表。';list.append(item);}}
- if(!rows.length){const empty=document.createElement('p');empty.className='small';empty.textContent=data.running?'扫描中，发现后会在这里显示。':'当前扫描范围内没有识别到模型。';list.append(empty);}
+ const all=[...(data.services?.models||[]),...(data.services?.candidates||[]),...(data.models||[])],groups=new Map(),ollamaConnected=(data.services?.services||[]).some(service=>service.source==='Ollama');
+ for(const row of all){if(row.auxiliary||row.test_fixture||/[/\\]pytest-of-[^/\\]+[/\\]/i.test(row.path||'')||/clip-vit|siglip/i.test(row.path||'')||row.vision===false||row.source==='Ollama 文件'&&ollamaConnected)continue;
+  const key=localModelLabel(row);if(!groups.has(key)||row.status==='ready'||row.vision===true&&!row.path)groups.set(key,row);}
+ for(const [label,row] of groups){const item=document.createElement('div'),heading=document.createElement('div'),name=document.createElement('strong'),badge=document.createElement('span'),detail=document.createElement('p'),ready=row.vision===true&&!row.path;
+  item.className='local-model-card';name.textContent=label;badge.className='local-model-badge'+(ready?'':' pending');badge.textContent=ready?'已连接':row.status==='incomplete_files'?'文件不完整':row.path?'尚未连接':'需要确认';
+  detail.textContent=ready?'选中此模型后，点击“启动第三层”开始分析。':row.status==='incomplete_files'?'模型文件不完整，请先在本机模型程序中补齐。':row.path?'已找到模型文件。启动本机模型程序后，点击“重新连接”。':'已找到模型，暂时不能确认它能否看图。';heading.append(name,badge);item.append(heading,detail);list.append(item);}
+ const count=groups.size,available=[...groups.values()].filter(row=>row.vision===true&&!row.path).length;
+ $('stage3-local-scan-status').textContent=(data.running?'正在查找本机模型…':data.status==='cancelled'?'查找已停止。':data.status==='failed'?'查找未完成，可以重试。':'查找完成。')+(count?'已找到 '+count+' 种模型，'+available+' 种已连接。':data.running?'找到后会自动显示。':'暂时没有找到可供看图的模型。');
+ $('stage3-local-technical').textContent=JSON.stringify({目录数:data.directories,文件数:data.files,跳过数:data.skipped,当前目录:data.current_directory,扫描说明:data.message,原始模型:all,服务:data.services?.services||[]},null,2);
 }
 async function pollLocalModelScan(generation){
  if(generation!==localModelScanGeneration||$('stage3-mode').value!=='local_model')return;
@@ -223,16 +234,16 @@ async function stopLocalModelScan(){
 async function repairLocalModelConnection(){
  if($('stage3-mode').value!=='local_model')return;
  const generation=++localModelReadGeneration,identity=()=>JSON.stringify([$('stage3-base-url').value,$('stage3-model').value,$('stage3-protocol').value]),before=identity(),status=$('stage3-local-status');
- status.textContent='正在识别本机服务和已安装的看图模型…';
+ status.textContent='正在连接本机看图模型…';
  try{
   const {response,data}=await boundedAgentRead('/api/local-models/repair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:stage3ProviderSettings()})});
   if(generation!==localModelReadGeneration||$('stage3-mode').value!=='local_model')return;
   if(before!==identity()){status.textContent='配置已修改，保留你填写的值；需要时重新检测。';return;}
   if(!response.ok)throw Error(data.error?.message||'本地服务检测失败');
   renderLocalModelOptions(data.models);const select=$('stage3-local-model');
-  if(data.provider){for(const [id,key] of [['stage3-base-url','base_url'],['stage3-model','model'],['stage3-protocol','protocol']])$(id).value=data.provider[key];const index=localModelOptions.findIndex(model=>model.id===data.provider.model&&model.base_url===data.provider.base_url);select.value=index<0?'':String(index);stage3SettingsDirty=true;refreshConcurrencyDefault();}
-  status.textContent=data.message||'本地服务检测完成';stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);
- }catch(error){if(generation===localModelReadGeneration&&$('stage3-mode').value==='local_model')status.textContent=error.message||'本地服务暂未就绪，请重试检测。';}
+  if(data.provider){for(const [id,key] of [['stage3-base-url','base_url'],['stage3-model','model'],['stage3-protocol','protocol']])$(id).value=data.provider[key];renderLocalModelOptions(data.models);stage3SettingsDirty=true;refreshConcurrencyDefault();}
+  status.textContent=data.provider?'已连接本机看图模型。':localModelOptions.length?'请选择一个已连接的看图模型。':'还没有连接到看图模型，请先启动本机的模型程序，再点“重新连接”。';stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);
+ }catch(error){if(generation===localModelReadGeneration&&$('stage3-mode').value==='local_model'){status.textContent='暂时没有连接成功，请确认本机模型程序已启动后重试。';$('stage3-local-technical').textContent=error.message||'连接失败';}}
 }
 function chooseLocalModel(){const option=localModelOptions[Number($('stage3-local-model').value)];if($('stage3-local-model').value===''||!option)return;for(const [id,key] of [['stage3-base-url','base_url'],['stage3-model','id'],['stage3-protocol','protocol']])$(id).value=option[key];stage3SettingsDirty=true;refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);}
 function localAgentSettingsLocked(){return Boolean(lastStatus?.stage3_runtime?.switch_pending);}
@@ -592,7 +603,7 @@ function stage3Button(data){
  let agentsBox=$('stage3-runtime-agents');if(!agentsBox){agentsBox=document.createElement('div');agentsBox.id='stage3-runtime-agents';$('stage3-phase').after(agentsBox);}agentsBox.replaceChildren();
  for(const agent of state.codex_review?.pool?.agents||[]){const row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button'),paused=(runtime.paused_agents||[]).includes(agent.id);row.className='agent-runtime-row';label.textContent=`${agent.name||agent.id} · ${Number(agent.running||0)} 组处理中${paused?' · 已暂停新组':''}`;button.type='button';button.textContent=paused?'继续此 Agent':'暂停此 Agent';button.disabled=unavailable||runtime.switch_pending;button.addEventListener('click',()=>action('/api/control-stage3',{action:paused?'resume_agent':'pause_agent',agent_id:agent.id}));row.append(label,button);agentsBox.append(row);}
  $('stop-stage3').disabled=unavailable||!state.can_stop;
- if($('stage3-current')){const provider=data?.stage3_provider||{},pool=state.codex_review?.pool||{},names={liquid_d1:'D1 API',multimodal_api:'外部 API',local_model:'本地模型',local_agent:'本机 Agent'};const engine=provider.mode==='local_agent'?(provider.agent_ids||[]).map(id=>{const agent=(pool.agents||[]).find(a=>a.id===id);return (agent?.name||id)+' / '+(provider.agent_models?.[id]||'当前默认模型');}).join('、'):provider.model||'';$('stage3-current').textContent=data?.category_key?'当前方案：'+(names[provider.mode]||'等待读取')+' · '+engine+' · '+(data?.stage3_concurrency?.workers||pool.workers||provider.workers||'—')+' 路 · '+(!operationalFresh?'运行状态待确认':provider.mode==='local_agent'?(active?Number(pool.running_groups||0)+' 组处理中':'未派发新组'):active?'请求处理中':'未派发请求')+' · 每组最多 12 个 TEMU':'';}
+ if($('stage3-current')){const provider=data?.stage3_provider||{},pool=state.codex_review?.pool||{},names={liquid_d1:'D1 API',multimodal_api:'外部 API',local_model:'本地模型',local_agent:'本机 Agent'};const engine=provider.mode==='local_agent'?(provider.agent_ids||[]).map(id=>{const agent=(pool.agents||[]).find(a=>a.id===id);return (agent?.name||id)+' / '+(provider.agent_models?.[id]||'当前默认模型');}).join('、'):provider.mode==='local_model'?localModelLabel(localModelOptions.find(model=>(model.connections||[model]).some(connection=>connection.id===provider.model))||{name:provider.model}):provider.model||'';$('stage3-current').textContent=data?.category_key?'当前方案：'+(names[provider.mode]||'等待读取')+' · '+engine+' · '+(data?.stage3_concurrency?.workers||pool.workers||provider.workers||'—')+' 路 · '+(!operationalFresh?'运行状态待确认':provider.mode==='local_agent'?(active?Number(pool.running_groups||0)+' 组处理中':'未派发新组'):active?'请求处理中':'未派发请求')+' · 每组最多 12 个 TEMU':'';}
 
  $('stage3-phase').textContent=refreshing?'最近核验快照；新增输入核对中，当前待处理尚未确认':p.counting?(p.message||state.phase||'正在核对已处理候选，请等待进度读取完成'):state.phase||'等待手动启动';
  if(data?.stage3_provider?.mode==='local_agent'&&state.codex_review?.running)$('stage3-phase').textContent=state.codex_review.pool?.phase||state.codex_review.phase||'本机 Agent 正在分析';
@@ -726,6 +737,7 @@ const live=actual.live_snapshot;const row={...actual,...stage,...metrics,...(liv
 if(live){row['建议动作']=live['建议动作']||'';row.recovery_action='';row.action='';row.manual_action_required=live['需人工介入']===true;if(live['唯一商品数']!=null)row.unique_goods=live['唯一商品数'];if(live['采集条数']!=null)row.completed=live['采集条数'];if(live['当前排序目标']!=null)row.total=live['当前排序目标'];if(live['采集更新时间'])row['更新时间']=live['采集更新时间'];}
 if(/^REPLACING_.*_ENVIRONMENT$/.test(actual.status||'')){Object.assign(row,{'状态':'正在自动更换环境，保留当前关键词断点','采集状态':actual.status,'建议动作':'','需人工介入':false,'阻断':false,manual_action_required:false});}
 if(/_RECOVERY_FAILED$/.test(actual.status||'')){Object.assign(row,{status:actual.status,'状态':'环境恢复失败，未完成换环境','采集状态':actual.status,'建议动作':actual.rotation_control?.message||'恢复未完成，浏览器和数据已保留；可点击重启重新尝试','需人工处理':true,'异常':true,manual_action_required:true,browser_preserved:true});}
+if(row.lane_ended_before_goal)row['状态']='历史采集提前结束，尚未达到目标';
 return row;
 }
 const expandedWorkers=new Set();

@@ -131,7 +131,9 @@ def collection_total(base, category, *, rate_snapshot=None, worker=None, observe
         goods = collected_count(row)
         actual += goods
         empty_done = key[0] in empty_queries and goods == 0 and not blocked_observation(row)
-        done = row.get('status') in DONE or key in completed_passes
+        explicit_end=row.get('status')=='KEYWORD_COMPLETE' and 'NO_MORE_RESULTS_CONFIRMED' in (
+            row.get('stop_reason'),row.get('completion_basis'))
+        done = (row.get('status') in DONE or key in completed_passes) and (goods>=target or explicit_end)
         # A completed pass without its count is not evidence of zero goods.
         done = (done and bool(row)) or empty_done
         if done:

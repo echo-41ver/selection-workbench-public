@@ -8,6 +8,29 @@ from selection_automation import local_model_inventory as inventory
 from selection_automation import local_model_service as service
 
 
+def test_model_labels_are_readable_and_identify_auxiliary_and_test_files():
+    assert inventory.presentation('qwen2.5vl:3b')['display_name'] == '通义千问 2.5 视觉版（3B）'
+    assert inventory.presentation('d1-3B-Q8_0.gguf')['display_name'] == 'D1（3B）'
+    assert inventory.presentation('llamacpp:' + 'a' * 64)['display_name'] == '其他本地模型'
+    assert inventory.presentation('snapshot', path='C:/cache/models--openai--clip-vit-base-patch32')['auxiliary']
+    assert inventory.presentation('real.gguf', path='C:/Temp/pytest-of-admin/pytest-1/real.gguf')['test_fixture']
+
+
+def test_same_ollama_weights_share_one_choice_without_losing_selected_connections(tmp_path, monkeypatch):
+    endpoints = ['http://127.0.0.1:11434', 'http://127.0.0.1:19761']
+    monkeypatch.setattr(service, '_endpoints', lambda: endpoints)
+    monkeypatch.setattr(service, '_probe', lambda base: {'base_url': base, 'source': 'Ollama',
+        'rows': [{'name': 'qwen2.5vl:3b'}, {'name': 'llamacpp:' + 'a' * 64}]})
+    monkeypatch.setattr(service, '_json', lambda *args, **kwargs: {'capabilities': ['vision'],
+        'modelfile': 'FROM C:/models/same-weight', 'details': {'family': 'qwen2vl'}})
+    result = service.catalog(tmp_path)
+    assert len(result['models']) == 1 and len(result['models'][0]['connections']) == 4
+    assert result['models'][0]['display_name'] == '通义千问 2.5 视觉版（3B）'
+    provider = {'base_url': endpoints[0] + '/v1', 'model': 'llamacpp:' + 'a' * 64, 'protocol': 'chat_completions'}
+    repaired = service.repair_provider(tmp_path, provider)
+    assert repaired['provider']['model'] == provider['model'] and repaired['provider']['base_url'] == provider['base_url']
+
+
 def test_non_http_listener_is_ignored_without_aborting_other_model_services(monkeypatch):
     from http.client import BadStatusLine
     import pytest

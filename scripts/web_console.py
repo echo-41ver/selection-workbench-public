@@ -1700,7 +1700,7 @@ class Console:
                 self.stage3_key=key;self.stage3_phase='本机Agent并行看图已启动'
                 return {'ok':True,'phase':self.stage3_phase,'provider':provider}
             self.stage3_busy=True; self.stage3_key=key
-            self.stage3_phase=(f"本地模型 {provider['model']}：持续分析新增候选" if provider['mode']=='local_model' else '持续分析新增候选')
+            self.stage3_phase=('本机看图模型：持续分析新增候选' if provider['mode']=='local_model' else '持续分析新增候选')
             try:self.launch_stage3_controller(key,category_path,api_key)
             except Exception:
                 self.stage3_busy=False;selection.save(folder/'STOP',{'time':time.time()});raise

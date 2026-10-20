@@ -113,7 +113,8 @@ def _temu(base,category):
                 'lane_planned_total':totals['planned_total'],'lane_shortfall':totals['shortfall'],
                 'empty_keyword_count':totals['empty_keyword_count'],'count_basis':totals['count_basis'],
                 'completed_keywords':totals['finished_passes'],'total_keywords':totals['total_passes'],
-                'lane_all_passes_complete':totals['all_passes_complete']}
+                'lane_all_passes_complete':totals['all_passes_complete'],
+                'lane_ended_before_goal':status.get('status')=='WORKER_COMPLETE' and not totals['all_passes_complete']}
         else:
             progress={**_bar(None,None,'本路累计目标尚未统计',False),'count_basis':'UNKNOWN'}
         workers.append({'name':name,'current_query':query,'current_sort':status.get('current_sort'),

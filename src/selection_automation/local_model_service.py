@@ -1,8 +1,10 @@
 """Discover and recover installed local vision services without running inference."""
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 import json
+import hashlib
 from http.client import HTTPException
 import os
+import re
 from pathlib import Path
 import shutil
 import socket
@@ -13,7 +15,7 @@ from urllib.error import HTTPError
 from urllib.request import build_opener, ProxyHandler, Request, HTTPRedirectHandler
 
 from .process_lock import ProcessLock
-from .local_model_inventory import service_endpoints, vision_capability
+from .local_model_inventory import service_endpoints, vision_capability, presentation
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -89,9 +91,14 @@ def _describe(base, row):
                 data.get(key) for data in (row, info) for key in ('remote_host', 'remote_model')):
             return None
         vision = 'vision' in capabilities
+        sources = re.findall(r'(?mi)^(?:FROM|ADAPTER|PROJECTOR)\s+(.+)$', info.get('modelfile', ''))
+        fingerprint = hashlib.sha256(json.dumps({'sources': sources,
+            'model': info.get('model_info'), 'projector': info.get('projector_info'),
+            'details': info.get('details')}, sort_keys=True).encode()).hexdigest() if sources else None
         return {'id': name, 'name': name, 'vision': vision, 'source': 'Ollama',
                 'base_url': base + '/v1', 'protocol': 'chat_completions', 'size': row.get('size', 0),
-                'status': 'ready' if vision else 'text_only'}
+                'status': 'ready' if vision else 'text_only', 'identity': fingerprint,
+                **presentation(name, info=info)}
     except (OSError, ValueError, AttributeError, TypeError):
         return None
 
@@ -142,6 +149,7 @@ def _api_models(service):
                  'source': row_source, 'base_url': base + '/v1', 'protocol': 'chat_completions',
                  'size': row.get('size_bytes', row.get('size', 0)),
                  'status': 'ready' if vision is True else 'text_only' if vision is False else 'vision_unknown'}
+        model.update(presentation(name, info=row))
         if row.get('type') == 'embedding':
             model.update(vision=False, status='text_only')
         if model['vision'] is True:
@@ -230,7 +238,15 @@ def catalog(root, start=False, *, full=False, cancel=None):
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
     models = list({(row['base_url'], row['id']): row for row in models}.values())
-    models.sort(key=lambda m: (m['id'].startswith('llamacpp:'), m['size'] if isinstance(m['size'], int) else 0, m['id']))
+    models.sort(key=lambda m: (m['id'].startswith('llamacpp:'), urlsplit(m['base_url']).port != 11434,
+                              m['size'] if isinstance(m['size'], int) else 0, m['id']))
+    grouped = {}
+    for model in models:
+        identity = model.get('identity') or (model['base_url'], model['id'])
+        if identity not in grouped:
+            grouped[identity] = {**model, 'connections': []}
+        grouped[identity]['connections'].append(model)
+    models = list(grouped.values())
     connected = any(not service.get('authentication_required') for service in services)
     message = ('已读取本机实际安装的看图模型；检测不会发送分析请求。' if models else
                '本机模型服务已连接，但没有检测到已安装的看图模型；其他模型及授权状态见扫描结果。' if connected else
@@ -247,14 +263,15 @@ def repair_provider(root, provider, allow_default=False):
                       and provider['model'] == 'd1-3b' and provider['protocol'] == 'decisions')
     eligible = legacy_default or address.port == 11434 or allow_default
     data = catalog(root, start=eligible)
-    matching = sorted([model for model in data['models'] if model['id'] == provider['model']],
+    connections = [connection for model in data['models'] for connection in model.get('connections', [model])]
+    matching = sorted([model for model in connections if model['id'] == provider['model']],
                       key=lambda model: model['base_url'].rstrip('/') != provider['base_url'].rstrip('/'))
     selected = (matching[0] if matching else data['models'][0] if data['models'] and (legacy_default or allow_default) else None)
     data['provider'] = None
     if eligible and selected:
         data['provider'] = {**provider, 'model': selected['id'],
                             **{key: selected[key] for key in ('base_url', 'protocol')}}
-        data['message'] = f"已自动连接 {selected['source']}，看图模型：{selected['id']}。点击开始分析后使用；检测未发送模型消息。"
+        data['message'] = f"已连接{selected.get('display_name', '本机看图模型')}，点击开始分析后使用。"
     elif data['models']:
         data['message'] = '已发现其他可用的本地看图模型；保留你指定的服务和模型，可在下拉框中选择。'
     return data
