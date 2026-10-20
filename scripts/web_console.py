@@ -273,6 +273,7 @@ class Console:
         self.pending_scope=None; self.generation_error=None
         self.pending_key=None
         self.workspace_stop_pending=False
+        self.workspace_stop_started=None
         saved_view=selection.read(root/'runtime/web-console/state.json',{})
         if self.key and not saved_view.get('explicitly_restored'):
             from selection_automation.stage3_progress import controller_alive
@@ -923,7 +924,7 @@ class Console:
         self.key=None;self.draft=None;self.draft_path=None;self.draft_key=None;self.draft_used=False
         self.draft_amazon_path=None;self.draft_plan_path=None;self.pending_scope=None
         self.generation_error=None;self.progress_file=None;self.plain_application={}
-        self.workspace_stop_pending=False;self.phase='当前工作区已清空，可新建任务；历史任务可在历史记录中恢复'
+        self.workspace_stop_pending=False;self.workspace_stop_started=None;self.phase='当前工作区已清空，可新建任务；历史任务可在历史记录中恢复'
         folder=self.root/'runtime/web-console'
         selection.save(folder/'state.json',{'category_key':None,'explicitly_restored':False})
         selection.save(folder/'resume-draft.json',{'draft':None})
@@ -1618,6 +1619,26 @@ class Console:
                 selection.save(pool_path,pool)
             return {'ok':True,'provider':provider,'message':f"并发已设置为 {provider['workers']} 路；后续分组按新设置派发，已发送的组正常保存。"}
 
+    def authorize_schema_retry(self,body):
+        """Explicit one-pair cost consent; this endpoint itself never dispatches."""
+        if set(body)!={'category_key','original_request_id','accept_unknown_cost'} or body.get('accept_unknown_cost') is not True:
+            raise ConsoleError('EXPLICIT_COST_CONSENT_REQUIRED','请明确确认原费用未知，仅复验原失败候选一次',409)
+        with self.lock:
+            key,_=self.current_run_key()
+            if key!=body['category_key'] or not isinstance(key,str) or not re.fullmatch('[a-z][a-z0-9_]{0,63}',key):
+                raise ConsoleError('TASK_CHANGED','任务已变化，请刷新后重试',409)
+            from selection_automation.stage3_progress import controller_alive,candidate_path
+            base=self.root/'runs'/key
+            if self.busy or self.stage3_busy or controller_alive(base) or codex_review_control(base,scan_batches=False).get('running'):
+                raise ConsoleError('TASK_BUSY','请等待已发送的分析结束后再确认复验',409)
+            from selection_automation.schema_billing_retry import create_authorization
+            try:create_authorization(base/'stage123',selection.read(base/'category.json',{}),candidate_path(base),expected_request_id=body['original_request_id'])
+            except (OSError,ValueError,KeyError,TypeError):
+                raise ConsoleError('SCHEMA_RETRY_NOT_AVAILABLE','当前证据不符合一次复验条件，或预算已使用；原费用记录和断点已保留',409) from None
+            from selection_automation.stage3_runtime import update_control
+            update_control(base/'stage123',paused=True)
+            return {'ok':True,'message':'原费用仍未知；已授权仅复验原失败的1对、最多1次新请求。点击启动第三层执行，其他候选不会派发。'}
+
     def start_stage3(self, body, configure_only=False):
         from selection_automation.stage3_progress import controller_alive
         if set(body)-{'api_key','provider'}: raise ConsoleError('INVALID_INPUT','第三层启动参数无效')
@@ -1875,6 +1896,7 @@ class Console:
                 if body: raise ConsoleError('INVALID_INPUT','停止不接受额外参数')
                 self.cancel.set()
                 self.workspace_stop_pending=True
+                self.workspace_stop_started=time.monotonic()
             elif set(body)!={'worker'} or type(body['worker']) is not int or not 1<=body['worker']<=32:
                 raise ConsoleError('INVALID_INPUT','采集路编号无效')
             owner=self.owner(); key=(owner or {}).get('category_key') or self.key
@@ -1929,15 +1951,33 @@ class Console:
             selection.save(self.root/'runtime/local-proxy-choice.json',body)
             return {'ok':True,'message':'已记录选择；下次空闲准备时使用，当前网络与VPN设置未改变。'}
 
+    def workspace_writers_stopped(self,base):
+        """A supervisor exit alone does not establish that detached writers stopped."""
+        if base is None:return True,{}
+        from local_service_recovery import service_alive
+        states={}
+        for name in ('temu_union','stage12'):
+            try:states[name]=service_alive(self.root,base,name)
+            except (OSError,ValueError,KeyError,TypeError):states[name]=None
+        return all(value is False for value in states.values()),states
+
+    def finish_workspace_stop(self,owner):
+        if self.workspace_stop_pending and not owner and not self.busy and not self.stage3_busy:
+            from selection_automation.stage3_progress import controller_alive
+            base=self.root/'runs'/self.key if self.key else None
+            writers_stopped,self.workspace_writer_states=self.workspace_writers_stopped(base)
+            if writers_stopped and (base is None or (not controller_alive(base) and not codex_review_control(base,scan_batches=False).get('running'))):
+                self.clear_workspace()
+            else:
+                elapsed=time.monotonic()-(getattr(self,'workspace_stop_started',None) or time.monotonic())
+                self.phase=('停止中：等待独立后台程序退出，当前任务和断点保留' if elapsed<30 else
+                            '停止仍在等待后台退出或身份核对；任务保留，请查看后台停止状态')
+
     def status(self):
         if self.busy and self.draft and self.draft_path and self.phase.startswith('正在逐件核对全部'):
             self.draft['match_criteria']=selection.read(self.draft_path,{}).get('match_criteria')
         owner=self.owner()
-        if self.workspace_stop_pending and not owner and not self.busy and not self.stage3_busy:
-            from selection_automation.stage3_progress import controller_alive
-            base=self.root/'runs'/self.key if self.key else None
-            if base is None or (not controller_alive(base) and not codex_review_control(base,scan_batches=False).get('running')):
-                self.clear_workspace()
+        self.finish_workspace_stop(owner)
         key,_=self.current_run_key()
         preparing_new=self.key is None and self.pending_scope is not None
         if preparing_new: key=None
@@ -2076,12 +2116,21 @@ class Console:
                      or 'red' in current_tones)
         from selection_automation.network_readiness import describe
         network_readiness=selection.read(self.root/'runtime/network-readiness.json',{}) or describe(selection.read(self.root/'runtime/secrets/proxyshare.settings.json',{}))
+        collection_sources={}
+        if key and category:
+            from selection_automation.merge_temu_snapshots import current_source_summary
+            try:collection_sources=current_source_summary(self.root,category)
+            except (OSError,ValueError,KeyError,TypeError):collection_sources={'source_count_errors':['task_source']}
+        if self.workspace_stop_pending:
+            phase=self.phase
+            details['后台停止状态']={name:('已退出' if value is False else '仍在运行' if value is True else '身份待核对')
+                for name,value in getattr(self,'workspace_writer_states',{}).items()}
         return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,'api_reasoning_supported':True,
-                      'task_stopped':bool(stopped.get('task_stopped')),'match_criteria':category.get('match_criteria'),
+                      'task_stopped':bool(stopped.get('task_stopped')) and not self.workspace_stop_pending,'match_criteria':category.get('match_criteria'),
                       'network_readiness':network_readiness,
                       'task_runtime':selection.read(self.root/'runs'/key/'runtime_version.json',{}) if key else {},
-                      'console_busy':self.busy,'active':bool(owner) or self.busy or self.stage3_busy,'category_key':key,'phase':'已停止' if stopped.get('task_stopped') else phase,
-                      'severity':'neutral' if stopped.get('task_stopped') else 'red' if red else 'yellow' if yellow else 'green' if owner or self.busy or self.stage3_busy else 'neutral','workers':workers,'details':details,
+                      'console_busy':self.busy,'active':bool(owner) or self.busy or self.stage3_busy or self.workspace_stop_pending,'category_key':key,'phase':phase if self.workspace_stop_pending else '已停止' if stopped.get('task_stopped') else phase,
+                      'severity':'yellow' if self.workspace_stop_pending else 'neutral' if stopped.get('task_stopped') else 'red' if red else 'yellow' if yellow else 'green' if owner or self.busy or self.stage3_busy else 'neutral','workers':workers,'details':details,
                       'generation':generation,'generation_error':self.generation_error if preparing_new else None,
                       'can_retry_generation':bool(preparing_new and generation_failed and not self.busy),
                       'can_resume':bool(not owner and not self.busy and not preparing_new and key and (self.root/'runs'/key/'category.json').is_file()),
@@ -2100,6 +2149,7 @@ class Console:
                       'market_status':market_state,'market_busy':self.market_busy,
                       'frontend_market':self.frontend_market_snapshot(key) if key and not preparing_new else {},
                       'collection_complete':collection_complete,
+                      'collection_sources':collection_sources,
                       'stage3_key_configured':bool((key,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)['base_url']) in self.stage3_keys or __import__('selection_automation.stage3_credentials',fromlist=['saved_key']).saved_key(self.root,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category))),
                       'stage3_concurrency':selection.read(self.root/'runs'/key/'stage123/concurrency.json',{}) if key else {},
                       'stage3_provider':provider,
@@ -2233,6 +2283,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/match-criteria': return self.send_json(self.server.console.select_match_criteria(body))
             if self.path=='/api/run': return self.send_json(self.server.console.run_draft(body),202)
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
+            if self.path=='/api/stage3/authorize-schema-retry': return self.send_json(self.server.console.authorize_schema_retry(body))
             if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))
             if self.path=='/api/stage3/concurrency': return self.send_json(self.server.console.set_stage3_concurrency(body))
             if self.path=='/api/stage3/api-reasoning': return self.send_json(self.server.console.api_reasoning_catalog(body))

@@ -47,6 +47,10 @@ def watch(category_path):
         maintain_publisher()
         try:
             while (folder/'paid_enabled.json').exists() and not (folder/'STOP').exists():
+                from selection_automation.schema_billing_retry import read_authorization
+                repair=read_authorization(folder)
+                if repair and repair['claimed']:
+                    state('本次单对复验预算已使用；原费用仍待核对，未派发其他候选');return
                 from selection_automation.stage3_runtime import dispatch_allowed
                 if not dispatch_allowed(folder):
                     state('已暂停派发，结果和断点已保存');time.sleep(2);continue
@@ -78,6 +82,8 @@ def watch(category_path):
                     failure=failure_state(folder,launched_at,provider)
                     state(failure.pop('phase'),**failure); return
                 maintain_publisher()
+                if repair:
+                    state('本次单对复验已结束；原费用仍待核对，未派发其他候选');return
                 time.sleep(1)
             state('已停止，结果和断点已保留')
         except Exception:

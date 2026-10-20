@@ -15,7 +15,7 @@ def _rows(path):
         return
 
 
-def retry_authorizations(intent_path, result_path):
+def _v1_retry_authorizations(intent_path, result_path):
     """Validate exact human retry scope without changing the billing journal."""
     path=Path(result_path).with_name('billing_retry_authorizations.json')
     empty={'request_ids':set(),'by_pair':{},'success_pairs':set(),'attempts':{}}
@@ -66,10 +66,24 @@ def retry_authorizations(intent_path, result_path):
     return {'request_ids':ids,'by_pair':by_pair,'success_pairs':success,'attempts':attempts}
 
 
+def retry_authorizations(intent_path,result_path):
+    result=_v1_retry_authorizations(intent_path,result_path)
+    from .schema_billing_retry import billing_view
+    repair=billing_view(Path(result_path).parent)
+    if repair is None:return result
+    if result['request_ids'] & repair['request_ids'] or set(result['by_pair']) & set(repair['by_pair']):
+        raise ValueError('Overlapping retry authorizations')
+    return {**result,'request_ids':result['request_ids']|repair['request_ids'],
+            'by_pair':{**result['by_pair'],**repair['by_pair']},
+            'success_pairs':result['success_pairs']|repair['success_pairs'],
+            'attempts':{**result['attempts'],**repair['attempts']},'schema_retry':repair['schema_retry']}
+
+
 def authorized_retry_attempt(authorization,pair,keys):
     item=authorization['by_pair'].get(pair)
     if not item or pair in authorization['success_pairs'] or not keys or keys[0]!=item['vision_revision_key']:
         return None
+    if item.get('schema_retry') and item.get('claimed'):return None
     limit=item['baseline_attempt']+1
     return limit if authorization['attempts'].get(pair,0)<limit else None
 

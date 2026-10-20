@@ -45,6 +45,17 @@ def read(path, default=None):
     except (OSError, ValueError): return default
 
 
+def request_task_stop(base):
+    """Stop independently recovered analysis services as well as the supervisor."""
+    base.mkdir(parents=True, exist_ok=True)
+    # Gate recovery first. Service-local markers are needed by existing watcher
+    # versions too; those processes may be children of the web service.
+    atomic_write(base/'STOP', '用户请求停止')
+    atomic_write(base/'stage12/STOP', '用户请求停止整个任务')
+    if not (base/'stage123/STOP').exists():
+        save(base/'stage123/STOP', {'time':time.time(),'reason':'whole-task-user-request'})
+
+
 def identity():
     path=ROOT/'runtime'/'machine.json'
     if not path.exists(): save(path, {'id': uuid.uuid4().hex})
@@ -1014,8 +1025,7 @@ def main():
         print(json.dumps(request_start(frozen,cat,base,a.paid,preserve_prepared=a.preserve_prepared),ensure_ascii=False))
     elif a.action=='status': print(json.dumps({'后台':live_owner(),'状态':read(base/'status.json',{'状态':'尚未启动'})},ensure_ascii=False))
     elif a.action=='stop':
-        base.mkdir(parents=True,exist_ok=True)
-        (base/'STOP').write_text('用户请求停止',encoding='utf-8')
+        request_task_stop(base)
         owner=live_owner()
         stopping=bool(owner and owner.get('category_key')==base.name)
         save(base/'status.json',{**read(base/'status.json',{}),'状态':'停止中' if stopping else '已停止'})

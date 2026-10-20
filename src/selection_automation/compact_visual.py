@@ -10,10 +10,16 @@ def protocol(category,count):
     def obj(properties):
         return {'type':'object','properties':properties,'required':list(properties),'additionalProperties':False}
     def text(limit):return {'type':'string','maxLength':limit}
-    item = obj({'i':text(80),'r':{'type':'string','enum':list(REL)},
-                'a':text(180),'t':text(180),'why':text(160),
-                'q':comparison_schema(category),'c':{'type':'number','minimum':0,'maximum':1}})
-    for row in item['properties']['q']['properties'].values():
+    comparisons = comparison_schema(category)
+    properties = {'i':text(80),'r':{'type':'string','enum':list(REL)},
+                  'a':text(180),'t':text(180),'why':text(160)}
+    # Strict structured-output APIs reject an object with no properties. There
+    # is no per-condition evidence to request when no visual box is selected.
+    if comparisons['properties']:
+        properties['q'] = comparisons
+    properties['c'] = {'type':'number','minimum':0,'maximum':1}
+    item = obj(properties)
+    for row in comparisons['properties'].values():
         row['properties']['a']=text(160);row['properties']['t']=text(160)
     schema = obj({'candidates':{'type':'array','minItems':count,'maxItems':count,'items':item}})
     conditions = [{'id':row['id'],'条件':row['label'],'要求':row['rule']} for row in selected(category,'visual')]
@@ -42,6 +48,11 @@ def protocol(category,count):
             'c为证据可见性0–1。保留全部候选ID，不输出模块、分数或重复特征清单。'
             '\n全量主图提取的观察方向（供判断参考，不是硬门槛）：'+json.dumps(focus,ensure_ascii=False,separators=(',',':'))+
             '\n额外强制一致条件：'+json.dumps(conditions,ensure_ascii=False,separators=(',',':')))
+    if not conditions:
+        prompt = prompt.replace('q仅核实以下勾选图片条件，r用S一致/D明确不同/U不可辨认，a/t写具体双边事实。',
+                                '本次没有额外勾选图片条件，不输出q字段。')
+        prompt = prompt.replace('q仅回答额外强制一致条件，r用S/D/U及双边事实；没有额外条件时q={}。',
+                                '本次没有额外强制一致条件，不输出q字段。')
     if 'prompt_override' in stage:
         override=stage['prompt_override']
         if not isinstance(override,str) or not override.strip():raise ValueError('edited visual prompt must not be empty')
@@ -55,16 +66,21 @@ def decode(category,raw,expected):
         or len(set(expected))!=len(expected) or len(raw['candidates'])!=len(expected)):
         raise ValueError('invalid compact visual envelope')
     ids={row['id'] for row in selected(category,'visual')};out={}
+    keys={'i','r','a','t','why','c'}
+    # Historical zero-condition responses contain q={}; retain that exact
+    # representation too, without allowing missing evidence for selected IDs.
+    allowed_keys=[keys|{'q'}] if ids else [keys,keys|{'q'}]
     for item in raw['candidates']:
-        if (not isinstance(item,dict) or set(item)!={'i','r','a','t','why','q','c'} or
+        if (not isinstance(item,dict) or set(item) not in allowed_keys or
             not isinstance(item['i'],str) or item['i'] not in expected or item['i'] in out or
             not isinstance(item['r'],str) or item['r'] not in REL or
             any(not isinstance(item[k],str) for k in ('a','t','why'))):
             raise ValueError('invalid compact visual candidate')
-        if not isinstance(item['q'],dict) or set(item['q'])!=ids:
+        comparisons=item.get('q',{})
+        if not isinstance(comparisons,dict) or set(comparisons)!=ids:
             raise ValueError('missing or unexpected selected condition evidence')
         rows={};matches=[];differences=[];unknown=[]
-        for fid,row in item['q'].items():
+        for fid,row in comparisons.items():
             if (not isinstance(row,dict) or set(row)!={'r','a','t'} or
                 any(not isinstance(row[k],str) for k in ('r','a','t')) or row['r'] not in {'S','D','U'}):
                 raise ValueError('invalid selected condition evidence')

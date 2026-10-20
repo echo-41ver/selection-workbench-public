@@ -822,6 +822,7 @@ def merge_temu(category: dict) -> None:
     union = run_root(category) / "temu" / "union"
     from selection_automation.category_subject_filter import filter_category_union
     rows,summary=filter_category_union(ROOT,category,rows,summary,union)
+    summary['analysis_unique_goods']=len(rows)
     atomic_write(union / "products.jsonl", "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
     atomic_write(union / "summary.json", json.dumps(summary, ensure_ascii=False, indent=2))
     print(json.dumps(summary, ensure_ascii=False))

@@ -41,6 +41,10 @@ class IncompleteVisualResponse(RuntimeError):
         super().__init__('Visual response incomplete: ' + reason)
 
 
+class SchemaRetryReviewRequired(RuntimeError):
+    """The one allowed paid response needs review; it cannot fund a high recheck."""
+
+
 def output_token_budget(stage, count):
     # Responses output includes internal reasoning as well as compact JSON facts.
     # Reserve reasoning room even for one pair, then scale with visual modules.
@@ -181,6 +185,7 @@ def run(args, candidate_path):
     codex_reviews = load_reviews(args.results.parent.parent, by_revision=True)
     cached = result_index(args.results)
     authorization=retry_authorizations(args.results.with_name('request_intents.jsonl'),args.results)
+    schema_retry=authorization.get('schema_retry')
     held_pairs = set() if args.validate_only else billing_hold(
         args.results.with_name('request_intents.jsonl'), args.results)['pairs']
     fatal_file=args.results.with_name('provider_blocked.json')
@@ -189,6 +194,8 @@ def run(args, candidate_path):
     def pending_rows():
         count = 0
         for row in rows(candidate_path):
+            if schema_retry and (row.get('asin'),row.get('goods_id')) not in authorization['by_pair']:
+                continue
             if not admitted(cat, row):
                 continue
             if (row.get('asin'), row.get('goods_id')) in held_pairs:
@@ -243,6 +250,11 @@ def consume(args, cat, fatal_file, key_identity, pending):
         raise SystemExit('检测到未结算视觉请求，已暂停付费重发；请先核对 request_intents.jsonl 和供应商用量，已保存结果仍可导出')
     pending = (row for row in pending if (row.get('asin'),row.get('goods_id')) not in held['pairs'])
     retry_scope=retry_authorizations(intent_log,args.results)
+    schema_retry=retry_scope.get('schema_retry')
+    if schema_retry:
+        # The explicit repair consent never authorizes new market/front-end pairs.
+        pending=(row for row in pending if (row.get('asin'),row.get('goods_id')) in retry_scope['by_pair'])
+        args.max_requests=1
     pending = (row for row in pending if (row.get('asin'),row.get('goods_id')) not in retry_scope['by_pair']
                or (row.get('attempt') is not None and row.get('attempt')==authorized_retry_attempt(
                    retry_scope,(row.get('asin'),row.get('goods_id')),[row.get('vision_revision_key')])))
@@ -260,11 +272,14 @@ def consume(args, cat, fatal_file, key_identity, pending):
             from selection_automation.api_reasoning import validate
             validate(provider,request_key(provider))
     provider_identity={k:provider[k] for k in ('mode','base_url','model','protocol')}
+    if schema_retry:
+        from selection_automation.schema_billing_retry import validate_current
+        validate_current(schema_retry,cat,first,key_identity,args.results.parent)
     if fatal_file.exists():
         blocked=json.loads(fatal_file.read_text(encoding='utf-8'))
-        if blocked.get('key_identity')==key_identity and (not blocked.get('provider') or blocked['provider']==provider_identity):
+        if not schema_retry and blocked.get('key_identity')==key_identity and (not blocked.get('provider') or blocked['provider']==provider_identity):
             raise SystemExit('API鉴权、余额或请求参数被拒绝，已暂停；请修正当前方案后继续')
-        fatal_file.unlink()
+        if not schema_retry:fatal_file.unlink()
     pending = chain([first], pending)
     from selection_automation.stage3_provider import from_category, request_key, VisualClient
     provider=from_category(cat)
@@ -349,6 +364,10 @@ def consume(args, cat, fatal_file, key_identity, pending):
             if client_setup_error is not None:raise client_setup_error
             prepared_data=(client.prepare(content,prompt,candidate_ids=ids) if provider['protocol']=='decisions' and len(batch)>1
                            else client.prepare(content,prompt))
+            if schema_retry:
+                from selection_automation.schema_billing_retry import claim
+                claim(args.results.parent,schema_retry['authorization_id'],request_id,
+                      category=cat,pair=batch[0],key_identity=key_identity)
             append(intent_log, {'request_id': request_id, 'status': 'started', 'time': time.time(),
                                 'pairs': len(batch), 'vision_revision_keys': [row['vision_revision_key'] for row in batch],
                                 'effort': effort, 'max_output_tokens': budget, 'wire_version': wire_version})
@@ -399,6 +418,13 @@ def consume(args, cat, fatal_file, key_identity, pending):
                         completed+=1
                         continue
                 if provider['mode']!='local_model' and 'reasoning_effort' not in provider and effort == 'low' and scored['hard_conflicts'] and facts[identity].get('overall_confidence',1) < .65:
+                    if schema_retry:
+                        append(args.results.with_name('evidence_rechecks.jsonl'),{
+                            **{k:row[k] for k in ('asin','goods_id','pair_revision','vision_revision_key')},
+                            'request_id':request_id,'response_id':response.id,'time':time.time(),
+                            'visual_facts':facts[identity],'module_result':scored,
+                            'action':'ONE_SHOT_BUDGET_EXHAUSTED','requires_human_review':True})
+                        raise SchemaRetryReviewRequired()
                     call([row], 'high')
                     continue
                 append(args.results, {**{k: row[k] for k in ('asin','goods_id','pair_revision','vision_revision_key','attempt')},
@@ -440,6 +466,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     return
             if isinstance(exc, IncompleteVisualResponse):
                 reason = 'VISUAL_RESPONSE_INCOMPLETE: ' + exc.reason
+            if isinstance(exc, SchemaRetryReviewRequired):
+                reason = 'SCHEMA_RETRY_REVIEW_REQUIRED: 已收到低置信度冲突响应，原始事实已保留；单次复验预算已用完，需人工复核，未追加高强度请求'
             billing_uncertain = sent and not received and provider['mode']!='local_model'
             if provider['mode']=='local_model' and not received:
                 local_service_stop.set();stop.set()
@@ -453,7 +481,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 stop.set()
                 fatal_stop.set()
                 with lock:
-                    fatal_file.write_text(json.dumps({'status':status,'key_identity':key_identity,'provider':provider_identity,'provider_error':provider_error},ensure_ascii=False),encoding='utf-8')
+                    target=(args.results.with_name('schema_retry_failure_blocked.json') if schema_retry else fatal_file)
+                    target.write_text(json.dumps({'status':status,'key_identity':key_identity,'provider':provider_identity,'provider_error':provider_error},ensure_ascii=False),encoding='utf-8')
             if isinstance(exc, LocalVisualFormatError) and received:
                 # One whole-group retry at most. Settle the parent first so it
                 # cannot masquerade as another concurrent request.
@@ -484,7 +513,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
         if not billing_uncertain:
             settle_intent()
         return completed
-    size = 1 if provider['mode']=='liquid_d1' else max(1,min(12,stage.get('batch_size',12)))
+    size = 1 if schema_retry or provider['mode']=='liquid_d1' else max(1,min(12,stage.get('batch_size',12)))
     if stage.get('match_criteria_visual_count'):
         per_pair=640*len(stage['modules'])+1200*len(stage.get('set_inventory_features') or {})+256*stage['match_criteria_visual_count']
         size=min(size,max(1,(65536-8192)//per_pair))

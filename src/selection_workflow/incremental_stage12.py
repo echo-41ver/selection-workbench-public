@@ -18,7 +18,7 @@ import struct
 import time
 import urllib.request
 import uuid
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import CancelledError, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import lru_cache
 from datetime import datetime, timezone
@@ -429,17 +429,70 @@ class IncrementalStage12:
     def close(self) -> None:
         self._image_transport.close()
         if self._text_gate_pool is not None:
-            self._text_gate_pool.shutdown(wait=True, cancel_futures=True)
-            self._text_gate_pool = None
+            if self.stop_requested():
+                self._cancel_text_gate_work()
+            else:
+                self._text_gate_pool.shutdown(wait=True, cancel_futures=True)
+                self._text_gate_pool = None
         self.con.close()
 
+    def _cancel_text_gate_work(self, futures=()) -> None:
+        """Cancel only this executor's queued work; do not wait for a whole batch."""
+        for future in futures:
+            future.cancel()
+        pool, self._text_gate_pool = self._text_gate_pool, None
+        if pool is not None:
+            # Python 3.12 has no public terminate_workers API. Already-running
+            # single gate calls can finish; bounded dispatch prevents the rest
+            # of the batch from having been queued behind them.
+            pool.shutdown(wait=False, cancel_futures=True)
+
     def _evaluate_text_gates(self, inputs: list[tuple[str, ...]]) -> list[dict[str, Any]]:
+        from concurrent.futures import CancelledError, FIRST_COMPLETED, wait
+
+        def check_stop(futures=()):
+            if self.stop_requested():
+                self._cancel_text_gate_work(futures)
+                raise CancelledError("Task stopped during text classification")
+
+        check_stop()
         if self.text_gate_workers <= 1 or len(inputs) < 256:
-            return [_evaluate_text_gate_args(values) for values in inputs]
+            results = []
+            for values in inputs:
+                check_stop()
+                results.append(_evaluate_text_gate_args(values))
+            check_stop()
+            return results
         if self._text_gate_pool is None:
             self._text_gate_pool = ProcessPoolExecutor(max_workers=self.text_gate_workers)
-        chunksize = max(32, min(256, len(inputs) // (self.text_gate_workers * 4)))
-        return list(self._text_gate_pool.map(_evaluate_text_gate_args, inputs, chunksize=chunksize))
+        pool = self._text_gate_pool
+        results = [None] * len(inputs)
+        pending = {}
+        next_index = 0
+
+        def fill_available():
+            nonlocal next_index
+            # Submit at most one single-item call per worker. Executor.map
+            # eagerly queues every chunk, which cannot be revoked on Stop.
+            while next_index < len(inputs) and len(pending) < self.text_gate_workers:
+                check_stop(pending)
+                pending[pool.submit(_evaluate_text_gate_args, inputs[next_index])] = next_index
+                next_index += 1
+
+        try:
+            fill_available()
+            while pending:
+                check_stop(pending)
+                done, _ = wait(tuple(pending), timeout=0.05, return_when=FIRST_COMPLETED)
+                check_stop(pending)
+                for future in done:
+                    results[pending.pop(future)] = future.result()
+                fill_available()
+            check_stop()
+            return results
+        except BaseException:
+            self._cancel_text_gate_work(pending)
+            raise
 
     def _init_schema(self) -> None:
         self.con.executescript("""
@@ -596,6 +649,7 @@ class IncrementalStage12:
         self.con.execute("INSERT INTO counters(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value", (name, amount))
 
     def ingest_source(self, source_key: str) -> dict[str, int | str]:
+        self._raise_if_stopped()
         self.ensure_processing_contract()
         source = self.con.execute("SELECT * FROM sources WHERE source_key=?", (source_key,)).fetchone()
         if not source:
@@ -605,9 +659,11 @@ class IncrementalStage12:
             raws, snapshot_hash = read_complete_jsonl(path)
             if not raws and int(source["received_records"] or 0) > 0:
                 raise RuntimeError("empty snapshot rejected because committed products already exist")
-            normalized = [normalize_record(r, platform=source["platform"], source_key=source_key, adapter=source["adapter"], source_path=path) for r in raws]
             by_id: dict[str, dict[str, Any]] = {}
-            for row in normalized:
+            for raw in raws:
+                self._raise_if_stopped()
+                row = normalize_record(raw, platform=source["platform"], source_key=source_key,
+                                       adapter=source["adapter"], source_path=path)
                 by_id[row["product_id"]] = row
             current_ids = {
                 row[0] for row in self.con.execute(
@@ -626,6 +682,8 @@ class IncrementalStage12:
                         self.con.execute('UPDATE sources SET last_error=NULL,last_success_at=? WHERE source_key=?', (utcnow(),source_key))
                 return {"source": source_key, "received": len(by_id), "new": 0, "changed": 0,
                         "removed": 0, "reused_snapshot": 1}
+        except CancelledError:
+            raise
         except Exception as exc:
             with self.con:
                 self.con.execute("UPDATE sources SET last_error=? WHERE source_key=?", (str(exc), source_key))
@@ -633,6 +691,7 @@ class IncrementalStage12:
         new = changed = removed = pairs_removed = 0
         changed_ids: list[str] = []
         now = utcnow()
+        self._raise_if_stopped()
         with self.con:
             snapshot_mode = str(source["snapshot_mode"] or "upsert").lower()
             existing_ids = {
@@ -653,6 +712,7 @@ class IncrementalStage12:
                     )
                 ]
                 for path_key in related_paths:
+                    self._raise_if_stopped()
                     if source["platform"].upper() == "AMAZON":
                         placeholders = ",".join("?" for _ in removed_ids)
                         args = [path_key, *sorted(removed_ids)]
@@ -679,6 +739,7 @@ class IncrementalStage12:
                 self.con.execute(f"DELETE FROM products WHERE source_key=? AND product_id IN ({placeholders})", args)
                 removed = len(removed_ids)
             for product_id, row in by_id.items():
+                self._raise_if_stopped()
                 current = self.con.execute("SELECT evidence_hash FROM products WHERE source_key=? AND product_id=?", (source_key, product_id)).fetchone()
                 record_json = stable_json(row)
                 if current is None:
@@ -698,7 +759,9 @@ class IncrementalStage12:
                     last_received_at=excluded.last_received_at,receive_count=receive_count+1""", obs)
             self.con.execute("UPDATE sources SET last_snapshot_hash=?,last_success_at=?,last_error=NULL,received_records=? WHERE source_key=?", (snapshot_hash, now, len(by_id), source_key))
             for product_id in changed_ids:
+                self._raise_if_stopped()
                 self._schedule_product(source_key, source["platform"], product_id)
+            self._raise_if_stopped()
             self._inc("products_new", new); self._inc("products_changed", changed)
             self._inc("products_removed", removed)
             self._inc("pairs_removed", pairs_removed)
@@ -712,6 +775,7 @@ class IncrementalStage12:
                 opposite = self.con.execute("SELECT product_id,evidence_hash FROM products WHERE source_key=?", (path["temu_source"],)).fetchall()
                 amazon_version = self.con.execute("SELECT evidence_hash FROM products WHERE source_key=? AND product_id=?", (source_key, product_id)).fetchone()[0]
                 for item in opposite:
+                    self._raise_if_stopped()
                     self._upsert_pair(path["path_key"], product_id, item["product_id"], amazon_version, item["evidence_hash"])
         else:
             related = self.con.execute("SELECT * FROM paths WHERE temu_source=?", (source_key,)).fetchall()
@@ -719,6 +783,7 @@ class IncrementalStage12:
                 opposite = self.con.execute("SELECT product_id,evidence_hash FROM products WHERE source_key=?", (path["amazon_source"],)).fetchall()
                 temu_version = self.con.execute("SELECT evidence_hash FROM products WHERE source_key=? AND product_id=?", (source_key, product_id)).fetchone()[0]
                 for item in opposite:
+                    self._raise_if_stopped()
                     self._upsert_pair(path["path_key"], item["product_id"], product_id, item["evidence_hash"], temu_version)
 
     def _upsert_pair(self, path_key: str, asin: str, goods_id: str, amazon_version: str, temu_version: str) -> None:
@@ -832,6 +897,7 @@ class IncrementalStage12:
         if due:
             active_keys=set()
             for row in self.con.execute('SELECT record_json FROM products'):
+                self._raise_if_stopped()
                 try:active_keys.add(self._image_identity(json.loads(row[0]))[1])
                 except ImageSourceMissing:pass
             for row in due:
@@ -844,6 +910,7 @@ class IncrementalStage12:
         # serial retry pool can hold up newly collected successful images.
         combined=[json.loads(row['product_json']) for row in due]+list(products)
         for product in combined:
+            self._raise_if_stopped()
             try:
                 ref, image_key = self._image_identity(product)
             except ImageSourceMissing:
@@ -911,6 +978,7 @@ class IncrementalStage12:
         started = time.monotonic()
         missing: dict[str, Path] = {}
         for product in products:
+            self._raise_if_stopped()
             try:
                 _, image_key = self._image_identity(product)
             except ImageSourceMissing:
@@ -929,29 +997,45 @@ class IncrementalStage12:
         items = list(missing.items())
         successes: list[tuple[str, np.ndarray]] = []
         for offset in range(0, len(items), self.vector_batch_size):
+            self._raise_if_stopped()
             chunk = items[offset:offset + self.vector_batch_size]
             try:
                 encode_many = getattr(self.vectorizer, "encode_many", None)
-                values = encode_many([path for _, path in chunk]) if encode_many else [self.vectorizer.encode(path) for _, path in chunk]
+                if encode_many:
+                    values = encode_many([path for _, path in chunk])
+                else:
+                    values = []
+                    for _, path in chunk:
+                        self._raise_if_stopped()
+                        values.append(self.vectorizer.encode(path))
+                self._raise_if_stopped()
                 if len(values) != len(chunk):
                     raise RuntimeError("vector batch returned unexpected row count")
                 chunk_successes = []
                 for (content_hash, _), value in zip(chunk, values):
+                    self._raise_if_stopped()
                     vector = np.asarray(value, dtype=np.float32).reshape(-1)
                     if not vector.size or not np.isfinite(vector).all():
                         raise RuntimeError("invalid vector")
                     chunk_successes.append((content_hash, vector))
                 successes.extend(chunk_successes)
+            except CancelledError:
+                raise
             except Exception:
                 # One corrupt image must not discard the rest of a batch.
                 for content_hash, path in chunk:
+                    self._raise_if_stopped()
                     try:
                         vector = np.asarray(self.vectorizer.encode(path), dtype=np.float32).reshape(-1)
+                        self._raise_if_stopped()
                         if not vector.size or not np.isfinite(vector).all():
                             raise RuntimeError("invalid vector")
                         successes.append((content_hash, vector))
+                    except CancelledError:
+                        raise
                     except Exception as exc:
                         errors[content_hash] = exc
+        self._raise_if_stopped()
         with self.con:
             self.con.executemany("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)", [
                 (content_hash, self.vectorizer.revision, int(vector.size), vector.tobytes(), "READY", None, utcnow())
@@ -1015,9 +1099,28 @@ class IncrementalStage12:
                 self.con.execute("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)", (content_hash, self.vectorizer.revision, None, None, "FAILED", str(exc), utcnow()))
             raise
 
-    def process_batch(self, batch_size: int = 50) -> dict[str, int | float]:
-        if self.stop_requested():return {'selected':0,'completed':0,'failed':0,'new_candidates':0,'cancelled':True}
+    def _raise_if_stopped(self) -> None:
+        if self.stop_requested():
+            raise CancelledError('Stage 1/2 stopped at a processing boundary')
+
+    def process_batch(self, batch_size: int = 50) -> dict[str, Any]:
+        self._batch_phase = 'selection'
+        self._batch_selected = self._batch_stage1_committed = 0
+        started = time.monotonic()
+        try:
+            return self._process_batch(batch_size)
+        except CancelledError:
+            # Stage 1 is an independent truthful checkpoint. Final pair status
+            # and candidates stay pending until the whole final transaction.
+            return {'selected': self._batch_selected, 'completed': 0, 'failed': 0,
+                    'new_candidates': 0, 'cancelled': True, 'cancelled_phase': self._batch_phase,
+                    'stage1_committed': self._batch_stage1_committed,
+                    'processing_seconds': round(time.monotonic() - started, 3)}
+
+    def _process_batch(self, batch_size: int) -> dict[str, int | float]:
+        self._raise_if_stopped()
         self.ensure_processing_contract()
+        self._raise_if_stopped()
         batch_started = time.monotonic()
         phase_started = batch_started
         path_keys = [r[0] for r in self.con.execute("SELECT path_key FROM paths ORDER BY path_key")]
@@ -1029,6 +1132,7 @@ class IncrementalStage12:
             found: list[sqlite3.Row] = []
             skipped = skip or set()
             for status in eligible:
+                self._raise_if_stopped()
                 remaining = limit - len(found)
                 if remaining <= 0:
                     break
@@ -1039,6 +1143,7 @@ class IncrementalStage12:
                     WHERE path_key=? AND status=? ORDER BY updated_at LIMIT ?""",
                     (path_key, status, query_limit)).fetchall()
                 for row in candidates:
+                    self._raise_if_stopped()
                     key = (row["path_key"], row["asin"], row["goods_id"])
                     if key not in skipped:
                         found.append(row)
@@ -1048,15 +1153,19 @@ class IncrementalStage12:
 
         rows: list[sqlite3.Row] = []
         for path_key in path_keys:
+            self._raise_if_stopped()
             rows.extend(fetch_path_rows(path_key, per_path))
         if len(rows) < batch_size:
             selected_keys = {(r["path_key"], r["asin"], r["goods_id"]) for r in rows}
             for path_key in path_keys:
+                self._raise_if_stopped()
                 if len(rows) >= batch_size:
                     break
                 extras = fetch_path_rows(path_key, batch_size - len(rows), selected_keys)
                 rows.extend(extras)
                 selected_keys.update((r["path_key"], r["asin"], r["goods_id"]) for r in extras)
+        self._batch_selected = len(rows)
+        self._batch_phase = 'text_preparation'
         selection_seconds = time.monotonic() - phase_started
         phase_started = time.monotonic()
         base_contexts = []
@@ -1064,6 +1173,7 @@ class IncrementalStage12:
         path_cache = {row["path_key"]: row for row in self.con.execute("SELECT * FROM paths")}
         product_cache: dict[tuple[str, str], dict[str, Any]] = {}
         for pair in rows:
+            self._raise_if_stopped()
             path = path_cache[pair["path_key"]]
             amazon_key = (path["amazon_source"], pair["asin"])
             temu_key = (path["temu_source"], pair["goods_id"])
@@ -1074,13 +1184,17 @@ class IncrementalStage12:
             amazon = product_cache[amazon_key]
             temu = product_cache[temu_key]
             base_contexts.append((pair, amazon, temu, amazon_key, temu_key))
-        gate_inputs = [(self.text_gate_name, amazon.get("gate_text") or "", temu.get("gate_text") or "")
-                       for _, amazon, temu, _, _ in base_contexts]
-        if self._declarative_snapshot is not None:
-            # No worker may reopen the path after the contract check. An edit
-            # during this batch takes effect only after explicit reopen.
-            gate_inputs = [(*values, self._declarative_snapshot) for values in gate_inputs]
+        gate_inputs = []
+        for _, amazon, temu, _, _ in base_contexts:
+            self._raise_if_stopped()
+            values = (self.text_gate_name, amazon.get("gate_text") or "", temu.get("gate_text") or "")
+            if self._declarative_snapshot is not None:
+                # Workers use the frozen contract, never a reopened live path.
+                values = (*values, self._declarative_snapshot)
+            gate_inputs.append(values)
+        self._batch_phase = 'text_evaluation'
         gates = self._evaluate_text_gates(gate_inputs)
+        self._raise_if_stopped()
         # Stage 1 is already complete. Commit its actual decisions before slow
         # downloads/inference, so independent dashboard readers can report them.
         # Pending image work remains retryable if the process is interrupted.
@@ -1090,23 +1204,32 @@ class IncrementalStage12:
                 (gate["stage1_status"], stable_json(gate), pair["path_key"], pair["asin"], pair["goods_id"])
                 for (pair, _, _, _, _), gate in zip(base_contexts, gates)
             ])
+        self._batch_stage1_committed = len(gates)
+        self._raise_if_stopped()
         text_seconds = time.monotonic() - phase_started
         phase_started = time.monotonic()
         contexts = []
         for (pair, amazon, temu, amazon_key, temu_key), gate in zip(base_contexts, gates):
+            self._raise_if_stopped()
             contexts.append((pair, amazon, temu, gate))
             if gate["stage1_status"] != "TEXT_HARD_EXCLUDE":
                 products_to_prepare[amazon_key] = amazon
                 products_to_prepare[temu_key] = temu
 
+        self._batch_phase = 'image_download'
         image_errors, download_seconds = self._prefetch_images(products_to_prepare.values())
+        self._raise_if_stopped()
+        self._batch_phase = 'vector_inference'
         vector_errors, vector_seconds = self._prefetch_vectors(products_to_prepare.values())
+        self._raise_if_stopped()
+        self._batch_phase = 'pair_preparation'
         # Prepare each distinct image/vector once for the whole pair batch.  The
         # former per-pair path repeated four SQLite lookups for the same product.
         prepared_images: dict[str, tuple[str, Path, np.ndarray, np.floating[Any]]] = {}
         prepared_products: dict[int, tuple[str, Path, np.ndarray, np.floating[Any]]] = {}
         preparation_errors: dict[int, Exception] = {}
         for product in products_to_prepare.values():
+            self._raise_if_stopped()
             try:
                 _, image_key = self._image_identity(product)
                 if image_key in image_errors:
@@ -1117,6 +1240,7 @@ class IncrementalStage12:
                     if content_hash in vector_errors:
                         raise vector_errors[content_hash]
                     vector, _ = self._vector(content_hash, image_path)
+                    self._raise_if_stopped()
                     vector = np.asarray(vector, dtype=np.float64)
                     norm = np.linalg.norm(vector)
                     validate_features(vector,self.vectorizer.revision)
@@ -1125,6 +1249,8 @@ class IncrementalStage12:
                     prepared = (content_hash, image_path, vector / norm, 1.0)
                     prepared_images[image_key] = prepared
                 prepared_products[id(product)] = prepared
+            except CancelledError:
+                raise
             except Exception as exc:
                 preparation_errors[id(product)] = exc
         preparation_seconds = time.monotonic() - phase_started
@@ -1140,7 +1266,9 @@ class IncrementalStage12:
         ready: list[tuple[Any, ...]] = []
         batch_now = utcnow()
 
+        self._batch_phase = 'pair_evaluation'
         for pair, amazon, temu, gate in contexts:
+            self._raise_if_stopped()
             started = time.monotonic()
             if gate["stage1_status"] == "TEXT_HARD_EXCLUDE":
                 elapsed = time.monotonic() - started; pair_processing += elapsed
@@ -1187,14 +1315,17 @@ class IncrementalStage12:
         # of dispatching one Python/BLAS call per pair.
         dimension_groups: dict[int, list[tuple[Any, ...]]] = {}
         for item in ready:
+            self._raise_if_stopped()
             dimension_groups.setdefault(item[6].size, []).append(item)
         chunks = (group[offset:offset + 256] for group in dimension_groups.values()
                   for offset in range(0, len(group), 256))
         for chunk in chunks:
+            self._raise_if_stopped()
             left = np.stack([item[6] for item in chunk])
             right = np.stack([item[10] for item in chunk])
             chunk_scores = similarity_scores(left, right, self.vectorizer.revision)
             for item, raw_score in zip(chunk, chunk_scores):
+                self._raise_if_stopped()
                 pair, amazon, temu, gate, a_hash, a_path, _, _, t_hash, t_path, _, _, started = item
                 score = round(float(raw_score), 4)
                 status = "CANDIDATE" if float(raw_score) >= self.threshold else "BELOW_VECTOR_THRESHOLD"
@@ -1222,6 +1353,8 @@ class IncrementalStage12:
         phase_started = time.monotonic()
         # One transaction per batch keeps interruption atomic and removes tens
         # of thousands of fsync/transaction boundaries from the hot path.
+        self._batch_phase = 'pair_commit'
+        self._raise_if_stopped()
         with self.con:
             self.con.executemany("""UPDATE pairs SET stage1_status=?,stage1_json=?,vector_score=?,status=?,amazon_content_hash=?,
                 temu_content_hash=?,last_error=NULL,processing_seconds=?,updated_at=? WHERE path_key=? AND asin=? AND goods_id=?""", success_updates)

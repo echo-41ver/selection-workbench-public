@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from concurrent.futures import CancelledError
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,9 +30,13 @@ def resolve(path: str) -> Path:
     return candidate if candidate.is_absolute() else ROOT / candidate
 
 
-def wait_for_poll(seconds, stop_file):
+def stop_requested(stop_file, task_stop_file=None):
+    return stop_file.exists() or (task_stop_file is not None and task_stop_file.exists())
+
+
+def wait_for_poll(seconds, stop_file, task_stop_file=None):
     deadline = time.monotonic() + seconds
-    while not stop_file.exists():
+    while not stop_requested(stop_file, task_stop_file):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
@@ -354,14 +359,25 @@ def run_cycle(
 ) -> dict:
     ingest = []
     for source in config["sources"]:
+        if pipeline.stop_requested():
+            return {"接收": ingest, "处理": {"selected":0,"cancelled":True},
+                    "候选队列": {"状态":"任务已停止，保留已有结果"}}
         try:
             ingest.append(pipeline.ingest_source(source["key"]))
+        except CancelledError:
+            if not pipeline.stop_requested():
+                raise
+            return {"接收":ingest,"处理":{"selected":0,"cancelled":True,"cancelled_phase":"source_ingest"},
+                    "候选队列":{"状态":"任务已停止，保留已有候选和结果"}}
         except Exception as exc:
             ingest.append({"source": source["key"], "error": str(exc), "retained_previous": True})
     if not process:
         return {"接收": ingest, "处理": {"selected": 0, "mode": "INGEST_ONLY"},
                 "候选队列": {"状态": "仅接收快照，不启动分析或导出"}}
     batch = pipeline.process_batch(int(config.get("batch_size", 20)))
+    if batch.get('cancelled') or pipeline.stop_requested():
+        return {"接收":ingest,"处理":batch,
+                "候选队列":{"状态":"任务已停止，保留已有候选和结果"}}
     queues = pipeline.materialize_candidates() if materialize else {"状态": "本轮跳过；按配置定时或空闲时更新"}
     result = {"接收": ingest, "处理": batch, "候选队列": queues}
     if include_full_status:
@@ -425,6 +441,10 @@ def main() -> None:
     parser.add_argument("--path-key", help="需要冻结的独立分析路径")
     args = parser.parse_args()
     config = load_config(args.config)
+    task_stop_file = args.config.resolve().parent / 'STOP'
+    if args.command == 'watch' and task_stop_file.exists():
+        print(json.dumps({'状态':'任务已停止，不启动第一二层监督器'},ensure_ascii=False))
+        return
     if args.command not in ("stop", "status"):
         try:
             validate_category_handoff(config)
@@ -455,7 +475,7 @@ def main() -> None:
             status_only=(args.no_process and args.command in ("once", "watch")) or args.command in ("status", "init", "continue", "reconcile", "excel", "candidates", "snapshot"),
             configure=args.command not in ("excel", "candidates", "snapshot"),
         )
-        pipeline.stop_requested=lambda:stop_file.exists()
+        pipeline.stop_requested=lambda:stop_requested(stop_file, task_stop_file)
         if watch_instance:pipeline.migrate_image_retries(watch_instance)
         if args.command in ("init", "status", "continue"):
             print(json.dumps(chinese_status(pipeline.status()), ensure_ascii=False, indent=2)); return
@@ -512,7 +532,7 @@ def main() -> None:
         last_candidate_at = 0.0
         processed_at_candidate_export = -1
         candidate_process: subprocess.Popen | None = None
-        while not stop_file.exists() and (args.max_cycles is None or cycles < args.max_cycles):
+        while not stop_requested(stop_file, task_stop_file) and (args.max_cycles is None or cycles < args.max_cycles):
             cycle_start = time.monotonic()
             should_materialize = not args.no_process and (candidate_interval == 0 or time.monotonic() - last_candidate_at >= candidate_interval)
             result = run_cycle(
@@ -521,6 +541,8 @@ def main() -> None:
                 include_full_status=False,
                 process=not args.no_process,
             )
+            if stop_requested(stop_file, task_stop_file):
+                break
             counter_row = pipeline.con.execute("SELECT value FROM counters WHERE name='pairs_processed'").fetchone()
             cycle_processed = int(counter_row[0] if counter_row else 0)
             idle_materialize = (
@@ -600,7 +622,7 @@ def main() -> None:
                     result["Excel"] = {"状态": "更新失败，分析继续", "原因": str(exc)}
             print(json.dumps(result, ensure_ascii=False), flush=True)
             wait_for = float(config.get("poll_seconds", 8)); wait_start = time.monotonic()
-            wait_for_poll(wait_for, stop_file)
+            wait_for_poll(wait_for, stop_file, task_stop_file)
             waiting += time.monotonic() - wait_start
     finally:
         if pipeline is not None:

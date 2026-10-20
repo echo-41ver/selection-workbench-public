@@ -63,6 +63,7 @@ def publish_once(base, previous=None):
                     from selection_automation.category_subject_filter import filter_category_union
                     category=json.loads(category_path.read_text('utf-8'))
                     rows,summary=filter_category_union(ROOT,category,rows,summary,union)
+                summary['analysis_unique_goods']=len(rows)
                 # Each source is atomically replaced and read as one complete file.
                 # Cross-worker updates are normal: publish this valid observation,
                 # retain the pre-read signature so the next cycle catches updates.
@@ -115,23 +116,39 @@ def watch_health(base, now=None):
             'last_success_at':state.get('last_success_at')}
 
 
+def wait_for_task_interval(stop_file, seconds):
+    """The independently recovered watcher must observe the task's normal Stop."""
+    deadline=time.monotonic()+seconds
+    while not stop_file.exists():
+        remaining=deadline-time.monotonic()
+        if remaining<=0:return True
+        time.sleep(min(.25,remaining))
+    return False
+
+
+def watch(category_path, *, interval=20.0, once=False):
+    category=load_category(category_path.resolve())
+    base=ROOT/'runs'/category['category_key']/'temu'
+    stop_file=base.parent/'STOP'
+    if stop_file.exists():return
+    state={}
+    from selection_automation.process_lock import ProcessLock
+    with ProcessLock(base/'union/watcher.lock'):
+        while not stop_file.exists():
+            state=publish_once(base,state)
+            if once:
+                if state['status']!='PUBLISHED':raise SystemExit(state.get('error') or 'no TEMU worker snapshots found')
+                return
+            if not wait_for_task_interval(stop_file,min(30.0,max(2.0,interval))):return
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Watch independent TEMU worker snapshots and atomically publish a goods_id union")
     parser.add_argument("--category", type=Path, default=ROOT / "config" / "categories" / "bath_towel_set.json")
     parser.add_argument("--interval", type=float, default=20.0)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
-    category = load_category(args.category.resolve())
-    base = ROOT / "runs" / category["category_key"] / "temu"
-    state = {}
-    from selection_automation.process_lock import ProcessLock
-    with ProcessLock(base/'union/watcher.lock'):
-        while True:
-            state=publish_once(base,state)
-            if args.once:
-                if state['status']!='PUBLISHED': raise SystemExit(state.get('error') or 'no TEMU worker snapshots found')
-                return
-            time.sleep(min(30.0,max(2.0,args.interval)))
+    watch(args.category,interval=args.interval,once=args.once)
 
 
 if __name__ == "__main__":

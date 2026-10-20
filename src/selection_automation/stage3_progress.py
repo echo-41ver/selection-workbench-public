@@ -149,10 +149,13 @@ def snapshot_signature(base, category):
     folder = base/'stage123'
     paths = [candidate_path(base), base/'stage12_config.json', base/'category.json',
              *(folder/name for name in ('results.jsonl','requests.jsonl','request_intents.jsonl',
-                                        'billing_retry_authorizations.json','controller.json')),
+                                        'billing_retry_authorizations.json','billing_schema_retry_authorization.json',
+                                        'provider_blocked.json','controller.json')),
+             *sorted((folder/'schema-retry-claims').glob('*.json')),
+             *sorted((folder/'schema-retry-audit').glob('*/provider_blocked.json')),
              *sorted((folder/'codex_reviews').glob('*.jsonl')),
              *(Path(__file__).parent/name for name in ('stage3_progress.py','vision.py',
-                 'rules.py','stage3_admission.py','stage3_billing.py','codex_visual_review.py',
+                 'rules.py','stage3_admission.py','stage3_billing.py','schema_billing_retry.py','codex_visual_review.py',
                  'visual_text_evidence.py'))]
     versions = []
     for path in paths:
@@ -241,7 +244,7 @@ def snapshot(base, category, *, history=True, on_phase=None):
     phase('核对既有重试授权')
     try: authorization=retry_authorizations(base/'stage123/request_intents.jsonl',base/'stage123/results.jsonl')
     except (ValueError,OSError,TypeError,KeyError): authorization={'request_ids':set(),'by_pair':{},'success_pairs':set(),'attempts':{}}
-    blocked = pending_blocked = retry_consumed = 0
+    blocked = pending_blocked = retry_consumed = scope_blocked = 0
     stage = category.get('stage3',{})
     batch_size = max(1,min(12,stage.get('batch_size',12)))
     from .stage3_provider import from_category
@@ -289,6 +292,9 @@ def snapshot(base, category, *, history=True, on_phase=None):
         if is_held:
             pending_blocked += 1
             continue
+        if authorization.get('schema_retry') and pair not in authorization['by_pair']:
+            scope_blocked+=1;pending_blocked+=1
+            continue
         group = (row['asin'],row.get('amazon_image_path'))
         waiting_groups[group] = waiting_groups.get(group,0)+1
         if (row['asin'],row['goods_id']) not in completed_pairs: continue
@@ -324,9 +330,14 @@ def snapshot(base, category, *, history=True, on_phase=None):
             'admission_threshold':threshold(category),
             'pending':pending,'percent':round((completed+failed)*100/total,1) if total else 0,
             'billing_unknown_pairs':blocked,'billing_unknown_requests':len(held['request_ids']),
+            'billing_unknown_request_id':next(iter(held['request_ids'])) if len(held['request_ids'])==1 else None,
+            'billing_unknown_pair':list(next(iter(held['pairs']))) if len(held['pairs'])==1 else None,
             'billing_hold_fail_closed':held['fail_closed'],'runnable_pending':runnable,
             'billing_retry_authorized_pairs':len(authorization['by_pair']),
             'billing_retry_consumed_pairs':retry_consumed,
+            'schema_retry':({'authorized':True,'claimed':authorization['schema_retry']['claimed'],
+                'pairs':len(authorization['by_pair']),'excluded_pairs':scope_blocked,
+                'original_cost':'UNKNOWN'} if authorization.get('schema_retry') else None),
             'inflight_pairs':held['inflight_pairs'],'inflight_requests':held['inflight_requests'],
             'rate_per_hour':round(rate*3600) if rate else None,
             'eta_seconds':eta,

@@ -116,7 +116,8 @@ def test_default_auto_mode_returns_three_classes_without_any_checkbox():
     _,snapshot=inputs(2);category=configured(snapshot)
     extract(category,snapshot,response)
     question,schema=protocol(category,1)
-    assert schema['properties']['candidates']['items']['properties']['q']['properties']=={}
+    item=schema['properties']['candidates']['items']
+    assert 'q' not in item['properties'] and 'q' not in item['required']
     assert len(question)<1300
     for relation,expected in [('S','确认同款'),('L','相似款'),('D','不同款')]:
         raw={'candidates':[{'i':'C00','r':relation,'a':'蓝底下部花朵浴帘','t':'蓝底下部花朵浴帘',

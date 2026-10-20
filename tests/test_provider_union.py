@@ -18,6 +18,9 @@ def test_frontend_wins_all_fields_provider_only_adds_missing_ids(tmp_path):
     assert by_id['2']['source']=='GEEKBI_SUPPLEMENT' and by_id['2']['sales_text']=='0'
     assert by_id['2']['price_usd']==12
     assert summary['frontend_unique_goods']==summary['provider_supplement_goods']==1
+    assert summary['provider_reference_goods']==2
+    assert summary['provider_reference_overlap_goods']==1
+    assert summary['analysis_unique_goods']==2
 
 
 def test_failed_or_different_site_provider_is_not_imported(tmp_path):
@@ -25,3 +28,21 @@ def test_failed_or_different_site_provider_is_not_imported(tmp_path):
     for status,site in [('FAILED',48),('COMPLETE',1)]:
         provider.write_text(json.dumps({'status':status,'site_id':site,'records':[{'goodsId':'2'}]}),encoding='utf-8')
         assert merge([],provider)[0]==[]
+
+
+def test_market_merge_keeps_normal_behavior_and_separates_reference_count(tmp_path):
+    frontend=tmp_path/'products.jsonl'
+    frontend.write_text(json.dumps({'goods_id':'1','title':'actual frontend'})+'\n',encoding='utf-8')
+    provider=tmp_path/'geekbi.json'
+    payload={'status':'PARTIAL','site_id':48,'records':[
+        {'goodsId':'1','goodsName':'conflicting market title'},
+        {'goodsId':'2','goodsName':'market-only'}, {'goodsId':'2','goodsName':'duplicate'}]}
+    provider.write_text(json.dumps(payload),encoding='utf-8');before=provider.read_bytes()
+    rows,summary=merge([frontend],provider)
+    assert len(rows)==2 and {row['goods_id']:row for row in rows}['1']['title']=='actual frontend'
+    assert summary['source_rows']==summary['frontend_unique_goods']==1
+    assert summary['analysis_unique_goods']==2
+    assert summary['provider_supplement_goods']==1 and summary['provider_reference_goods']==2
+    assert summary['provider_reference_rows']==3 and summary['provider_reference_overlap_goods']==1
+    assert provider.read_bytes()==before
+    assert len(merge([],provider)[0])==2
