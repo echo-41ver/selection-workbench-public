@@ -26,9 +26,7 @@ def cleanup_completed_worker(root, run, worker):
     from selection_automation import work_dispatch
     dispatch=work_dispatch.read(run)
     jobs=dispatch.get('jobs')
-    if not isinstance(jobs,list) or not all(row.get('started') for row in jobs):
-        return False
-    if any(row.get('owner')==worker and not row.get('complete') for row in jobs):
+    if not isinstance(jobs,list) or work_dispatch.available(dispatch,worker):
         return False
     manifest = json.loads((root / 'config' / 'sessions.json').read_text('utf-8'))
     from selection import identity

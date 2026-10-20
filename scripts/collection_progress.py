@@ -92,7 +92,7 @@ def historical_rate(base):
     return result
 
 
-def collection_total(base, category, *, rate_snapshot=None):
+def collection_total(base, category, *, rate_snapshot=None, worker=None, observed_rows=None):
     assignments = read(base / 'temu/supervisors/assignments.json')
     planned = {}
     jobs = assignments.get('jobs', [])
@@ -100,27 +100,30 @@ def collection_total(base, category, *, rate_snapshot=None):
         target = job.get('max_products')
         if type(target) is int and target > 0 and job.get('query'):
             for order in ('sales', 'recent'):
+                owner=((job.get('sort_passes') or {}).get(order) or {}).get('owner',job.get('owner'))
+                if worker is not None and owner!=worker:continue
                 planned[(job['query'], order)] = target
     # Older assignment manifests have no per-query caps; retain their own passes.
     if not planned:
         target = category.get('temu', {}).get('max_products_per_keyword')
         if type(target) is int and target > 0:
-            for worker in assignments.get('workers', []):
-                for item in worker.get('passes', worker.get('queries', [])):
+            for lane in assignments.get('workers', []):
+                if worker is not None and lane.get('name')!=worker:continue
+                for item in lane.get('passes', lane.get('queries', [])):
                     query, order = (item.get('query'), item.get('sort', 'sales')) if isinstance(item, dict) else (item, 'sales')
                     if query:
                         planned[(query, order)] = target
     if not planned:
         return None
-    observed = snapshots(base)
+    observed={key:row for key,row in (snapshots(base) if observed_rows is None else observed_rows).items() if key in planned}
     # The collector skips both sorts only after an evidence-backed empty query.
     empty_queries = {query for (query, _), row in observed.items()
                      if confirmed_empty_checkpoint(row, query)}
     completed_passes = set()
     states = [read(p) for p in (base / 'temu/supervisors').glob('worker-*.json')
-              if re.fullmatch(r'worker-\d+(?:-new)?',p.stem)]
-    for worker in states:
-        completed_passes.update((p.get('query'), p.get('sort', 'sales')) for p in worker.get('completed_passes', []) if isinstance(p, dict))
+              if re.fullmatch(r'worker-\d+(?:-new)?',p.stem) and (worker is None or p.stem==worker)]
+    for state in states:
+        completed_passes.update((p.get('query'), p.get('sort', 'sales')) for p in state.get('completed_passes', []) if isinstance(p, dict))
     actual = completed = shortage = finished = 0
     blocked_passes = set()
     for key, target in planned.items():
@@ -140,7 +143,7 @@ def collection_total(base, category, *, rate_snapshot=None):
     original = sum(planned.values())
     total = original - shortage
     remaining = max(0, total - completed)
-    lanes = len(assignments.get('lanes') or assignments.get('workers') or states)
+    lanes = 1 if worker is not None else len(assignments.get('lanes') or assignments.get('workers') or states)
     rate = historical_rate(base).copy() if rate_snapshot is None else {
         'per_lane_per_second':rate_snapshot.get('per_lane_per_second'),
         'history_tasks':rate_snapshot.get('history_tasks',0),

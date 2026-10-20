@@ -386,7 +386,7 @@ def worker_snapshot(base, name):
     progress={}; query=worker.get('current_query')
     output=worker.get('output')
     if not output and query: output=str(base/'temu'/'workers'/name/slug(query))
-    if output and not replacing and worker.get('status') not in {'SESSION_REPLACED','RESUMING','STARTING','WORKER_COMPLETE','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY','WAITING_INITIAL_PRODUCTS_RETRY'}:
+    if output and not replacing and worker.get('status') not in {'SESSION_REPLACED','RESUMING','STARTING','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY','WAITING_INITIAL_PRODUCTS_RETRY'}:
         progress_path=Path(output)/'progress.json'
         # A restarted collector initially shares the old progress file. Do not
         # mistake that previous run's terminal status for its current result.
@@ -394,6 +394,7 @@ def worker_snapshot(base, name):
             if worker.get('status')!='RUNNING' or progress_path.stat().st_mtime>=worker.get('collector_started_at',0):
                 progress=read(progress_path,{})
         except OSError: pass
+    if worker.get('status')=='WORKER_COMPLETE':query=query or progress.get('search_query')
     code=progress.get('status') or worker.get('query_status') or worker.get('status','STARTING')
     if code in {'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'}:
         code='WAITING_BROWSER_CONTROL_RECOVERY'
@@ -433,7 +434,8 @@ def worker_snapshot(base, name):
             label={'navigation':'排队打开页面','search':'排队提交关键词','sort':'排队设置排序','load_more':'等待加载更多'}.get(info.get('operation'),'等待启动调度')
 
     if replacing: label='正在自动更换环境，保留当前关键词断点'
-    if not label: label={'WORKER_COMPLETE':'本轮完成','SESSION_REPLACED':'新session已就绪，等待恢复断点','RESUMING':'页面已验证，恢复原关键词','STARTING':'启动中'}.get(code,'运行中')
+    if not label: label={'WORKER_COMPLETE':'本路采集完成','SESSION_REPLACED':'新session已就绪，等待恢复断点','RESUMING':'页面已验证，恢复原关键词','STARTING':'启动中'}.get(code,'运行中')
+    if code=='WORKER_COMPLETE' and worker.get('environment_cleanup')=='COMPLETE':label='本路采集完成，环境已回收'
     view={'状态':label,'采集状态':code,'关键词':query,'排序方式':{'sales':'销量最高','recent':'最近上架'}.get(worker.get('current_sort'),'销量最高'),'输出目录':output,
           '已完成关键词':worker.get('completed_queries',[]),'阻断':bool(recovery),'需人工介入':bool(recovery),
           '建议动作':'','浏览器保留':False}
@@ -908,11 +910,9 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                 collectors_done=('amazon' in finished and attempts.get('amazon',0)==0 and bool(current_dispatch.get('jobs')) and
                     all(r['complete'] for r in current_dispatch['jobs']) and not any(s['name'] in children for s in sessions))
                 pending_commands=any(r['status'] in rotation_queue.PENDING for r in rotation_queue.read_requests(base))
-                queue_sealed=plan.get('finalized') and all(
-                    state.get('started') or state.get('complete')
-                    for job in current_dispatch.get('jobs',[])
-                    for state in (job.get('sort_passes') or {}).values())
-                if queue_sealed and not pending_commands:
+                # Each idle lane can retire once the keyword plan is final.
+                # A different lane's CAPTCHA must not retain completed browsers.
+                if plan.get('finalized') and not pending_commands:
                     service('cleanup',py('cleanup_completed_worker.py','--run',base))
                     cleanup=read(base/'cleanup_status.json',{})
                     state['cleanup']={**state.get('cleanup',{}),'状态':'环境清理完成' if cleanup.get('status')=='COMPLETE' else ('环境清理重试中' if cleanup.get('status')=='RETRY_REQUIRED' else '环境清理中'),

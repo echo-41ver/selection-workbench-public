@@ -121,6 +121,20 @@ def digest(value: bytes | str) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def declarative_text_revision(category: dict) -> str:
+    """The local cache must include the frozen checkboxes actually executed."""
+    from selection_automation import rules,match_criteria
+    payload={"stage1":category["stage1"],"snapshot_protocol":"declarative-content-v1",
+        "ordinary_variants":sorted(set(category['stage3'].get('variant_fields',[]))-set(category['stage3']['modules'])),
+        "engine":digest(Path(inspect.getsourcefile(rules.text_gate)).read_bytes())}
+    if match_criteria.enabled(category):
+        payload['selected_text']=[{key:item.get(key) for key in
+            ('id','label','feature_id','source_labels','observations','comparison')}
+            for item in match_criteria.selected(category,'text')]
+        payload['selected_text_engine']=digest(Path(inspect.getsourcefile(match_criteria.text_gate)).read_bytes())
+    return digest(stable_json(payload))
+
+
 def without_volatile(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: without_volatile(v) for k, v in sorted(value.items()) if k not in VOLATILE_FIELDS}
@@ -387,12 +401,7 @@ class IncrementalStage12:
             self._frozen_category_digest = digest(category_bytes)
             self._declarative_snapshot = category_bytes.decode("utf-8")
             category = _category_snapshot(self._declarative_snapshot)
-            self._text_gate_revision = digest(stable_json({
-                "stage1": category["stage1"],
-                "snapshot_protocol": "declarative-content-v1",
-                "ordinary_variants":sorted(set(category['stage3'].get('variant_fields',[]))-set(category['stage3']['modules'])),
-                "engine": digest(Path(gate_file).read_bytes()) if gate_file else "declarative",
-            }))
+            self._text_gate_revision = declarative_text_revision(category)
         else:
             gate_file = inspect.getsourcefile(GATES[self.text_gate_name])
             from selection_automation import rules

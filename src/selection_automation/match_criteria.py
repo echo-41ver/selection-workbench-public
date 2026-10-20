@@ -3,10 +3,36 @@ from copy import deepcopy
 import hashlib
 import json
 import re
+import unicodedata
+from decimal import Decimal,DecimalException
 from urllib.parse import urlsplit
 
 SCHEMA='amazon-match-criteria-v1'
+FIELD_MERGE_VERSION='semantic-parameter-fields-v2'
 _BUSINESS=re.compile(r'price|review|rating|rank|seller|stock|warranty|ASIN|UPC|日期|排名|评分|评论|价格|销量|保修|卖点\d+',re.I)
+_MEASURE_NUMBER=r'(?:\d+\s+\d+\s*/\s*\d+|\d+\s*/\s*\d+|\d+(?:\.\d+)?)'
+
+
+def _field_identity(item):
+    from .criteria_display import ALIASES,key
+    label=key(item.get('label',''))
+    return item.get('kind','text')+':'+(ALIASES[label][0] if label in ALIASES else label)
+
+
+def _measure_text(value):
+    if not isinstance(value,str):return ''
+    # Keep mixed fractions separate before NFKC expands their Unicode glyphs.
+    value=re.sub(r'([\u00bc-\u00be\u2150-\u215e])',r' \1',value)
+    value=unicodedata.normalize('NFKC',value).replace('⁄','/').replace('✕','x').replace('✖','x')
+    return re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))','',value)
+
+
+def _measure_number(value):
+    fraction=re.fullmatch(r'(?:(\d+)\s+)?(\d+)\s*/\s*(\d+)',value.strip())
+    if fraction:
+        whole,numerator,denominator=fraction.groups()
+        return Decimal(whole or '0')+Decimal(numerator)/Decimal(denominator)
+    return Decimal(value)
 
 
 def digest(value):
@@ -62,7 +88,7 @@ def seed(category,snapshot,previous=None):
                 'source_labels':[label],'feature_id':None,'observations':[],'selected':False,'origin':'Amazon 实际规格','comparison':'exact'})
             evidence={'asin':row['asin'],'value':value,'source_label':label,'product_url':row.get('product_url','')}
             if evidence not in item['observations']:item['observations'].append(evidence)
-    catalog={'schema_version':SCHEMA,'enabled':True,'items':list(items.values())[:128],
+    catalog={'schema_version':SCHEMA,'field_merge_version':FIELD_MERGE_VERSION,'enabled':True,'items':list(items.values())[:128],
              'source_fingerprint':digest(_records(snapshot)),
              'source_asins':[row['asin'] for row in _records(snapshot)],'image_sources':image_sources(snapshot),
              'state':'structured','message':'已汇总实际规格；图片特征建议等待生成。'}
@@ -129,20 +155,22 @@ def merge_proposals(catalog,snapshot,proposal):
                              'product_url':row.get('product_url',''),'image':visual})
         if not evidence:continue
         labels=[_text(value,120) for value in suggestion.get('source_labels',[]) if isinstance(value,str)]
-        # Link an existing raw specification rather than offering duplicate boxes.
-        raw=next((item for item in items.values() if item['kind']==kind and item['source_labels'] and set(labels)&set(item['source_labels'])),None)
-        if fid in items and items[fid]['kind']!=kind:
-            fid=(kind+'_'+fid)[:64]
-        if fid not in items and raw is not None:fid=raw['id']
+        # A source paragraph (e.g. "bullet 3") is provenance, never a field
+        # identity. Providers can also reuse the same ID in different batches.
+        identity=_field_identity({'kind':kind,'label':label})
+        raw=next((item for item in items.values() if _field_identity(item)==identity),None)
+        if raw is not None:fid=raw['id']
+        elif fid in items:
+            fid=kind+'_'+hashlib.sha256(identity.encode()).hexdigest()[:16]
         item=items.setdefault(fid,{'id':fid,'selected':False,'feature_id':None,'source_labels':[],'observations':[],'comparison':'exact'})
-        if raw is not None and raw is not item:
-            item['observations'].extend(proof for proof in raw['observations'] if proof not in item['observations'])
-            items.pop(raw['id'])
-        item.update(label=label,kind=kind,rule=rule,origin='Amazon 图片特征' if kind=='visual' else 'Amazon 实际参数',source_labels=labels)
+        item.update(label=label,kind=kind,rule=rule,origin='Amazon 图片特征' if kind=='visual' else 'Amazon 实际参数',
+                    source_labels=list(dict.fromkeys([*item['source_labels'],*labels])))
+        if re.search(r'[\u4e00-\u9fff]',label):item['label_zh']=label
         for proof in evidence:
             if proof not in item['observations']:item['observations'].append(proof)
     result['items']=list(items.values())[:128]
-    result.update(state='ready',message='已汇总实际 Amazon 参数和图片特征；文字勾选用于第一层，图片勾选用于第三层。')
+    result.update(state='ready',field_merge_version=FIELD_MERGE_VERSION,
+                  message='已汇总实际 Amazon 参数和图片特征；文字勾选用于第一层，图片勾选用于第三层。')
     return preserve(result,catalog)
 
 
@@ -222,53 +250,84 @@ def comparison_prompt(category,native=False):
 
 def text_gate(category,left,right):
     from .rules import attribute_values,contains
-    from decimal import Decimal
+    left=left if isinstance(left,str) else '';right=right if isinstance(right,str) else ''
     original={item['name']:item for item in category['stage1'].get('attributes',[])}
     facts=[];conflicts=[];insufficient=False
     units={'mm':('length',1),'毫米':('length',1),'cm':('length',10),'厘米':('length',10),'m':('length',1000),'米':('length',1000),
            'inches':('length','25.4'),'inch':('length','25.4'),'in':('length','25.4'),'英寸':('length','25.4'),
            'ft':('length','304.8'),'kg':('mass',1000),'g':('mass',1),'千克':('mass',1000),'克':('mass',1),
+           'lb':('mass','453.59237'),'lbs':('mass','453.59237'),'pound':('mass','453.59237'),'pounds':('mass','453.59237'),
+           '磅':('mass','453.59237'),'oz':('mass','28.349523125'),
+           'l':('volume',1000),'liter':('volume',1000),'liters':('volume',1000),'litre':('volume',1000),
+           'ml':('volume',1),'升':('volume',1000),'毫升':('volume',1),
+           'cuft':('volume','28316.846592'),'cu. ft.':('volume','28316.846592'),
+           'cu ft':('volume','28316.846592'),'cu. ft':('volume','28316.846592'),
+           'ft3':('volume','28316.846592'),'立方英尺':('volume','28316.846592'),
+           'mah':('charge',1),'ah':('charge',1000),'毫安时':('charge',1),'安时':('charge',1000),
+           'nm':('torque',1),'n.m':('torque',1),'牛米':('torque',1),
            'hz':('frequency',1),'赫兹':('frequency',1),'w':('power',1),'瓦':('power',1),'v':('voltage',1),'伏':('voltage',1)}
     unit_pattern='(?:'+ '|'.join(re.escape(unit) for unit in sorted(units,key=len,reverse=True))+')'
-    measure_pattern=re.compile(r'(?<![\d.])(\d+(?:\.\d+)?(?:\s*[x×*]\s*\d+(?:\.\d+)?){0,2})[\s-]*('+unit_pattern+r')(?![a-z])',re.I)
+    measure_pattern=re.compile(r'(?<![\dA-Za-z_.,/])('+_MEASURE_NUMBER+r'(?:\s*[x×*]\s*'+_MEASURE_NUMBER+r'){0,2})[\s-]*('+unit_pattern+r')(?![a-z])',re.I)
     def measures(text):
-        result={}
+        result={};text=_measure_text(text)
         for match in measure_pattern.finditer(text):
             if re.search(r'\b(?:not|without|no)\s*$|不是\s*$',text[max(0,match.start()-12):match.start()],re.I):continue
+            # A range or malformed number is unknown, never its last endpoint.
+            if re.search(r'(?:\d|'+unit_pattern+r')\s*[-–—~]\s*$',text[max(0,match.start()-20):match.start()],re.I):continue
+            if re.match(r'\s*[-–—~]\s*\d',text[match.end():]):continue
             family,factor=units[match[2].casefold()]
-            numbers=re.split(r'\s*[x×*]\s*',match[1])
+            numbers=re.split(r'\s*[x×*]\s*',match[1],flags=re.I)
             key=(family,len(numbers))
-            value=family+':'+ 'x'.join(str((Decimal(number)*Decimal(str(factor))).normalize()) for number in numbers)
+            try:
+                value=family+':'+ 'x'.join(str((_measure_number(number)*Decimal(str(factor))).normalize()) for number in numbers)
+            except DecimalException:
+                continue
             result.setdefault(key,set()).add(value)
         return result
     def comparable(value):
-        value=re.sub(r'\s+',' ',value.casefold().replace('×','x')).strip()
-        match=re.fullmatch(r'(\d+(?:\.\d+)?)\s*(mm|cm|m|inches|inch|in|ft|g|kg)',value)
-        if not match:return value
-        factors={'mm':('length',1),'cm':('length',10),'m':('length',1000),'inch':('length','25.4'),
-                 'inches':('length','25.4'),'in':('length','25.4'),'ft':('length','304.8'),'g':('mass',1),'kg':('mass',1000)}
-        unit,factor=factors[match[2]]
-        return unit+':'+str((Decimal(match[1])*Decimal(str(factor))).normalize())
+        value=re.sub(r'\s+',' ',_measure_text(value).casefold().replace('×','x')).strip()
+        if measure_pattern.fullmatch(value):
+            parsed=measures(value)
+            if len(parsed)==1:
+                values=next(iter(parsed.values()))
+                if len(values)==1:return next(iter(values))
+        return value
     for condition in selected(category,'text'):
         attribute=original.get(condition.get('feature_id') or condition['id'])
-        observations=[proof['value'] for proof in condition.get('observations',[]) if not proof.get('image')]
+        observations=[proof['value'] for proof in condition.get('observations',[]) if not proof.get('image') and isinstance(proof.get('value'),str)]
         # A model may reuse an authored ID for a real Amazon field (for
         # example display_type: product category versus LCD/OLED). Once this
         # checkbox is grounded in actual specifications, compare that field's
         # observed values rather than the unrelated authoring dictionary.
         if observations and condition.get('source_labels'):attribute=None
         observed_measures={key for value in observations for key in measures(value)}
-        numeric=next(iter(observed_measures)) if len(observed_measures)==1 else None
+        identity=_field_identity(condition).split(':',1)[1]
+        # Capacities can be stated as mass or volume. These are separate
+        # dimensions: compare pounds with kilograms, never pounds with litres,
+        # and never substitute body dimensions found in the same paragraph.
+        capacity=identity in {'capacity','wash_capacity','dry_capacity'}
+        capacity_keys=observed_measures&{('mass',1),('volume',1)} if capacity else set()
+        numeric_keys=capacity_keys or (observed_measures if len(observed_measures)==1 else set())
         if attribute is None:
             values={}
             for proof in condition.get('observations',[]):
                 if proof.get('image'):continue
-                value=proof['value']
+                value=proof.get('value')
+                if not isinstance(value,str):continue
                 if len(value)<3 or not re.search(r'[A-Za-z\u4e00-\u9fff]',value):continue
                 values.setdefault(comparable(value),[]).append(value)
             attribute={'values':values,'ambiguous_phrases':[]}
-        if numeric:
-            a=measures(left).get(numeric,set());b=measures(right).get(numeric,set());au=bu=False
+        if numeric_keys:
+            def scoped_measures(text):
+                if identity=='wash_capacity':
+                    text='; '.join(part for part in re.split(r'[,;\n。]',text)
+                        if not re.search(r'\b(?:spin|drying|dryer)\s+capacity\b|\b(?:item|product|shipping)\s+weight\b|烘干容量|脱水容量|商品重量|包装重量',part,re.I))
+                return measures(text)
+            am=scoped_measures(left);bm=scoped_measures(right)
+            shared={key for key in numeric_keys if am.get(key) and bm.get(key)}
+            a=set().union(*(am.get(key,set()) for key in shared or numeric_keys))
+            b=set().union(*(bm.get(key,set()) for key in shared or numeric_keys))
+            au=bu=not bool(shared)
             if not any(re.search(r'package|packaging|包装',label,re.I) for label in condition.get('source_labels',[])):
                 if re.search(r'package|packaging|包装',left,re.I):au=True
                 if re.search(r'package|packaging|包装',right,re.I):bu=True

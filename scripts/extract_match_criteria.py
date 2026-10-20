@@ -6,8 +6,36 @@ import uuid
 
 import selection
 from generate_category import model_json
-from selection_automation.match_criteria import attach,seed,digest,preserve
+from copy import deepcopy
+from selection_automation.match_criteria import attach,seed,digest,preserve,merge_proposals,FIELD_MERGE_VERSION
 from selection_automation.visual_criteria import VERSION,BATCH_SIZE,start,merge,prompt
+
+
+def repair_cached_text_fields(category,snapshot,ledger):
+    """Recompile saved text proposals without resending any model request."""
+    previous=category.get('match_criteria') or {}
+    catalog=seed(category,snapshot)
+    if (ledger.get('source_fingerprint')!=catalog['source_fingerprint'] or
+            previous.get('source_fingerprint')!=catalog['source_fingerprint']):
+        raise ValueError('保存的参数提取记录与当前 Amazon 商品不匹配')
+    proposals=[entry['proposal'] for entry in ledger.get('batches',{}).values()
+               if entry.get('state') in {'complete','answered'} and isinstance(entry.get('proposal'),dict)]
+    if not proposals:raise ValueError('没有可重用的参数提取结果')
+    for proposal in proposals:
+        text={**proposal,'items':[row for row in proposal.get('items',[])
+                                 if isinstance(row,dict) and row.get('kind')=='text']}
+        catalog=merge_proposals(catalog,snapshot,text)
+    # Keep every already-reviewed visual fact and the user's exact selection.
+    catalog['items']=[row for row in catalog['items'] if row['kind']=='text']+[
+        deepcopy(row) for row in previous.get('items',[]) if row.get('kind')=='visual']
+    choices={row['id'] for row in previous.get('items',[]) if row.get('selected')}
+    if choices-{row['id'] for row in catalog['items']}:
+        raise ValueError('无法还原已勾选条件，保留原任务')
+    for row in catalog['items']:row['selected']=row['id'] in choices
+    for name in ('visual_version','visual_mode','image_review','automatic_focus'):
+        if name in previous:catalog[name]=deepcopy(previous[name])
+    catalog.update(state=previous.get('state','ready'),field_merge_version=FIELD_MERGE_VERSION)
+    return attach(deepcopy(category),preserve(catalog))
 
 
 def extract(category,snapshot,ask=model_json,receipt=None,progress=None):
@@ -15,7 +43,9 @@ def extract(category,snapshot,ask=model_json,receipt=None,progress=None):
     catalog=start(seed(category,snapshot,previous))
     if (previous.get('source_fingerprint')==catalog['source_fingerprint'] and
             previous.get('visual_version')==VERSION and previous.get('state')=='ready'):
-        return category
+        if previous.get('field_merge_version')==FIELD_MERGE_VERSION:return category
+        ledger=selection.read(receipt,{}) if receipt else {}
+        return repair_cached_text_fields(category,snapshot,ledger)
     ledger=selection.read(receipt,{}) if receipt else {}
     if ledger.get('state')=='started' and not ledger.get('version'):
         catalog.update(state='interrupted',message='上次图片请求结果不明，已保留规格，未自动重复计费请求。')

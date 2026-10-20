@@ -1,0 +1,12 @@
+{
+  "source_commit": "7572e4b28cd6f87665ed3a569a34b18ce70be5aa",
+  "release_url": "https://github.com/echo-41ver/selection-workbench-public/releases/tag/full-deployment-7572e4b",
+  "artifacts": [
+    {
+      "name": "selection-workbench-7572e4b-public.zip",
+      "bytes": 1384980624,
+      "sha256": "bf24e9b6fb56d0b43accad9affbda45bb217c2e8fc8a60caad2d9b6b6de0e1e0",
+      "contains_company_credentials": false
+    }
+  ]
+}

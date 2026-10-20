@@ -127,6 +127,24 @@ def test_partial_tail_not_counted_until_complete(tmp_path,monkeypatch):
     assert dashboard.enrich_progress(tmp_path,{})['阶段']['stage3']['completed_pairs']==1
 
 
+def test_completed_lane_progress_accumulates_all_passes_not_unique_or_pending_assignments(tmp_path):
+    name='worker-02-new';output=tmp_path/'temu/workers'/name/'kettle--recent'
+    put(tmp_path/'temu/supervisors'/f'{name}.json',{'status':'WORKER_COMPLETE','current_sort':'recent','output':str(output)})
+    put(tmp_path/'temu/supervisors/assignments.json',{'schema_version':'temu-worker-assignments-v3',
+        'workers':[{'name':name,'passes':[]}],'jobs':[{'query':'kettle','max_products':400,
+            'sort_passes':{'sales':{'owner':name,'complete':True},'recent':{'owner':name,'complete':True}}}]})
+    put(output.with_name('kettle')/'progress.json',{'status':'KEYWORD_LIMIT_REACHED','search_query':'kettle',
+        'sales_sort':{'requested':'sales'},'raw_collected_count':400,'unique_goods':120})
+    for raw in (400,200):
+        put(output/'progress.json',{'status':'KEYWORD_LIMIT_REACHED' if raw==400 else 'KEYWORD_COMPLETE',
+            'search_query':'kettle','sales_sort':{'requested':'recent'},'raw_collected_count':raw,'unique_goods':205})
+        row=dashboard._temu(tmp_path,{'temu':{'max_products_per_keyword':400}})['workers'][0]
+        assert row['completed']==400+raw and row['total']==400+raw and row['percent']==100
+        assert row['lane_planned_total']==800 and row['lane_shortfall']==400-raw
+        assert row['last_pass_raw_count']==raw
+        assert row['current_query']=='kettle' and row['total_keywords']==2
+
+
 def test_database_separates_text_completion_from_failed_images(tmp_path):
     import sqlite3
     with sqlite3.connect(tmp_path/'stage12.sqlite3') as con:
@@ -152,10 +170,11 @@ def test_current_visual_versions_exclude_stale_success(tmp_path,monkeypatch):
 
 
 def test_temu_saturation_not_keyword_complete(tmp_path):
+    put(tmp_path/'temu/supervisors/assignments.json',{'workers':[{'name':'worker-01-new','queries':['drill','cordless drill']}]})
     put(tmp_path/'temu/supervisors/worker-01-new.json',{'current_query':'drill','assigned':2})
     put(tmp_path/'temu/workers/worker-01-new/drill/progress.json',{'search_query':'drill','status':'SESSION_SATURATED','unique_goods':40,'raw_collected_count':40})
     worker=dashboard._temu(tmp_path,{'temu':{'max_products_per_keyword':100}})['workers'][0]
-    assert worker['completed']==40 and worker['remaining']==60
+    assert worker['completed']==40 and worker['remaining']==160
     assert worker['completed_keywords']==0 and worker['total_keywords']==2
 
 
@@ -163,10 +182,10 @@ def test_broad_query_progress_uses_dispatched_triple_budget(tmp_path):
     put(tmp_path/'temu/supervisors/worker-01-new.json',{'current_query':'fuel transfer pump','assigned':2})
     put(tmp_path/'temu/workers/worker-01-new/fuel-transfer-pump/progress.json',
         {'search_query':'fuel transfer pump','status':'RUNNING','unique_goods':304,'raw_collected_count':304})
-    put(tmp_path/'temu/supervisors/assignments.json',{'jobs':[{'query':'fuel transfer pump','max_products':1200}]})
+    put(tmp_path/'temu/supervisors/assignments.json',{'jobs':[{'query':'fuel transfer pump','owner':'worker-01-new','max_products':1200}]})
     worker=dashboard._temu(tmp_path,{'temu':{'max_products_per_keyword':400}})['workers'][0]
-    assert worker['total']==1200 and worker['completed']==304
-    assert 25<=worker['percent']<26
+    assert worker['total']==2400 and worker['completed']==304
+    assert 12<=worker['percent']<13
 
 
 def test_temu_finished_worker_keeps_visible_keyword_progress(tmp_path):
@@ -176,7 +195,7 @@ def test_temu_finished_worker_keeps_visible_keyword_progress(tmp_path):
     put(tmp_path/'temu/workers/worker-01-new/cordless-drill/progress.json',{'search_query':'cordless drill','status':'KEYWORD_LIMIT_REACHED','unique_goods':100,'raw_collected_count':100})
     worker=dashboard._temu(tmp_path,{'temu':{'max_products_per_keyword':100}})['workers'][0]
     assert worker['actual_count']==200
-    assert (worker['completed'],worker['total'],worker['remaining'])==(2,2,0)
+    assert (worker['completed'],worker['total'],worker['remaining'])==(200,200,0)
 
 
 def test_201_candidates_incrementally_verify_and_image_changes_invalidate(tmp_path,monkeypatch):

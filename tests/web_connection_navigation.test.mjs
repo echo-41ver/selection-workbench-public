@@ -9,6 +9,17 @@ function sandbox(value){const context=vm.createContext(value);vm.runInContext(he
 
 const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 
+test('starting or restoring a task opens lane details once and preserves manual collapse',()=>{
+ const box={open:false},context=vm.createContext({$:()=>box});
+ vm.runInContext(html.slice(html.indexOf('function autoExpandCollectionDetails('),html.indexOf('function preparationOnly(')),context);
+ context.data={active:true,category_key:'one'};vm.runInContext('autoExpandCollectionDetails(data)',context);
+ assert.equal(box.open,true);box.open=false;vm.runInContext('autoExpandCollectionDetails(data)',context);
+ assert.equal(box.open,false);
+ context.data={active:true,category_key:'two'};vm.runInContext('autoExpandCollectionDetails(data)',context);
+ assert.equal(box.open,true);box.open=false;context.data={active:false};vm.runInContext('autoExpandCollectionDetails(data)',context);
+ context.data={active:true,category_key:'two'};vm.runInContext('autoExpandCollectionDetails(data)',context);assert.equal(box.open,true);
+});
+
 test('preparation progress belongs to creation and does not appear as a running task',()=>{
  const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);};
  const context=vm.createContext({$:get});
@@ -88,7 +99,7 @@ test('Codex pool status stays separate from full candidate progress and reports 
  assert.match(get('codex-review-publisher').textContent,/等待发布锁.*另一个发布器持锁/);
 });
 
-test('compact worker surfaces its round, state heartbeat time, and deduplicated scope',()=>{
+test('compact worker shows cumulative raw count and target independently of last-pass unique goods',()=>{
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{children:[],append(...values){this.children.push(...values);}});return nodes.get(id);};
  const element=()=>({children:[],style:{},dataset:{},append(...values){this.children.push(...values);},setAttribute(k,v){this[k]=v;},addEventListener(){}});
  const code=html.slice(html.indexOf('function first(row,keys)'),html.indexOf('function addProgressCard('));
@@ -96,12 +107,15 @@ test('compact worker surfaces its round, state heartbeat time, and deduplicated 
  vm.runInContext(code,context);
  const card=element();card.className='progress-card';
  context.card=card;
- vm.runInContext(`compactWorker(card,{raw_collected_count:400,unique_goods:17,round:4,status_updated_at:1791596096},2,false)`,context);
+ vm.runInContext(`compactWorker(card,{raw_collected_count_lane:800,lane_total:800,lane_planned_total:3200,lane_shortfall:2400,empty_keyword_count:1,raw_collected_count:400,completed:205,total:400,unique_goods:205,round:4,status_updated_at:1791596096},2,false)`,context);
  const activity=card.children.find(child=>child.className==='small worker-activity');
  assert.match(activity.textContent,/第 4 轮/);
  assert.match(activity.textContent,/状态更新 \d{2}:\d{2}:\d{2}/);
- assert.match(activity.textContent,/当前关键词 \/ 排序采集条数（去重前）/);
- assert.equal(card.children.find(node=>node.className==='lane-count').textContent,'400 ');
+ assert.match(activity.textContent,/本路累计采集条数（去重前）/);
+ assert.equal(card.children.find(node=>node.className==='lane-count').textContent,'800 / 800 ');
+ const progress=card.children.find(node=>node.className==='progress-track');
+ assert.equal(progress['aria-valuenow'],800);assert.equal(progress.children[0].style.width,'100%');
+ assert.ok(card.children.some(node=>/原计划 3,200 条.*少采 2,400 条.*1 个关键词明确无结果/.test(node.textContent||'')));
  const completedCard=element();completedCard.className='progress-card';context.card=completedCard;
  vm.runInContext(`compactWorker(card,{unique_goods:7159,round:4,status_updated_at:1791596096,'采集状态':'WORKER_COMPLETE'},2,false)`,context);
  const completedActivity=completedCard.children.find(child=>child.className==='small worker-activity');

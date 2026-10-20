@@ -70,6 +70,29 @@ def test_lane_with_remaining_dispatch_is_not_retired(tmp_path,monkeypatch):
     assert not cleanup.cleanup_completed_worker(tmp_path,run,'w')
 
 
+def test_other_lanes_blocked_sales_does_not_retain_finished_profile(tmp_path,monkeypatch):
+    import selection
+    monkeypatch.setattr(selection,'identity',lambda:'machine')
+    run=tmp_path/'task';state=run/'temu/supervisors/w.json';state.parent.mkdir(parents=True)
+    state.write_text('{"status":"WORKER_COMPLETE"}')
+    (run/'temu/keyword_plan.json').write_text('{"finalized":true}')
+    dispatch={'jobs':[{'query':'blocked','owner':'other','started':True,'complete':False,
+        'sort_passes':{'sales':{'owner':'other','started':True,'complete':False},
+                       'recent':{'owner':'w','started':False,'complete':False}}}]}
+    (state.parent/'assignments.json').write_text(json.dumps(dispatch))
+    config=tmp_path/'config/sessions.json';config.parent.mkdir()
+    config.write_text(json.dumps({'task_key':'task','machine_id':'machine','workers':[{'name':'w','profile_id':'p'}]}))
+    calls=[]
+    monkeypatch.setattr(api,'api_base',lambda:'fixture')
+    monkeypatch.setattr(api,'api_call',lambda *a,**k:{'data':{'list':[{'user_id':'p'}]}})
+    monkeypatch.setattr(api,'delete_profile_after_release',lambda *a:calls.append(a[1]))
+    assert cleanup.cleanup_completed_worker(tmp_path,run,'w')
+    assert calls==['p']
+    dispatch['jobs'][0]['sort_passes']['sales']['complete']=True
+    (state.parent/'assignments.json').write_text(json.dumps(dispatch))
+    assert not cleanup.cleanup_completed_worker(tmp_path,run,'w')
+
+
 def test_completed_lane_stops_only_its_proxy_chain_before_profile_delete(tmp_path,monkeypatch):
     import selection
     import retain_proxy_connections

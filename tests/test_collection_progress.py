@@ -127,6 +127,32 @@ def empty_snapshot(base, query='empty', **changes):
     return row
 
 
+def test_lane_total_covers_all_owned_sorts_and_preserves_broad_triple_target(tmp_path):
+    put(tmp_path/'temu/supervisors/assignments.json',{'lanes':['w1','w2'],'jobs':[
+        {'query':'broad','max_products':1200,'owner':'w1'},
+        {'query':'part','max_products':400,'sort_passes':{
+            'sales':{'owner':'w1','started':True,'complete':True},
+            'recent':{'owner':'w2','started':True,'complete':True}}}]})
+    snapshot(tmp_path,'broad','broad',880)
+    snapshot(tmp_path,'part','part',400,'KEYWORD_LIMIT_REACHED')
+    snapshot(tmp_path,'part-recent','part',400,'KEYWORD_LIMIT_REACHED','recent')
+    first=collection_total(tmp_path,{},worker='w1',rate_snapshot={})
+    second=collection_total(tmp_path,{},worker='w2',rate_snapshot={})
+    assert (first['actual_count'],first['total'],first['total_passes'])==(1280,2800,3)
+    assert (second['actual_count'],second['total'],second['total_passes'])==(400,400,1)
+
+
+def test_finished_lane_reports_empty_shortfall_separately_from_cumulative_raw_goal(tmp_path):
+    put(tmp_path/'temu/supervisors/assignments.json',{'jobs':[
+        {'query':'empty','max_products':1200,'owner':'w1'},
+        {'query':'full','max_products':400,'owner':'w1'}]})
+    empty_snapshot(tmp_path,raw_collected_count=0)
+    for order in ('sales','recent'):snapshot(tmp_path,'full-'+order,'full',400,'KEYWORD_LIMIT_REACHED',order)
+    row=collection_total(tmp_path,{},worker='w1',rate_snapshot={})
+    assert row['actual_count']==row['total']==800 and row['percent']==100
+    assert row['planned_total']==3200 and row['shortfall']==2400 and row['empty_keyword_count']==1
+
+
 def test_confirmed_empty_query_completes_both_sorts_without_inventing_goods(tmp_path):
     base = tmp_path / 'runs/current'
     put(base / 'temu/supervisors/assignments.json', {

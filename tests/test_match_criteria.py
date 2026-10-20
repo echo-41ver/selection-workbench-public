@@ -74,6 +74,50 @@ def test_first_layer_only_excludes_explicit_bilateral_size_conflict(category,pro
     assert text_gate(category,'投影仪 7英寸','投影仪 8英寸')['excluded'] is False
 
 
+@pytest.mark.parametrize('dimension',['13.78X12.6inch','41.8 X 30 Inches','7 X 15 Inches'])
+def test_uppercase_dimension_separator_does_not_abort_text_batch(category,products,dimension):
+    from selection_automation.match_criteria import attach,text_gate
+    category=deepcopy(category);category['stage1']={'attributes':[]};category['stage3']['rule_version']='test'
+    products=deepcopy(products);products['records'][0]['specifications']=[{'label':'Dimensions','value':dimension}]
+    products['records'][1]['specifications']=[]
+    catalog=seed(category,products);size=next(row for row in catalog['items'] if row['label']=='Dimensions')
+    attach(category,select(catalog,[size['id']]))
+    assert text_gate(category,'Washer '+dimension,'Washer '+dimension.lower())['stage1_status']=='TEXT_PASS'
+    assert text_gate(category,'Washer '+dimension,'Washer 1 x 2 inches')['excluded']
+    assert not text_gate(category,'Washer '+dimension,'Washer without stated dimensions')['excluded']
+
+
+@pytest.mark.parametrize('name',['显示器','五金配件','浴帘'])
+@pytest.mark.parametrize('left,right',[
+    ('13.78X12.6inch','13.78×12.6 inches'),('７ Ｘ １５ ｉｎｃｈｅｓ','7*15 inches'),
+    ('10✕20㎝','100x200 mm'),('1,000mm','100 cm'),('1/2 inch','12.7mm'),
+    ('1½ inches','38.1mm'),('1⅝ inch','41.275mm'),('1000g','1 kg'),
+    ('60HZ','60赫兹'),('500W','500瓦'),('尺寸10厘米','尺寸100mm'),
+])
+def test_generic_numeric_formats_work_across_categories(category,products,name,left,right):
+    from selection_automation.match_criteria import attach,text_gate
+    category=deepcopy(category);category.update(category_name_zh=name,stage1={'attributes':[]})
+    category['stage3']['rule_version']='test'
+    products=deepcopy(products);products['records'][0]['specifications']=[{'label':'Parameters','value':left}]
+    products['records'][1]['specifications']=[]
+    catalog=seed(category,products);item=next(row for row in catalog['items'] if row['kind']=='text')
+    attach(category,select(catalog,[item['id']]))
+    result=text_gate(category,left,right)
+    assert result['stage1_status']=='TEXT_PASS' and not result['excluded']
+
+
+@pytest.mark.parametrize('bad',['5/0 cm','0/0 cm','10-20cm','10cm–20cm','12,5cm','1e3mm',None,{},float('nan')])
+def test_unusable_numeric_fact_is_missing_evidence_not_a_batch_exception(category,products,bad):
+    from selection_automation.match_criteria import attach,text_gate
+    category=deepcopy(category);category['stage1']={'attributes':[]};category['stage3']['rule_version']='test'
+    products=deepcopy(products);products['records'][0]['specifications']=[{'label':'Dimensions','value':'10cm'}]
+    products['records'][1]['specifications']=[]
+    catalog=seed(category,products);item=next(row for row in catalog['items'] if row['kind']=='text')
+    attach(category,select(catalog,[item['id']]))
+    result=text_gate(category,bad,'20cm')
+    assert not result['excluded'] and result['stage1_status']=='TEXT_INSUFFICIENT'
+
+
 def configured(products):
     from test_identity_policy import category
     from selection_automation.identity_policy import compile_policy

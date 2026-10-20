@@ -10,7 +10,7 @@ import time
 def stage12_contract_unchanged(root, base):
     """Read the complete saved contract before permitting a watcher reopen."""
     from selection_automation import rules
-    from selection_workflow.incremental_stage12 import digest, stable_json, VECTOR_REVISION
+    from selection_workflow.incremental_stage12 import declarative_text_revision,VECTOR_REVISION
     config_path=base/'stage12_config.json'
     config=json.loads(config_path.read_text('utf-8'))
     output=Path(config['output_dir'])
@@ -21,10 +21,7 @@ def stage12_contract_unchanged(root, base):
     if not gate.startswith('declarative:') or Path(gate.split(':',1)[1]).resolve()!=(base/'category.json').resolve():
         return False,'无法确认当前任务的第一二层规则来源'
     category=rules.read_frozen(base/'category.json')
-    revision=digest(stable_json({'stage1':category['stage1'],
-        'snapshot_protocol':'declarative-content-v1',
-        'ordinary_variants':sorted(set(category['stage3'].get('variant_fields',[]))-set(category['stage3']['modules'])),
-        'engine':digest(Path(inspect.getsourcefile(rules.text_gate)).read_bytes())}))
+    revision=declarative_text_revision(category)
     expected={'schema':'stage12-processing-contract-v1','text_gate':gate,'text_gate_revision':revision,
         'rule_version':config.get('stage12_rule_version') or config.get('rule_version'),
         'vector_revision':VECTOR_REVISION,'candidate_threshold':float(config['candidate_threshold']),

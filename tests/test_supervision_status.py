@@ -27,6 +27,17 @@ def worker_fixture(base, status, *, worker_status='RUNNING', **progress_fields):
     return worker, output
 
 
+def test_completed_worker_keeps_last_raw_count_and_query_after_environment_cleanup(tmp_path):
+    worker,output=worker_fixture(tmp_path,'KEYWORD_LIMIT_REACHED',worker_status='WORKER_COMPLETE',
+        raw_collected_count=400,unique_goods=232,max_products=400,round=9,search_query='power drill')
+    worker.pop('current_query');worker['environment_cleanup']='COMPLETE'
+    write(tmp_path/'temu/supervisors/worker1.json',worker)
+    _,view,blocked=selection.worker_snapshot(tmp_path,'worker1')
+    assert view['采集条数']==400 and view['唯一商品数']==232
+    assert view['关键词']=='power drill' and view['采集状态']=='WORKER_COMPLETE'
+    assert '环境已回收' in view['状态'] and blocked is None
+
+
 @pytest.mark.parametrize('status', ['STOPPED_TRY_AGAIN_STALLED',
     'STOPPED_PROXY_OR_NETWORK_FAILURE', 'STOPPED_HTTP_429', 'STOPPED_LOGIN_REQUIRED'])
 def test_stopped_recovery_browser_keeps_network_until_collector_or_stop(tmp_path, monkeypatch, status):
