@@ -28,12 +28,13 @@ def test_generic_source_paragraph_never_merges_unrelated_parameters():
     assert set(rows)=={'capacity_class','drain_pump','water_levels'}
     assert rows['capacity_class']['label_zh']=='容量档位'
     assert [p['value'] for p in rows['capacity_class']['observations']]==['Washer capacity: 18lbs']
-    assert rows['capacity_class']['selected']
+    assert not rows['capacity_class']['selected']
 
 
 def test_reused_cross_batch_id_cannot_overwrite_the_selected_parameter():
     category,snapshot,proposal=fixture()
     catalog=merge_proposals(seed(category,snapshot),snapshot,proposal('capacity_class','容量档位','Washer capacity: 18lbs'))
+    catalog=select(catalog,['capacity_class'])
     catalog=merge_proposals(catalog,snapshot,proposal('capacity_class','是否可折叠','Foldable'))
     capacity=next(row for row in catalog['items'] if row['id']=='capacity_class')
     folded=next(row for row in catalog['items'] if row['label']=='是否可折叠')
@@ -48,6 +49,8 @@ def test_saved_proposals_repair_legacy_catalog_without_api_and_keep_choices():
     from extract_match_criteria import repair_cached_text_fields
     category,snapshot,proposal=fixture()
     attach(category,seed(category,snapshot))
+    category['match_criteria']['items']=[{'id':'capacity_class','label':'容量档位','label_zh':'容量档位',
+        'kind':'text','selected':True,'origin':'规则建议','observations':[],'source_labels':[]}]
     original=deepcopy(category)
     category['match_criteria']['items'][0].update(label='水温选项数量',label_zh='容量档位',observations=[{'value':'wrong'}])
     ledger={'source_fingerprint':category['match_criteria']['source_fingerprint'],'batches':{
@@ -83,7 +86,9 @@ def test_capacity_compares_only_compatible_capacity_units(left,right,status):
 
 def test_processing_revision_tracks_selected_text_but_not_visual_choices():
     from selection_workflow.incremental_stage12 import declarative_text_revision
-    category,snapshot,_=fixture();attach(category,seed(category,snapshot))
+    category,snapshot,proposal=fixture()
+    catalog=merge_proposals(seed(category,snapshot),snapshot,proposal('capacity_class','容量档位','Washer capacity: 18lbs'))
+    attach(category,select(catalog,['capacity_class']))
     before=declarative_text_revision(category)
     changed=deepcopy(category);changed['match_criteria']['items'].append({'id':'color','kind':'visual','selected':True})
     assert declarative_text_revision(changed)==before

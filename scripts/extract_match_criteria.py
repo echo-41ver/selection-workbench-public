@@ -27,9 +27,10 @@ def repair_cached_text_fields(category,snapshot,ledger):
         catalog=merge_proposals(catalog,snapshot,text)
     # Keep every already-reviewed visual fact and the user's exact selection.
     catalog['items']=[row for row in catalog['items'] if row['kind']=='text']+[
-        deepcopy(row) for row in previous.get('items',[]) if row.get('kind')=='visual']
+        deepcopy(row) for row in previous.get('items',[]) if row.get('kind')=='visual' or row.get('origin')=='用户补充文字要求']
     choices={row['id'] for row in previous.get('items',[]) if row.get('selected')}
-    if choices-{row['id'] for row in catalog['items']}:
+    unsupported={row['id'] for row in previous.get('items',[]) if row.get('kind')=='text' and row.get('origin')=='规则建议' and not row.get('observations')}
+    if choices-{row['id'] for row in catalog['items']}-unsupported:
         raise ValueError('无法还原已勾选条件，保留原任务')
     for row in catalog['items']:row['selected']=row['id'] in choices
     for name in ('visual_version','visual_mode','image_review','automatic_focus'):

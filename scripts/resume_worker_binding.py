@@ -39,9 +39,11 @@ def resume(worker, allow_rebind=False, expected_task=None, expected_profile=None
                     driver=str(started.get('webdriver') or '')
                     if not Path(driver).is_file(): raise RuntimeError('Browser returned no usable driver')
                     port=int(row['webdriver_url'].rsplit(':',1)[1])
-                    result=r.run_background_launcher([r.powershell(),'-NoProfile','-File',str(r.ROOT/'scripts'/'bind_flower_worker.ps1'),
+                    command=[r.powershell(),'-NoProfile','-File',str(r.ROOT/'scripts'/'bind_flower_worker.ps1'),
                         '-WorkerName',name,'-ProfileId',row['profile_id'],'-WebDriverPort',str(port),
-                        '-GeckoDriverPath',driver,'-MarionettePort',str(started.get('marionette_port') or 0),'-WaitSeconds','60'],cwd=r.ROOT,timeout=75)
+                        '-GeckoDriverPath',driver,'-MarionettePort',str(started.get('marionette_port') or 0),'-WaitSeconds','60']
+                    if allow_rebind:command.append('-RecoverOwnedDriver')
+                    result=r.run_background_launcher(command,cwd=r.ROOT,timeout=75)
                     if not result.returncode: break
                     error=(result.stderr or result.stdout or 'Driver binding failed')[-1000:]
                     raise RuntimeError(error)

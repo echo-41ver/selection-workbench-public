@@ -8,8 +8,10 @@ from decimal import Decimal,DecimalException
 from urllib.parse import urlsplit
 
 SCHEMA='amazon-match-criteria-v1'
-FIELD_MERGE_VERSION='semantic-parameter-fields-v2'
-_BUSINESS=re.compile(r'price|review|rating|rank|seller|stock|warranty|ASIN|UPC|日期|排名|评分|评论|价格|销量|保修|卖点\d+',re.I)
+FIELD_MERGE_VERSION='semantic-parameter-fields-v3'
+_BUSINESS=re.compile(r'price|review|rating|rank|seller|stock|warranty|ASIN|UPC|日期|排名|评分|评论|价格|销量|保修|卖点\d+|'
+    r'^(?:brand(?:\s*name)?|manufacturer|department|date\s*first\s*available|EAN|GTIN|'
+    r'global\s*trade\s*identification\s*number|EU\s*spare\s*part\s*availability\s*duration|品牌|制造商|生产厂家)(?:\b|[\s:：]|$)',re.I)
 _MEASURE_NUMBER=r'(?:\d+\s+\d+\s*/\s*\d+|\d+\s*/\s*\d+|\d+(?:\.\d+)?)'
 
 

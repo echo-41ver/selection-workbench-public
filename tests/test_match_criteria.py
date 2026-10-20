@@ -31,6 +31,49 @@ def test_actual_specifications_form_union_without_discarding_per_product_values(
     assert {row['label'] for row in catalog['items']}=={'外壳形状','Dimensions','Mounting Type','Resolution'}
 
 
+@pytest.mark.parametrize('name',['电磁炉','灯泡','鼠标垫','洗衣机','投影仪','收纳盒'])
+def test_rule_suggestions_without_product_evidence_are_not_selectable_conditions(category,products,name):
+    category=deepcopy(category);category['category_name_zh']=name
+    category['stage1']={'attributes':[{'name':'fuel_type','hard_conflict':True}]}
+    catalog=seed(category,products)
+    assert not any(row.get('feature_id')=='fuel_type' for row in catalog['items'])
+    assert any(row['label']=='Dimensions' for row in catalog['items'])
+
+
+def test_grounded_heating_count_uses_one_clear_parameter_name(category,products):
+    category=deepcopy(category);category['stage1']={'attributes':[{'name':'burner_count','hard_conflict':True}]}
+    products=deepcopy(products)
+    products['records'][0]['specifications']=[{'label':'Number of Heating Elements','value':'1'}]
+    products['records'][1]['specifications']=[{'label':'Number of Burners','value':'2'}]
+    catalog=seed(category,products)
+    zones=[row for row in catalog['items'] if row.get('label_zh')=='加热区数量']
+    assert len(zones)==1
+    assert {row['value'] for row in zones[0]['observations']}=={'1','2'}
+
+
+def test_explicit_user_requirement_is_retained_without_amazon_specification(category,products):
+    from selection_automation.match_criteria import attach,include_manual_attributes
+    category=deepcopy(category);category['stage1']={'attributes':[]}
+    attach(category,seed(category,products))
+    category['stage1']['attributes']=[{'name':'fuel_type','hard_conflict':True}]
+    include_manual_attributes(category)
+    assert any(row['selected'] and row.get('origin')=='用户补充文字要求' for row in category['match_criteria']['items'])
+
+
+def test_cached_draft_upgrade_removes_unsupported_default_and_keeps_manual_requirement(category,products):
+    from extract_match_criteria import repair_cached_text_fields
+    catalog=seed(category,products)
+    catalog['items'] += [
+        {'id':'fuel_type','label':'燃料类型','kind':'text','selected':True,'origin':'规则建议','observations':[]},
+        {'id':'manual','label':'自定义要求','kind':'text','selected':True,'origin':'用户补充文字要求','observations':[]},
+    ]
+    category=deepcopy(category);category['match_criteria']=catalog
+    ledger={'source_fingerprint':catalog['source_fingerprint'],'batches':{'0':{'state':'complete','proposal':{'items':[]}}}}
+    upgraded=repair_cached_text_fields(category,products,ledger)['match_criteria']
+    assert not any(row['id']=='fuel_type' for row in upgraded['items'])
+    assert any(row['id']=='manual' and row['selected'] for row in upgraded['items'])
+
+
 def test_unchecking_survives_refresh_and_does_not_mutate_old_snapshot(category,products):
     original=seed(category,products)
     changed=select(original,[],original['revision'])
@@ -123,7 +166,10 @@ def configured(products):
     from selection_automation.identity_policy import compile_policy
     from selection_automation.match_criteria import attach
     result=compile_policy(category('投影仪'))
-    return attach(result,seed(result,products))
+    grounded=deepcopy(products)
+    grounded['records'][0].setdefault('specifications',[]).append({'label':'主体构造','value':'fixed body'})
+    grounded['records'][1].setdefault('specifications',[]).append({'label':'主体构造','value':'jointed body'})
+    return attach(result,seed(result,grounded))
 
 
 def facts():

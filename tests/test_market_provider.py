@@ -36,8 +36,60 @@ def test_repeated_page_stops_without_claiming_full_coverage():
 
 def test_fuzzy_category_is_not_silently_used():
     source=Source()
-    assert collect({**category(),'category_name_zh':'投影仪'},source,now=NOW)['status']=='CATEGORY_UNRESOLVED'
+    assert collect({**category(),'category_name_zh':'投影仪'},source,now=NOW)['status']=='CATEGORY_UNSUPPORTED'
     assert not source.calls
+
+
+def test_alias_queries_match_only_actual_returned_exact_english_name():
+    class Aliases:
+        def __init__(self):self.queries=[];self.goods_calls=[]
+        def categories(self,query):
+            self.queries.append(query['keyword'])
+            return {'total':1,'list':[{'catId':81,'catName':'Luggage-Scales','isLeaf':True}]} if query['keyword']=='luggage scales' else {
+                'total':1,'list':[{'catId':99,'catName':'Luggage Accessories','isLeaf':False}]}
+        def goods(self,query):
+            self.goods_calls.append(query);assert query['catIds']==[81]
+            return {'total':0,'list':[]}
+    source=Aliases()
+    result=collect({**category(),'category_name_zh':'行李秤','temu':{'category_aliases':['luggage scales']}},source,now=NOW)
+    assert result['status']=='COMPLETE' and source.queries==['行李秤','luggage scales']
+    assert result['categories'][0]['catId']==81
+    assert [row['keyword'] for row in result['category_queries']]==source.queries
+
+
+def test_alias_must_not_widen_to_parent_even_when_model_selects_it():
+    class Parents(Source):
+        def categories(self,query):
+            return {'total':1,'list':[{'catId':1,'catName':'厨房电器','isLeaf':False}]}
+    source=Parents()
+    result=collect({**category(),'category_name_zh':'电磁炉','temu':{'category_aliases':['厨房电器']}},source,now=NOW,
+        choose_categories=lambda *args:{'cat_ids':[1],'confidence':1})
+    assert result['status']=='CATEGORY_UNSUPPORTED'
+    assert result['optional'] and result['blocking'] is False and not source.calls
+    assert result['category_candidates'][0]['catId']==1
+
+
+def test_exact_category_can_be_found_beyond_first_fuzzy_page():
+    class Paged(Source):
+        def categories(self,query):
+            return {'total':201,'list':[{'catId':1000+i,'catName':f'电钻配件{i}'} for i in range(200)]} if query['page']==1 else {
+                'total':201,'list':[{'catId':1,'catName':'电钻','isLeaf':True}]}
+    source=Paged();result=collect(category(),source,now=NOW)
+    assert result['status']=='COMPLETE' and len(result['category_queries'])==2
+
+
+def test_incomplete_taxonomy_search_does_not_claim_unsupported():
+    class Many(Source):
+        def categories(self,query):
+            return {'total':1000,'list':[{'catId':query['page'],'catName':'其它类目'}]}
+    result=collect(category(),Many(),now=NOW)
+    assert result['status']=='CATEGORY_UNRESOLVED' and len(result['category_queries'])==3
+
+
+def test_provider_failure_is_not_misreported_as_category_unsupported():
+    class Broken(Source):
+        def categories(self,query):raise TimeoutError('network')
+    with pytest.raises(TimeoutError):collect(category(),Broken(),now=NOW)
 
 
 def test_verified_keyboard_path_uses_live_id_without_login_or_model_mapping():
@@ -73,7 +125,7 @@ def test_verified_fuel_transfer_taxonomy_never_selects_engine_parts(correct_path
     cat={**category(),'category_name_zh':'便携式抽油泵／液体输送泵',
          'amazon':{'verification':{'heading':'Best Sellers in Barrel & Hand Fuel Pumps'}}}
     result=collect(cat,source,now=NOW)
-    assert result['status']==('COMPLETE' if correct_path else 'CATEGORY_UNRESOLVED')
+    assert result['status']==('COMPLETE' if correct_path else 'CATEGORY_UNSUPPORTED')
     assert len(source.calls)==int(correct_path)
 
 
@@ -81,7 +133,7 @@ def test_category_mapper_may_only_choose_real_high_confidence_ids():
     cat={**category(),'category_name_zh':'无线电钻'}
     for ids,confidence in [([999],1),([1],.5)]:
         result=collect(cat,Source(),now=NOW,choose_categories=lambda *a:{'cat_ids':ids,'confidence':confidence})
-        assert result['status']=='CATEGORY_UNRESOLVED'
+        assert result['status']=='CATEGORY_UNSUPPORTED'
     result=collect(cat,Source(),now=NOW,choose_categories=lambda *a:{'cat_ids':[1],'confidence':.95})
     assert result['status']=='COMPLETE' and result['categories'][0]['catId']==1
 

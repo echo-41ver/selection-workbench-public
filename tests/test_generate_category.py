@@ -114,7 +114,7 @@ def test_policy_repair_is_once_and_preserves_collection_configuration():
     assert 'required_visual' not in broken['stage3']['identity_policy']['features'][0]
 
 
-def test_unusable_policy_repair_stops_without_loop_or_fallback():
+def test_unusable_policy_repair_stops_after_bounded_retry_without_fallback():
     broken = fixture_config(); broken['stage3']['identity_policy'] = None
     calls = []
     def repair(*args, **kwargs):
@@ -122,7 +122,7 @@ def test_unusable_policy_repair_stops_without_loop_or_fallback():
         return {'identity_policy': None, 'attributes': broken['stage1']['attributes']}
     with pytest.raises(ValueError):
         generator.compile_generated_policy(broken, model=repair)
-    assert calls == [1]
+    assert calls == [1,1]
 
 
 def setup(monkeypatch, config=None, decision=None):

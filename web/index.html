@@ -558,7 +558,7 @@ function nextStep(data){
  else if(data.generation_error){message='准备失败，采集尚未开始。请按错误提示修正，原可用草稿仍可查看；有“重试准备任务”时可直接重试。';tone='danger';}
  else if(data.stage3_control?.codex_review?.running){message=data.stage3_control.codex_review.phase+'。同款分析正在进行，可到“运行总览”查看进度，结果与导出在独立页面。';tone='success';}
  else if(data.collection_complete){message=data.stage3_control?.running?'全部采集已完成；第三层图片分析正在进行。':'全部采集已完成。可以查看结果；第三层看图仍等待手动启动。';tone='success';}
- else if(data.active){const preparing=!data.category_key&&data.generation?.stage!=='complete';message=data.stage3_control?.running?'第三层图片分析正在进行，请等待结果更新。可到“结果与导出”查看已完成的结果。':preparing?'正在准备规则与 Amazon 关键词，请等待。准备好后回来检查规则，再开始采集。':'正在采集并自动做第一、二层分析。可到“结果与导出”查看已生成的部分结果；第三层仍需你手动启动。';tone='success';}
+ else if(data.active){const preparing=!data.category_key;message=data.stage3_control?.running?'第三层图片分析正在进行，请等待结果更新。可到“结果与导出”查看已完成的结果。':preparing?'正在准备规则与 Amazon 关键词，请等待。准备好后回来检查规则，再开始采集。':'正在采集并自动做第一、二层分析。可到“结果与导出”查看已生成的部分结果；第三层仍需你手动启动。';tone='success';}
  else if(data.draft){message='第二步：检查规则和关键词。改过人话要求后先点对应“解释 / 应用”，再点“确认规则，开始采集与本地分析”。';}
  else if(data.category_key){message='当前任务已结束或暂停。可查看结果；需要继续时点击“开始 / 继续采集”，需要另一品类时去“新建任务”。第三层只分析候选，未启动不代表已确认同款。';}
  node.textContent=message;node.className='notice'+(tone?' '+tone:'');

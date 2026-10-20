@@ -3,16 +3,39 @@
 Frozen task readers deliberately do not call this authoring pass.
 """
 from copy import deepcopy
+import re
 
 COMPATIBILITY_MARKERS={'for','compatible with','compatible','fits','fit','replacement for',
     'designed for','works with','use with','suitable for','适用于','適用於','适配','適配','兼容','用于','用於'}
+
+
+def normalize_attribute_aliases(values):
+    """Normalize literal list framing without inventing attribute meanings."""
+    if not isinstance(values,dict) or not values:
+        raise ValueError('第一层属性取值须为非空对象')
+    result={}
+    for value,raw in values.items():
+        if not isinstance(value,str) or not value.strip():
+            raise ValueError('第一层属性取值名称必须是非空文字')
+        if isinstance(raw,str):
+            phrases=[phrase.strip() for phrase in re.split(r'[|｜]',raw) if phrase.strip()]
+        elif isinstance(raw,list) and all(isinstance(phrase,str) and phrase.strip() for phrase in raw):
+            phrases=[phrase.strip() for phrase in raw]
+        else:
+            raise ValueError('第一层属性同义词须为文字数组或竖线分隔文字')
+        if not phrases:raise ValueError('第一层属性同义词必须包含非空文字')
+        result[value]=list(dict.fromkeys(phrases))
+    return result
 
 
 def compile_stage1_rules(category):
     result=deepcopy(category)
     if result.get('stage1',{}).get('text_gate')!='declarative':return result
     for attr in result['stage1'].get('attributes',[]):
+        attr['values']=normalize_attribute_aliases(attr.get('values'))
         if 'ambiguous_phrases' not in attr:continue
+        if not isinstance(attr['ambiguous_phrases'],list):
+            raise ValueError('第一层歧义短语须为文字数组')
         aliases=[phrase for phrases in attr.get('values',{}).values() for phrase in phrases]
         phrases=[]
         for raw in attr.get('ambiguous_phrases',[]):

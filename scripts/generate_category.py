@@ -67,34 +67,44 @@ def model_http_error(error, key):
 
 
 def compile_generated_policy(config, *, model=None):
-    """One bounded repair of malformed authoring; never substitute a category."""
+    """Validate semantics and normalize bounded repair replies without replacing a category."""
     from selection_automation.identity_policy import VERSION
     model = model or model_json
+    def compile_authoring(value):
+        return compile_stage1_rules(compile_policy(value))
     try:
-        result = compile_policy(config)
+        result = compile_authoring(config)
         repaired = False
     except (ValueError, TypeError, KeyError) as error:
         source = {'category': config.get('category_name_zh'),
                   'attributes': config['stage1'].get('attributes'),
                   'modules': config['stage3'].get('modules'),
                   'identity_policy': config['stage3'].get('identity_policy')}
-        proposal = model('修复当前品类的同款边界，只返回JSON对象，恰好两个字段identity_policy和attributes。'
-            '保留品类主体和现有模块键，不改采集参数，不引入其他品类模板。文字属性name与特征id一致。'
+        prompt=('修复当前品类的同款边界，只返回JSON对象，字段identity_policy和attributes。'
+            '保留品类主体，不改采集参数，不引入其他品类模板。精简格式的文字属性与图片特征独立，不必同名。'
             'required_visual仅标主图通常可见且足以辨认款式的最小集合；背部接口、底部与配件未展示不自动阻断。'
             '不可见材质成分、隐藏性能只用明确文字或仅供说明，不凭外观猜测。'
             '结构特征不可整项设为允许变体；部件形状、位置、数量、连接方式与表面颜色分开。'
             '不能因批次不同、存在其他型号或图片未展示，就允许结构变化。'
             '按实际影响填写region/effects/preserves，不用换特征名字绕过结构检查。'
+            '文字属性values每个取值返回短语数组；同义词不能与其他取值完全相同，歧义短语不能遮掉该属性所有明确冲突。'
             '\n已确认品类依据：' + json.dumps(reviewed_profile(config), ensure_ascii=False) +
             '\n契约：' + json.dumps(category_contract()['field_requirements']['stage3.identity_policy'], ensure_ascii=False) +
-            '\n校验失败：' + str(error)[:220] + '\n当前草稿：' + json.dumps(source, ensure_ascii=False),
-            max_tokens=16000, retry_truncated=False)
-        if not isinstance(proposal, dict) or set(proposal) != {'identity_policy', 'attributes'}:
-            raise ValueError('同款边界修正返回结构无效')
-        corrected = deepcopy(config)
-        corrected['stage3']['identity_policy'] = proposal['identity_policy']
-        corrected['stage1']['attributes'] = proposal['attributes']
-        result = compile_policy(corrected)
+            '\n校验失败：' + str(error)[:220] + '\n当前草稿：' + json.dumps(source, ensure_ascii=False))
+        from selection_automation.compact_authoring import apply_policy_repair
+        for attempt in range(2):
+            proposal=model(prompt,max_tokens=6000,retry_truncated=False)
+            if MODEL_PROGRESS_REPORTER:
+                MODEL_PROGRESS_REPORTER(generated_policy_repair=proposal,message='正在编译修正后的品类规则')
+            try:
+                result=compile_authoring(apply_policy_repair(config,proposal))
+                break
+            except (ValueError,TypeError,KeyError) as repair_error:
+                if attempt:raise
+                prompt+='\n修正稿尚未通过本地校验：'+str(repair_error)[:220]+(
+                    '\n请按identity_policy={version,product_scope,features}与attributes数组返回完整修正结果；'
+                    '特征保留id,label,role,evidence,region,effects,preserves,scope,rule,modules,required_visual。'
+                    '结构形式、部件数量和连接方式须为identity，不得作为variant；variant仅允许限定的外观变化。')
         repaired = True
     result['stage3']['identity_policy_generation'] = {'compiler_version': VERSION, 'repair_used': repaired}
     return result
@@ -581,6 +591,8 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
     except Exception:
         raise CategoryGenerationError('生成的品类规则不完整或不合法；未使用其他品类模板代替') from None
     config['amazon']['verification'] = {k:evidence[k] for k in ('url','title','heading','rank_count')}
+    if cache:
+        atomic_write(cache,json.dumps({'scope':scope,'proposal':config},ensure_ascii=False))
     return add_summary(config)
 
 
@@ -597,6 +609,11 @@ def main():
     args = parser.parse_args()
     last = {}
     def report(**fields):
+        repair=fields.pop('generated_policy_repair',None)
+        if repair is not None:
+            repair_file=args.output.with_suffix('.policy-repair.json')
+            repair_file.parent.mkdir(parents=True,exist_ok=True)
+            atomic_write(repair_file,json.dumps(repair,ensure_ascii=False))
         draft=fields.pop('generated_rule_draft',None)
         if draft is not None:
             draft_file=args.output.with_suffix('.generated-rules.json')

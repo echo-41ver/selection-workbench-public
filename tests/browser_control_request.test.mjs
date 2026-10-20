@@ -67,7 +67,7 @@ test('collector timeout preserves prior checkpoint and cleans owned interception
   assert.equal(row.completion_basis,null);assert.equal(row.completion_scope,null);assert.equal(row.coverage_claim,null);
   assert.equal(row.keyword_complete,false);assert.equal(row.platform_complete,false);
   assert.equal(row.scroll_collection_started,afterImageGate);assert.equal(row.collection_phase,afterImageGate?'SCROLLING':'BEFORE_SCROLL');
-  assert.equal(row.manual_action_required,true);assert.equal(row.automatic_retry,false);assert.equal(row.automatic_recovery_eligible,false);assert.equal(row.resume_requires_session_rotation,false);
+  assert.equal(row.manual_action_required,false);assert.equal(row.automatic_retry,true);assert.equal(row.automatic_recovery_eligible,true);assert.equal(row.automatic_resume_pending,true);assert.equal(row.resume_requires_session_rotation,false);
   assert.equal(row.browser_preserved,true);assert.equal(row.proxy_preserved,true);
   assert.deepEqual(actions,afterImageGate?[['ownedInterceptCleanup'],['exit',2]]:[['exit',2]]);assert.equal(events[0].type,row.status);
  }

@@ -6,7 +6,7 @@ import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from test_generate_category import generator,fixture_config
 from test_match_criteria import configured,products
-from selection_automation.compact_authoring import expand,authoring_prompt,FORMAT
+from selection_automation.compact_authoring import expand,authoring_prompt,FORMAT,apply_policy_repair
 from selection_automation.vision import protocol,decode
 from selection_automation.rules import score
 
@@ -19,6 +19,57 @@ def proposal():
         'exclude_terms':['nail drill','磨甲机'],'keyword_features':['cordless'],
         'attributes':full['stage1']['attributes'],'threshold':54,'threshold_reason_zh':'按拍摄角度差异保守召回，避免漏检。',
         'features':features}
+
+
+def test_invalid_first_layer_dictionary_uses_the_same_bounded_rule_repair():
+    raw=proposal();config=expand(raw,'电钻','https://www.amazon.com/zgbs/tools/123',3,40)
+    config['stage1']['attributes']=[{'name':'power_source','hard_conflict':True,
+        'values':{'battery':['shared alias'],'corded':['shared alias']},'ambiguous_phrases':[]}]
+    calls=[]
+    def repair(prompt,**options):
+        calls.append(prompt)
+        return {'identity_policy':config['stage3']['identity_policy'],'attributes':raw['attributes']}
+    result=generator.compile_generated_policy(config,model=repair)
+    assert len(calls)==1 and result['stage3']['identity_policy_generation']['repair_used']
+    assert result['stage1']['attributes']==raw['attributes']
+
+
+@pytest.mark.parametrize('category',['电磁炉','灯泡','鼠标垫','洗衣机','投影仪','收纳盒'])
+@pytest.mark.parametrize('envelope',['direct','nested','compact'])
+def test_repair_envelopes_preserve_category_and_compile_without_collection_changes(category,envelope):
+    config=expand(proposal(),category,'https://www.amazon.com/gp/bestsellers/tools/123',10,400)
+    fixed=deepcopy(config['stage3']['identity_policy'])
+    broken=deepcopy(config);broken['stage3']['identity_policy']['features'][0].pop('required_visual')
+    reply={'identity_policy':fixed,'attributes':config['stage1']['attributes'],'explanation':'字段说明不应阻断有效修正'}
+    if envelope=='nested':reply={'result':{'stage3':{'identity_policy':fixed},'stage1':{'attributes':config['stage1']['attributes']}}}
+    if envelope=='compact':
+        reply={'features':fixed['features'],'product_scope':fixed['product_scope'],'attributes':config['stage1']['attributes']}
+        for feature in reply['features']:feature.pop('modules')
+    calls=[]
+    def model(prompt,**kwargs):calls.append(kwargs);return reply
+    result=generator.compile_generated_policy(broken,model=model)
+    assert len(calls)==1 and calls[0]['max_tokens']==6000
+    assert result['category_name_zh']==category
+    assert result['amazon']==config['amazon'] and result['temu']==config['temu']
+    generator.validate(result)
+
+
+def test_repair_rejects_conflicting_semantics_in_duplicate_fields():
+    config=expand(proposal(),'电磁炉','https://www.amazon.com/zgbs/tools/123',10,400)
+    reply={'identity_policy':config['stage3']['identity_policy'],'attributes':config['stage1']['attributes'],
+           'stage1':{'attributes':[]}}
+    with pytest.raises(ValueError,match='重复字段'):apply_policy_repair(config,reply)
+
+
+def test_second_repair_corrects_invalid_envelope_and_still_uses_original_scope():
+    config=expand(proposal(),'电磁炉','https://www.amazon.com/zgbs/tools/123',10,400)
+    broken=deepcopy(config);broken['stage3']['identity_policy']['features'][0].pop('required_visual')
+    answers=iter([{'explanation':'只返回了说明'}, {'identity_policy':config['stage3']['identity_policy']}])
+    calls=[]
+    def model(prompt,**kwargs):calls.append(prompt);return next(answers)
+    result=generator.compile_generated_policy(broken,model=model)
+    assert len(calls)==2 and '尚未通过' in calls[1]
+    assert result['amazon']==config['amazon'] and result['stage1']['attributes']==config['stage1']['attributes']
 
 
 def test_semantic_plan_produces_valid_rules_and_chinese_summary_without_explanation_call(monkeypatch):

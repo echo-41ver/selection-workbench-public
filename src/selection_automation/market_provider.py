@@ -1,7 +1,9 @@
 """GeekBI source-separated market evidence. Uses the same client/auth as its MCP."""
 from datetime import datetime, timedelta, timezone
 import math
+import re
 from statistics import median
+import unicodedata
 
 from .commercial import instant, metric, settings
 
@@ -23,14 +25,61 @@ class Provider:
         return self.client.goods(GoodsSearchInput(**query))['data']
 
 
+def _category_name(value):
+    """Normalize formatting only; never turn a parent name into a child name."""
+    return re.sub(r'[\s_\-‐‑–—]+', ' ', unicodedata.normalize('NFKC', str(value or '')).casefold()).strip()
+
+
+def _category_terms(category):
+    terms=[category['category_name_zh']]
+    temu=category.get('temu') or {}
+    for field in ('category_aliases','aliases','base_queries','include_terms'):
+        values=temu.get(field) or []
+        if isinstance(values,str):values=[values]
+        terms.extend(value for value in values if isinstance(value,str))
+    result=[];seen=set()
+    for term in terms:
+        term=term.strip();key=_category_name(term)
+        if key and key not in seen:
+            result.append(term);seen.add(key)
+        if len(result)>=12:break
+    return result
+
+
+def _exact_categories(rows, terms, requested):
+    accepted={_category_name(term) for term in terms}
+    selected=[]
+    for row in rows:
+        if type(row.get('catId')) is not int or row['catId']<=0:continue
+        names={_category_name(row.get(field)) for field in ('catName','catNameEn','catNameEnglish','catNameCn')}
+        # An alias must not silently widen a narrow request to a parent scope.
+        if row.get('isLeaf') is False and _category_name(requested) not in names:continue
+        if names & accepted:selected.append(row)
+    return selected
+
+
 def collect(category, provider, progress=lambda value:None, *, now=None, max_pages=50, choose_categories=None):
     now=now or datetime.now(timezone.utc)
     name=category['category_name_zh'].strip()
-    queried=provider.categories({'keyword':name,'siteId':48,'page':1,'size':200})
+    terms=_category_terms(category);queries=[];candidates={};search_complete=True
+    selected=[]
+    for term in terms:
+        for page in range(1,4):
+            data=provider.categories({'keyword':term,'siteId':48,'page':page,'size':200})
+            rows=data.get('list') or []
+            queries.append({'keyword':term,'page':page,'returned':len(rows),'total':data.get('total')})
+            for row in rows:
+                if type(row.get('catId')) is int and row['catId']>0:candidates[row['catId']]=row
+            selected=_exact_categories(candidates.values(),terms,name)
+            if selected:break
+            total=data.get('total')
+            if not rows or (type(total) is int and page*200>=total) or (total is None and len(rows)<200):break
+            if page==3:search_complete=False
+        if selected:break
+    queried={'list':list(candidates.values())}
     # A fuzzy keyword response is not a category boundary. Only actual returned
     # exact names are accepted automatically; different taxonomy paths stay visible.
-    selected=[r for r in queried['list'] if str(r.get('catName','')).strip().casefold()==name.casefold()]
-    selection_method='同名类目'
+    selection_method='提供方真实类目名称与本任务中英文名称或别名精确匹配'
     # Match the reviewed taxonomy path, taking IDs from this live response.
     heading=str(category.get('amazon',{}).get('verification',{}).get('heading') or '').casefold()
     if not selected and heading=='best sellers in computer keyboards':
@@ -40,21 +89,27 @@ def collect(category, provider, progress=lambda value:None, *, now=None, max_pag
         selection_method='已核验 Amazon 电脑键盘榜单对应极鲸云普通键盘类目路径'
     if not selected and heading=='best sellers in barrel & hand fuel pumps':
         queried=provider.categories({'keyword':'抽油泵','siteId':48,'page':1,'size':200})
+        queries.append({'keyword':'抽油泵','page':1,'returned':len(queried['list']),'total':queried.get('total')})
         selected=[r for r in queried['list'] if r.get('catName')=='桶形和手摇燃油泵'
                   and [p.get('catName') for p in r.get('parentCatItems',[])][:3]
                   == ['汽车用品','维修工具','车辆维修车间设备']]
         selection_method='已核验 Amazon 榜单对应极鲸云完整类目路径'
     if not selected and choose_categories:
-        chosen=choose_categories(category,queried['list'])
+        eligible=[r for r in queried['list'] if r.get('isLeaf') is not False or _category_name(r.get('catName'))==_category_name(name)]
+        chosen=choose_categories(category,eligible) if eligible else {}
         ids=chosen.get('cat_ids',[]) if isinstance(chosen,dict) and number(chosen.get('confidence')) is not None and chosen['confidence']>=.9 else []
-        allowed={r.get('catId') for r in queried['list']}
+        allowed={r.get('catId') for r in eligible}
         if 1<=len(ids)<=3 and all(type(i) is int and i in allowed for i in ids):
             selected=[r for r in queried['list'] if r.get('catId') in ids]
             selection_method='模型从提供方真实类目候选中匹配；详见完整类目路径'
     if not selected:
-        return {'status':'CATEGORY_UNRESOLVED','message':'极鲸云未返回同名类目，未把模糊搜索结果当成本类目',
+        return {'status':'CATEGORY_UNSUPPORTED' if search_complete else 'CATEGORY_UNRESOLVED',
+                'message':('极鲸云未提供与本任务边界相符的可核验类目；本项数据暂不支持，采集与分析可继续' if search_complete
+                           else '极鲸云类目候选过多，尚未核实对应范围；采集与分析可继续'),
                 'source':'GEEKBI','queried_at':now.isoformat(),'category_key':category['category_key'],
-                'category_candidates':[{'name':r.get('catName'),'link':r.get('linkUrl')} for r in queried['list'][:20]],'records':[]}
+                'optional':True,'blocking':False,'category_queries':queries,
+                'category_candidates':[{'catId':r.get('catId'),'name':r.get('catName'),'link':r.get('linkUrl'),
+                    'path':' > '.join(p.get('catName','') for p in r.get('parentCatItems',[]))} for r in queried['list'][:40]],'records':[]}
     gathered={};pages=[];scopes=[]
     for cat in selected:
         seen=set();total=None;complete=False
@@ -82,6 +137,7 @@ def collect(category, provider, progress=lambda value:None, *, now=None, max_pag
             'source':'GEEKBI','site_id':48,'currency':'USD','category_key':category['category_key'],
             'queried_at':now.isoformat(),'records':list(gathered.values()),'categories':scopes,'pages':pages,
             'selection_method':selection_method,
+            'category_queries':queries,
             'date_filter':'按上架时间降序分页后，本地按真实上架日期筛选；规避上游日期参数序列化错误'}
 
 

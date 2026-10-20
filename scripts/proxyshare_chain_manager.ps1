@@ -14,6 +14,21 @@ $settingsPath = Join-Path $root $SettingsFile
 $statePath = Join-Path $root $StateFile
 $chainScript = Join-Path $PSScriptRoot 'proxyshare_chain_proxy.mjs'
 $runtime = Split-Path -Parent $statePath
+. (Join-Path $PSScriptRoot 'windows_tcp_listener.ps1')
+$phaseTimer = [Diagnostics.Stopwatch]::StartNew()
+
+function Write-ChainTiming([string]$stage, [int]$number = $Worker) {
+    # Local timings distinguish an ownership-lock wait from a slow remote page.
+    # Never put gateway credentials or session usernames in this diagnostic.
+    try {
+        New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+        $record = @{ worker = $number; action = $Action; stage = $stage;
+            elapsed_seconds = [math]::Round($phaseTimer.Elapsed.TotalSeconds, 3);
+            timestamp = (Get-Date).ToString('o') } | ConvertTo-Json -Compress
+        Add-Content -LiteralPath (Join-Path $runtime "chain-manager-timing-worker-$Worker.jsonl") -Value $record -Encoding utf8
+    } catch { }
+    $phaseTimer.Restart()
+}
 
 function New-SessionToken {
     -join ((48..57) + (97..122) | Get-Random -Count 12 | ForEach-Object { [char]$_ })
@@ -39,7 +54,7 @@ function Stop-WorkerChain([hashtable]$entry) {
     # A previous launcher can leave a stale PID. Reconcile only this lane's
     # actual listener, and only when its executable belongs to this checkout.
     if ([int]($entry.port ?? 0) -gt 0) {
-        $processIds += @(Get-NetTCPConnection -LocalPort ([int]$entry.port) -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess)
+        $processIds += @(Get-LocalTcpListener -LocalPort ([int]$entry.port) | Select-Object -ExpandProperty OwningProcess)
     }
     foreach ($processId in ($processIds | Sort-Object -Unique)) {
         if ($processId -le 0) { continue }
@@ -84,7 +99,7 @@ if ($Action -eq 'status') {
     $result = foreach ($number in $targets) {
         $entry = Worker-State $number
         $port = if ($entry) { [int]$entry.port } elseif ($settings) { [int]$settings.chain_base_port + $number - 1 } else { 17890 + $number }
-        $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+        $listener = Get-LocalTcpListener -LocalPort $port
         [pscustomobject]@{ worker = $number; port = $port; listening = [bool]$listener; pid = if ($listener) { ($listener | Select-Object -First 1 -ExpandProperty OwningProcess) } else { $null } }
     }
     $result | ConvertTo-Json -Compress
@@ -119,6 +134,7 @@ try {
             Start-Sleep -Milliseconds 50
         }
     }
+    Write-ChainTiming 'route_lock_acquired'
     # Reload after locking; the earlier snapshot cannot authorize adoption.
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json -AsHashtable
     $state = Read-State
@@ -127,10 +143,11 @@ try {
 $python = Join-Path $root '.venv\Scripts\python.exe'
 & $python (Join-Path $root 'scripts\local_proxy_preflight.py') --validate-saved | Out-Null
 if ($LASTEXITCODE -ne 0) { throw '本机出口进程或端口已变化；请安全停止任务后重新准备，未切换出口。' }
+Write-ChainTiming 'saved_route_owner_validated'
 
 if (-not (Test-Path -LiteralPath $credentialPath)) { throw "缺少加密凭据：$credentialPath；先运行 initialize_proxyshare_credential.ps1" }
 if (-not $settings) { throw "缺少代理设置：$settingsPath；先运行 initialize_proxyshare_credential.ps1" }
-if ([int]$settings.preproxy_port -gt 0 -and -not (Get-NetTCPConnection -LocalPort ([int]$settings.preproxy_port) -State Listen -ErrorAction SilentlyContinue)) {
+if ([int]$settings.preproxy_port -gt 0 -and -not (Get-LocalTcpListener -LocalPort ([int]$settings.preproxy_port))) {
     throw "本机 SOCKS5 预代理 $($settings.preproxy_host):$($settings.preproxy_port) 未监听；ProxyShare 在当前网络不能直连。"
 }
 
@@ -153,16 +170,17 @@ try {
                 Start-Sleep -Milliseconds 150
             }
         }
+        Write-ChainTiming 'worker_lifecycle_lock_acquired' $number
         try {
         $key = [string]$number
         $entry = Worker-State $number
         $port = [int]$settings.chain_base_port + $number - 1
-        $existingListener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+        $existingListener = Get-LocalTcpListener -LocalPort $port
         $routeStamp = '{0}|{1}|{2}|{3}|{4}' -f $settings.preproxy_host,$settings.preproxy_port,($settings.preproxy_protocol ?? 'SOCKS5'),$settings.local_proxy_owner.pid,$settings.local_proxy_owner.created
         $sameEndpoint = $entry.route_stamp -and ((($entry.route_stamp -split '\|')[0..2] -join '|') -eq (($routeStamp -split '\|')[0..2] -join '|'))
         if ($sameEndpoint -and $entry.route_stamp -ne $routeStamp) {
-            & $python (Join-Path $root 'scripts\local_proxy_preflight.py') --validate-saved | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw '同一代理端口的新进程尚未核实；保留原链路。' }
+            # This exact saved owner was checked above while the same route
+            # lock was held. Do not launch another Python ownership scan here.
             $entry.route_stamp = $routeStamp
             Save-WorkerState $number $entry
             $state.workers[$key] = $entry
@@ -177,11 +195,12 @@ try {
         }
         $entry.port = $port
         Stop-WorkerChain $entry
+        Write-ChainTiming 'previous_chain_stopped' $number
         # Wait for actual port release, not just an old process handle. Never
         # overwrite the last good owner when an unrelated listener occupies it.
         $releaseDeadline = (Get-Date).AddSeconds(8)
         do {
-            $occupied = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+            $occupied = Get-LocalTcpListener -LocalPort $port
             if (-not $occupied) { break }
             Start-Sleep -Milliseconds 200
         } while ((Get-Date) -lt $releaseDeadline)
@@ -213,10 +232,11 @@ try {
         $deadline = (Get-Date).AddSeconds(10)
         do {
             Start-Sleep -Milliseconds 200
-            $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+            $listener = Get-LocalTcpListener -LocalPort $port
         } while (-not $listener -and (Get-Date) -lt $deadline)
         if (-not $listener) { throw "worker $number 的本地代理链未监听 $port；查看 $stderr" }
         if ($listener.OwningProcess -notcontains $process.Id) { throw "代理端口 $port 被其他进程占用；未把旧监听误认为新session" }
+        Write-ChainTiming 'new_chain_owned_listener_ready' $number
 
         # Listener ownership is local-only. Actual TEMU readiness belongs to the
         # collector's active lease; setup must never consume residential traffic.

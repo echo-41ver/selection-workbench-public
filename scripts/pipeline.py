@@ -327,9 +327,9 @@ def write_stage12_config(category: dict) -> Path:
         "text_gate": ("declarative:" + str(base / "category.json")) if category["stage1"]["text_gate"] == "declarative" else category["stage1"]["text_gate"],
         "output_dir": str(stage12_dir),
         "poll_seconds": 2,
-        "batch_size": 10000,
-        "text_gate_workers": max(1, os.cpu_count() or 1),
-        "vector_batch_size": 64,
+        "batch_size": 1000,
+        "text_gate_workers": min(4, max(1, (os.cpu_count() or 2) // 2)),
+        "vector_batch_size": 16,
         "max_image_retries": 3,
         "candidate_threshold": stage2["candidate_threshold"],
         "below_threshold_action": stage2["below_threshold_action"],
@@ -342,7 +342,7 @@ def write_stage12_config(category: dict) -> Path:
             "min_processed_delta": 1,
             "output": str(base / "excel" / f"{category['category_name_zh']}_第一二层.xlsx"),
         },
-        "image_download": {"workers": 64, "timeout_seconds": 30, "require_temu_proxy": False, "network_route": "local_direct_without_system_proxy"},
+        "image_download": {"workers": 16, "timeout_seconds": 30, "require_temu_proxy": False, "network_route": "local_direct_without_system_proxy"},
         "sources": [
             {"key": f"amazon_{category['category_key']}_frontend", "platform": "AMAZON", "adapter": "amazon_generic", "snapshot_mode": "replace", "path": str(amazon_jsonl)},
             {"key": f"temu_{category['category_key']}_keyword_union", "platform": "TEMU", "adapter": "temu_frontend", "snapshot_mode": "replace", "path": str(temu_union)},
@@ -477,7 +477,8 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                 recovery_event(run_root(category),session['name'],'REPLACED_CONTROL_STOP_CLEARED',
                     query=query,sort=sort,profile_id=session.get('profile_id'),previous_status=previous_status)
             def stop_control_recovery(progress, status, record):
-                blocked={**progress,'status':status,'manual_action_required':True,'automatic_retry':False,
+                blocked={**progress,'status':status,'manual_action_required':False,'automatic_retry':True,
+                         'automatic_resume_pending':True,
                          'control_recovery':record,'browser_preserved':True,
                          'control_recovery_profile_id':str(session.get('profile_id') or '')}
                 atomic_write(progress_path,json.dumps(blocked,ensure_ascii=False))

@@ -30,7 +30,7 @@ test('collector scan counts before category filtering and limits the final page 
  const ctx=vm.createContext({rawCounter:createRawCounter(400),rawLoadRequested:false,
   products:new Map(),pendingProducts:new Map(),unclassifiedProducts:new Map(),filteredSevereOffTopic:new Map(),
   categoryRelevance:{strict:true,classify:()=>({state:'EXCLUDED'})},isSevereOffTopic:()=>true,hasLocalWarehouseLabel:()=>true,
-  readLocalWarehouse:async()=>({}),confirmsLocalWarehouse:()=>true,localWarehouseFilter:{},
+  readLocalWarehouse:async()=>({}),confirmsLocalWarehouse:()=>true,localWarehouseFilter:{},inspectLocalWarehouse:()=>({}),inspectSalesSort:()=>({}),
   SORT_REQUEST:'default',initialProductsPreparing:false,extractScript:'fixture',now:()=>'',classify:()=>null,
   QUERY:'mouse',SAFE_SOURCE:'fixture',round:0,enforceConfiguredProductLimit:()=>0,
   execute:async()=>({rawCards:Array.from({length:400},()=>({goods_id:'1'})),rawDocumentId:'doc',rows,captured:[]})});

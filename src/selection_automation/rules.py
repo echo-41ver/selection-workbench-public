@@ -181,16 +181,29 @@ def attribute_values(text: str, aliases: dict) -> tuple[set, bool]:
     """Negated aliases are uncertain evidence, never positive identity conflicts."""
     values, uncertain = set(), False
     normalized = text.casefold()
+    matches=[]
     for name, phrases in aliases.items():
+        if not isinstance(phrases,(list,tuple)):
+            raise ValueError('attribute aliases must be literal phrase lists')
         for phrase in phrases:
             pattern = (r'(?<!\w)' + re.escape(phrase.casefold()) + r'(?!\w)') if phrase.isascii() else re.escape(phrase.casefold())
             for match in re.finditer(pattern,normalized):
-                if related_product_alias_context(normalized,match.start(),match.end()):
-                    continue  # Ignore the other item, retaining any affirmative own-item fact.
-                if uncertain_alias_context(normalized,match.start(),match.end()):
-                    uncertain = True
-                else:
-                    values.add(name)
+                matches.append((match.start(),match.end(),name))
+    chosen=[]
+    for start,end,name in sorted(matches,key=lambda hit:hit[1]-hit[0],reverse=True):
+        # "battery and plug-in" is one authored dual-power value, not a
+        # second corded value merely because "plug-in" occurs inside it.
+        # Equal aliases and separate occurrences remain multi-value evidence.
+        if any(a<=start and b>=end and b-a>end-start and other!=name for a,b,other in chosen):
+            continue
+        chosen.append((start,end,name))
+    for start,end,name in chosen:
+        if related_product_alias_context(normalized,start,end):
+            continue  # Ignore the other item, retaining any affirmative own-item fact.
+        if uncertain_alias_context(normalized,start,end):
+            uncertain = True
+        else:
+            values.add(name)
     return values, uncertain
 
 

@@ -5,7 +5,8 @@ param(
     [string]$ProfileId,
     [Parameter(Mandatory = $true)][ValidateRange(1, 65535)][int]$WebDriverPort,
     [Parameter(Mandatory = $true)][string]$GeckoDriverPath,
-    [ValidateRange(5, 120)][int]$WaitSeconds = 60
+    [ValidateRange(5, 120)][int]$WaitSeconds = 60,
+    [switch]$RecoverOwnedDriver
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,6 +17,18 @@ $bidiFile = Join-Path $runtime 'flower_bidi_url.txt'
 $driverState = Join-Path $runtime 'driver.json'
 $bindingState = Join-Path $runtime 'binding.json'
 $base = "http://127.0.0.1:$WebDriverPort"
+$script:bindingClock = [Diagnostics.Stopwatch]::StartNew()
+$script:bindingLastElapsed = 0.0
+function Write-BindingTiming([string]$Stage) {
+    New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+    $elapsed = $script:bindingClock.Elapsed.TotalSeconds
+    @{ stage = $Stage; elapsed_seconds = [Math]::Round($elapsed - $script:bindingLastElapsed, 3);
+       total_seconds = [Math]::Round($elapsed, 3); observed_at = (Get-Date).ToUniversalTime().ToString('o') } |
+        ConvertTo-Json -Compress | Add-Content -LiteralPath (Join-Path $runtime 'binding-timing.jsonl') -Encoding utf8
+    $script:bindingLastElapsed = $elapsed
+}
+
+. (Join-Path $PSScriptRoot 'windows_tcp_listener.ps1')
 
 if (-not (Test-Path -LiteralPath $GeckoDriverPath -PathType Leaf)) {
     throw "geckodriver不存在：$GeckoDriverPath"
@@ -113,8 +126,21 @@ function Resolve-ProfileMarionettePort([string]$Id) {
     $match = [regex]::Match([string]$matched[0].CommandLine, '(?i)(?:--user-data-dir|--profile(?:-directory)?)(?:=|\s+)\s*(?:"(?<quoted>[^"]+)"|(?<bare>[^"\s]+))')
     if (-not $match.Success) { throw 'Cannot locate the selected browser profile directory.' }
     $profileRoot = if ($match.Groups['quoted'].Success) { $match.Groups['quoted'].Value } else { $match.Groups['bare'].Value }
-    $active = Get-ChildItem -LiteralPath $profileRoot -Filter MarionetteActivePort -File -Recurse -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $directPortFile = Join-Path $profileRoot 'MarionetteActivePort'
+    $active = $null
+    foreach ($candidate in @($directPortFile, $script:profileMarionetteFile) | Select-Object -Unique) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            $candidateFile = Get-Item -LiteralPath $candidate
+            if ($candidateFile.LastWriteTimeUtc -ge $matched[0].CreationDate.ToUniversalTime().AddSeconds(-2)) {
+                $active = $candidateFile
+                break
+            }
+        }
+    }
+    if (-not $active) {
+        $active = Get-ChildItem -LiteralPath $profileRoot -Filter MarionetteActivePort -File -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
     if (-not $active) { return 0 }
     $script:profileMarionetteFile = $active.FullName
     $script:profileMarionetteFileUpdated = $active.LastWriteTimeUtc.ToString('o')
@@ -135,7 +161,7 @@ function Wait-ProfileMarionettePort([string]$Id, [double]$TimeoutSeconds) {
             if ($selected.Count -ne 1 -or $selected[0].CreationDate.ToUniversalTime().Ticks -ne $script:expectedProfileBrowserTicks) {
                 throw 'Selected profile browser ownership changed before Marionette binding.'
             }
-            $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+            $listeners = @(Get-LocalTcpListener -LocalPort $port)
             if ($listeners.Count -gt 0) {
                 $tree = @(Get-ProfileBrowserTree $script:expectedProfileBrowserPid)
                 if (@($listeners | Where-Object { $tree -notcontains [int]$_.OwningProcess }).Count -gt 0) {
@@ -166,12 +192,13 @@ function Get-ProfileBrowserTree([int]$RootProcessId) {
 $bindingDeadline = (Get-Date).AddSeconds($WaitSeconds)
 if ($ProfileId) { $MarionettePort = Wait-ProfileMarionettePort $ProfileId $WaitSeconds }
 if ($MarionettePort -lt 1) { throw 'A valid MarionettePort or resolvable ProfileId is required.' }
+Write-BindingTiming 'resolve_profile_marionette'
 
-$listener = Get-NetTCPConnection -LocalPort $WebDriverPort -State Listen -ErrorAction SilentlyContinue
-if ($listener) {
-    $previous = if (Test-Path -LiteralPath $driverState) { Get-Content -LiteralPath $driverState -Raw | ConvertFrom-Json } else { $null }
-    $owned = if ($previous) { Get-Process -Id $previous.pid -ErrorAction SilentlyContinue } else { $null }
-    if (-not $owned -or $listener.OwningProcess -notcontains $owned.Id -or $owned.Path -ne $GeckoDriverPath -or $owned.StartTime.ToUniversalTime().Ticks -ne $previous.started_ticks) {
+$listener = @(Get-LocalTcpListener -LocalPort $WebDriverPort)
+$previous = if (Test-Path -LiteralPath $driverState) { Get-Content -LiteralPath $driverState -Raw | ConvertFrom-Json } else { $null }
+$owned = if ($previous) { Get-Process -Id $previous.pid -ErrorAction SilentlyContinue } else { $null }
+if ($listener -or $owned) {
+    if (-not $owned -or @($listener | Where-Object { $_.OwningProcess -ne $owned.Id }).Count -gt 0 -or $owned.Path -ne $GeckoDriverPath -or $owned.StartTime.ToUniversalTime().Ticks -ne $previous.started_ticks) {
         throw "WebDriver端口$WebDriverPort被非本任务进程占用；未终止其他进程。"
     }
     if ($previous.marionette_port -eq $MarionettePort -and (Test-Path -LiteralPath $sidFile) -and (Test-Path -LiteralPath $bidiFile)) {
@@ -179,6 +206,7 @@ if ($listener) {
         try {
             $current = Invoke-LocalDriverRest "$base/session/$savedSession/url"
             if ($current.value -is [string]) {
+                Write-BindingTiming 'existing_driver_already_bound'
                 [pscustomobject]@{ worker = $WorkerName; status = 'ALREADY_BOUND'; webdriver_url = $base } | ConvertTo-Json -Compress
                 exit 0
             }
@@ -186,18 +214,22 @@ if ($listener) {
     }
     if ($previous.marionette_port -eq $MarionettePort) {
         $bindingRecord = if (Test-Path -LiteralPath $bindingState) { Get-Content -LiteralPath $bindingState -Raw | ConvertFrom-Json } else { $null }
-        $incompleteOwnedBinding = $ProfileId -and $previous.profile_id -eq $ProfileId -and
+        $sameOwnedProfile = $ProfileId -and $previous.profile_id -eq $ProfileId -and
             $previous.browser_pid -eq $script:expectedProfileBrowserPid -and
-            $previous.browser_started_ticks -eq $script:expectedProfileBrowserTicks -and
+            $previous.browser_started_ticks -eq $script:expectedProfileBrowserTicks
+        $incompleteOwnedBinding = $sameOwnedProfile -and
             (-not $bindingRecord -or $bindingRecord.geckodriver_pid -ne $owned.Id -or
              $bindingRecord.phase -in @('REQUESTING_SESSION', 'SESSION_BIND_FAILED'))
-        if (-not $incompleteOwnedBinding) { throw 'Existing selected-profile driver has no proven recoverable session; retained rather than creating a second session.' }
-        # An interrupted launcher can leave its owned driver without a saved session.
-        # Disconnect that incomplete driver before creating its replacement below.
+        if (-not $incompleteOwnedBinding -and -not ($RecoverOwnedDriver -and $sameOwnedProfile)) {
+            throw 'Existing selected-profile driver has no proven recoverable session; retained rather than creating a second session.'
+        }
+        # A fenced recovery may disconnect a hung driver after the collector lease
+        # is released. Browser, profile and saved collection data remain intact.
     }
     Stop-Process -Id $owned.Id -Force
-    $owned.WaitForExit(5000) | Out-Null
+    if (-not $owned.WaitForExit(5000)) { throw 'Owned local driver did not exit; refusing a second driver session.' }
 }
+Write-BindingTiming 'existing_driver_ownership_and_recovery'
 
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
 $process = Start-Process -FilePath $GeckoDriverPath `
@@ -214,10 +246,12 @@ do {
     try { $null = Invoke-LocalDriverRest "$base/status" -TimeoutSeconds 2; $ready = $true } catch { }
 } while (-not $ready -and (Get-Date) -lt $deadline)
 if (-not $ready) { throw "geckodriver未在$WaitSeconds秒内监听$WebDriverPort（PID=$($process.Id)）" }
+Write-BindingTiming 'local_driver_ready'
 
 # First binding must visibly activate ONLY the selected profile's process tree.
 # Port ownership remains the separate authority check above.
 $foreground = if ($ProfileId) { Show-VerifiedProfileWindow $script:expectedProfileBrowserPid } else { $null }
+Write-BindingTiming 'activate_selected_profile_window'
 $caps = @{ capabilities = @{ alwaysMatch = @{ webSocketUrl = $true; pageLoadStrategy = 'none' } } } | ConvertTo-Json -Depth 6 -Compress
 $sessionTimeout = [Math]::Max(1, [Math]::Min(60, [Math]::Ceiling(($bindingDeadline - (Get-Date)).TotalSeconds)))
 # Only record sanitized driver ownership; never browser arguments or credentials.
@@ -229,6 +263,7 @@ $matchingDrivers = @(Get-CimInstance Win32_Process -Filter "Name = 'geckodriver.
            marionette_port = [int]$m.Groups[1].Value; webdriver_port = if ($p.Success) { [int]$p.Groups[1].Value } else { $null } }
     }
 })
+Write-BindingTiming 'inspect_matching_drivers'
 # Record ownership BEFORE requesting a session, including failed bindings.
 @{ phase = 'REQUESTING_SESSION'; profile_id = $ProfileId; browser_pid = $script:expectedProfileBrowserPid;
     browser_started_ticks = $script:expectedProfileBrowserTicks; marionette_port = $MarionettePort;
@@ -237,6 +272,7 @@ $matchingDrivers = @(Get-CimInstance Win32_Process -Filter "Name = 'geckodriver.
     matching_geckodrivers = $matchingDrivers; foreground = $foreground; local_rest_proxy = 'DISABLED'; session_id_file = $sidFile; observed_at = (Get-Date).ToString('o') } |
     ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $bindingState -Encoding utf8
 $session = Invoke-LocalDriverRest "$base/session" -Method POST -Body $caps -TimeoutSeconds $sessionTimeout
+Write-BindingTiming 'create_existing_browser_session'
 $sid = [string]$session.value.sessionId
 $bidi = [string]$session.value.capabilities.webSocketUrl
 if (-not $sid -or -not $bidi) { throw 'WebDriver未返回完整session id和BiDi地址。' }

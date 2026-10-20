@@ -12,7 +12,7 @@ def test_stale_pid_reconciles_only_owned_lane_listener(tmp_path,listener_script,
     fixture.write_text('''$ErrorActionPreference='Stop'
 $chainScript='C:\\owned\\scripts\\proxyshare_chain_proxy.mjs'
 $script:stopped=@()
-function Get-NetTCPConnection { param($LocalPort,$State,$ErrorAction) if($LocalPort -ne 17893){throw 'wrong lane'}; [pscustomobject]@{OwningProcess=202} }
+function Get-LocalTcpListener { param($LocalPort) if($LocalPort -ne 17893){throw 'wrong lane'}; [pscustomobject]@{OwningProcess=202} }
 function Get-CimInstance { param($ClassName,$Filter,$ErrorAction)
 if($Filter -eq 'ProcessId=101'){return $null}
 [pscustomobject]@{Name='node.exe';CommandLine='node "SCRIPT"'} }

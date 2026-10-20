@@ -53,4 +53,6 @@ test('instructions distinguish finished generation from collection and layer3',(
  context.data={active:true,category_key:'new',workers:[],generation:{stage:'complete'},stage3_control:{running:false}};
  vm.runInContext('nextStep(data)',context);assert.match(node.textContent,/正在采集/);assert.doesNotMatch(node.textContent,/正在准备/);
  context.data.stage3_control.running=true;vm.runInContext('nextStep(data)',context);assert.match(node.textContent,/第三层图片分析/);
+ context.data={active:true,console_busy:true,category_key:null,workers:[],generation:{stage:'complete'},stage3_control:{running:false}};
+ vm.runInContext('nextStep(data)',context);assert.match(node.textContent,/正在准备规则与 Amazon 关键词/);assert.doesNotMatch(node.textContent,/正在采集并自动/);
 });

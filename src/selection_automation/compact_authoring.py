@@ -102,6 +102,57 @@ def normalize(value,name):
     return result
 
 
+def apply_policy_repair(config, reply):
+    """Accept supported response envelopes; preserve authored facts and collection settings."""
+    if not isinstance(reply,dict):raise ValueError('同款边界修正须为JSON对象')
+    for _ in range(3):
+        if any(key in reply for key in ('identity_policy','features','stage3')):break
+        wrapped=[reply[key] for key in ('repair','result','data','config','configuration','rules','category_rules')
+                 if isinstance(reply.get(key),dict)]
+        if len(wrapped)!=1:break
+        reply=wrapped[0]
+    stage1=reply.get('stage1') if isinstance(reply.get('stage1'),dict) else {}
+    stage3=reply.get('stage3') if isinstance(reply.get('stage3'),dict) else {}
+    def choose(values,default=None):
+        if values and any(value!=values[0] for value in values[1:]):
+            raise ValueError('同款边界修正存在冲突的重复字段')
+        return deepcopy(values[0] if values else default)
+    attributes=choose([node[key] for node,key in ((reply,'attributes'),(reply,'stage1_attributes'),(stage1,'attributes'))
+                       if key in node],config['stage1']['attributes'])
+    policy=choose([node['identity_policy'] for node in (reply,stage3) if 'identity_policy' in node])
+    if policy is None and 'features' not in reply:
+        raise ValueError('同款边界修正缺少identity_policy或features')
+    if policy is not None and not isinstance(policy,dict):raise ValueError('同款边界修正identity_policy须为对象')
+    original=config['stage3'].get('identity_policy') or {}
+    features=choose([node['features'] for node in (reply,policy or {}) if 'features' in node])
+    if not isinstance(features,list) or not features or not isinstance(attributes,list):
+        raise ValueError('同款边界修正缺少有效特征或文字属性')
+    from .identity_policy import VERSION
+    if policy and policy.get('version',VERSION)!=VERSION:
+        raise ValueError('同款边界修正版本无效')
+    scope=choose([node['product_scope'] for node in (reply,policy or {}) if 'product_scope' in node],original.get('product_scope'))
+    result=deepcopy(config)
+    result['stage1']['attributes']=attributes
+    if config.get('rule_authoring_format')==FORMAT:
+        # These keys/weights are mechanical output of expand, never model facts.
+        semantics={'format':FORMAT,'category_key':config['category_key'],'product_scope':scope,
+            'queries':config['temu']['base_queries'],'aliases':config['temu']['include_terms'],
+            'exclude_terms':config['temu']['severe_exclude_terms'],'keyword_features':config['temu']['keyword_features'],
+            'attributes':attributes,'threshold':config['stage2']['candidate_threshold'],
+            'threshold_reason_zh':config['stage2']['threshold_reason_zh'],'features':features}
+        rebuilt=expand(semantics,config['category_name_zh'],config['amazon']['bestsellers_url'],
+                       config['amazon']['target_count'],config['temu']['max_products_per_keyword'])
+        for key in ('modules','module_labels','identity_policy'):
+            result['stage3'][key]=rebuilt['stage3'][key]
+    else:
+        existing={feature.get('id'):feature for feature in original.get('features',[]) if isinstance(feature,dict)}
+        for feature in features:
+            if isinstance(feature,dict) and 'modules' not in feature and feature.get('id') in existing:
+                feature['modules']=deepcopy(existing[feature['id']].get('modules',[]))
+        result['stage3']['identity_policy']={'version':VERSION,'product_scope':scope,'features':features}
+    return result
+
+
 def add_summary(config):
     if config.get('rule_authoring_format') != FORMAT:
         return config

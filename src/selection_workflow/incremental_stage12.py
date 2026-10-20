@@ -301,7 +301,9 @@ class TorchResNet50Vectorizer:
             return
         import torch
         from torchvision.models import ResNet50_Weights, resnet50
-        requested_threads = int(os.environ.get("STAGE12_TORCH_THREADS") or os.cpu_count() or 1)
+        # Leave CPU capacity for the collection browsers, local drivers and UI.
+        # An explicit deployment setting still takes precedence.
+        requested_threads = int(os.environ.get("STAGE12_TORCH_THREADS") or min(4, max(1, (os.cpu_count() or 2) // 2)))
         torch.set_num_threads(max(1, requested_threads))
         weights = ResNet50_Weights.IMAGENET1K_V2
         self._preprocess = weights.transforms()
@@ -317,15 +319,20 @@ class TorchResNet50Vectorizer:
             return []
         self._load()
         import torch
-        tensors = []
-        for image_path in image_paths:
-            with Image.open(image_path) as image:
-                tensors.extend(self._preprocess(view) for view in image_views(image))
         values = []
+        tensors = []
         with torch.inference_mode():
-            # Bound activation memory even though each item has three views.
-            for offset in range(0,len(tensors),32):
-                values.append(self._model(torch.stack(tensors[offset:offset+32])).cpu().numpy().astype(np.float32))
+            # Stream the three views instead of retaining a whole image batch.
+            # Eight views also bound ResNet activation memory while browsers run.
+            for image_path in image_paths:
+                with Image.open(image_path) as image:
+                    for view in image_views(image):
+                        tensors.append(self._preprocess(view))
+                        if len(tensors) == 8:
+                            values.append(self._model(torch.stack(tensors)).cpu().numpy().astype(np.float32))
+                            tensors.clear()
+            if tensors:
+                values.append(self._model(torch.stack(tensors)).cpu().numpy().astype(np.float32))
         joined = np.concatenate(values).reshape(len(image_paths),-1)
         return [row for row in joined]
 
@@ -385,7 +392,9 @@ class IncrementalStage12:
         self.image_download_workers = min(MAX_IMAGE_CONNECTIONS,max(1, int(image_download_workers)))
         self._image_transport = ImageTransport(self.image_download_timeout)
         self.vector_batch_size = max(1, int(vector_batch_size))
-        self.text_gate_workers = max(1, int(text_gate_workers))
+        # Older saved configs requested one process for every logical CPU.
+        # Keep those configs usable without recreating that memory pressure.
+        self.text_gate_workers = min(4, max(1, int(text_gate_workers)))
         self.text_gate_name = str(text_gate_name)
         self.rule_version = str(rule_version)
         # Local processing versions are separate from the identity carried by
@@ -1072,6 +1081,15 @@ class IncrementalStage12:
             # during this batch takes effect only after explicit reopen.
             gate_inputs = [(*values, self._declarative_snapshot) for values in gate_inputs]
         gates = self._evaluate_text_gates(gate_inputs)
+        # Stage 1 is already complete. Commit its actual decisions before slow
+        # downloads/inference, so independent dashboard readers can report them.
+        # Pending image work remains retryable if the process is interrupted.
+        with self.con:
+            self.con.executemany("""UPDATE pairs SET stage1_status=?,stage1_json=?
+                WHERE path_key=? AND asin=? AND goods_id=?""", [
+                (gate["stage1_status"], stable_json(gate), pair["path_key"], pair["asin"], pair["goods_id"])
+                for (pair, _, _, _, _), gate in zip(base_contexts, gates)
+            ])
         text_seconds = time.monotonic() - phase_started
         phase_started = time.monotonic()
         contexts = []
@@ -1170,8 +1188,8 @@ class IncrementalStage12:
         dimension_groups: dict[int, list[tuple[Any, ...]]] = {}
         for item in ready:
             dimension_groups.setdefault(item[6].size, []).append(item)
-        chunks = (group[offset:offset + 4096] for group in dimension_groups.values()
-                  for offset in range(0, len(group), 4096))
+        chunks = (group[offset:offset + 256] for group in dimension_groups.values()
+                  for offset in range(0, len(group), 256))
         for chunk in chunks:
             left = np.stack([item[6] for item in chunk])
             right = np.stack([item[10] for item in chunk])

@@ -306,10 +306,12 @@ class Console:
     def ensure_draft_visual_criteria(self):
         """Upgrade only an unused draft; frozen runs and their choices stay intact."""
         from selection_automation.visual_criteria import VERSION
+        from selection_automation.match_criteria import FIELD_MERGE_VERSION
         if (not self.draft or self.draft_used or self.busy or self.pending_scope or not self.draft_key
                 or not self.draft_amazon_path or not (self.root/'scripts/extract_match_criteria.py').is_file()):return
         catalog=self.draft.get('match_criteria') or {}
-        if catalog.get('visual_version')==VERSION and catalog.get('state')=='ready':return
+        if (catalog.get('visual_version')==VERSION and catalog.get('field_merge_version')==FIELD_MERGE_VERSION
+                and catalog.get('state')=='ready'):return
         self.busy=True;self.phase='正在逐件核对全部 Amazon 商品主图并合并图片条件'
         threading.Thread(target=self._refresh_visual_criteria,daemon=True).start()
 

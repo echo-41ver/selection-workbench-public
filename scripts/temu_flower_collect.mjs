@@ -104,10 +104,10 @@ const wd=createBrowserControlClient({base:WD,session:sid,onTimeout:async error=>
     stop_reason:'BROWSER_COMMAND_TIMEOUT',updated_at:now(),
     scroll_collection_started:scrollingCollectionStarted,
     collection_phase:scrollingCollectionStarted?'SCROLLING':'BEFORE_SCROLL',
-    manual_action_required:true,automatic_retry:false,automatic_recovery_eligible:false,
+    manual_action_required:false,automatic_retry:true,automatic_recovery_eligible:true,automatic_resume_pending:true,
     resume_requires_session_rotation:false,command_execution_unknown:true,
     command_method:error.method,command_route:error.route,command_label:error.commandLabel||null,finished_at:now(),
-    message:'浏览器控制超时，连接保持；恢复后可继续'};
+    message:'浏览器控制超时，保留断点并自动修复连接后继续'};
   await atomicSnapshot(PROGRESS,JSON.stringify({...previous,...details},null,2));
   await fs.appendFile(EVENTS,JSON.stringify({at:now(),type:details.status,...details})+'\n','utf8');
   // Remove this collector's owned intercepts and release paused requests before
@@ -680,11 +680,15 @@ async function scan({commit=!(['sales','recent'].includes(SORT_REQUEST) && initi
     ...unclassifiedProducts.keys(),
     ...[...products.entries()].filter(([, row]) => row.card_metrics_version!=='explicit-card-metrics-v1' || typeof row.is_sponsored !== 'boolean' || (!row.main_image_url && !row.thumbnail_url && !(Array.isArray(row.all_image_urls) && row.all_image_urls.length))).map(([id]) => id),
   ];
-  const data = await execute(extractScript, [{ observedAt: now(), knownIds: [...products.keys()], repairIds }], initialProductsPreparing?'initial_scan':'collect_scan');
+  // Read cards and their UI filters from the same document in one driver call.
+  // Repeated round trips used to reread both controls after every full scan.
+  const scanScript=commit?`const data=(function(){${extractScript}}).apply(null,arguments);
+    data.collectionControls={warehouse:(${inspectLocalWarehouse.toString()})(),sort:(${inspectSalesSort.toString()})(${JSON.stringify(SORT_REQUEST)})};return data;`:extractScript;
+  const data = await execute(scanScript, [{ observedAt: now(), knownIds: [...products.keys()], repairIds }], initialProductsPreparing?'initial_scan':'collect_scan');
   // A login/verification/network page has no sort controls. Return its actual
   // state to the recovery loop before checking sorting or ingesting any rows.
   if (!commit || classify(data)) return data;
-  if (!confirmsLocalWarehouse(await readLocalWarehouse().catch(()=>({})),QUERY,localWarehouseFilter)) {
+  if (!confirmsLocalWarehouse(data.collectionControls?.warehouse??await readLocalWarehouse().catch(()=>({})),QUERY,localWarehouseFilter)) {
     const latest=await bootstrapPageState();
     if(classify(latest))return latest;
     await prepareLocalWarehouseFilter();
@@ -692,7 +696,7 @@ async function scan({commit=!(['sales','recent'].includes(SORT_REQUEST) && initi
     return scan({commit:false});
   }
   if (['sales','recent'].includes(SORT_REQUEST)) {
-    const state=await readSalesSort().catch(() => ({}));
+    const state=data.collectionControls?.sort??await readSalesSort().catch(() => ({}));
     const confirmed=salesSortEstablished && confirmsSalesSort(state, QUERY);
     salesSort={...salesSort, state:confirmed ? 'UI_CONFIRMED' : 'UNCONFIRMED',
       label:confirmed ? state.selected_label : null, confirmed_by:confirmed ? state.selected_by : null,
@@ -2088,6 +2092,7 @@ while (!finalStatus && rawCounter.count < MAX_PRODUCTS) {
   const roundNewUnclassifiedCount = newRelevance.unknown;
   consecutiveNoNewRounds = 0;
   await appendEvent('ROUND_COMPLETE', {
+    scan_mode:'atomic-card-controls-v1',
     round, click: clicks, new_goods: roundNewCount, post_click_new_goods: postClickNewCount,
     new_relevant_goods: roundNewRelevantCount,
     new_unclassified_goods: roundNewUnclassifiedCount,

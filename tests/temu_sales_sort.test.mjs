@@ -349,7 +349,7 @@ test('login and verification are not overwritten by missing sorting controls dur
     let sortReads=0;
     const context=vm.createContext({pendingRecovery:null,samplingState:()=>({reduced:false}),SORT_REQUEST:'recent',QUERY:'power drill',initialProductsPreparing:false,
       products:new Map([['saved',{main_image_url:'https://fixture/image.jpg'}]]),pendingProducts:new Map(),unclassifiedProducts:new Map(),
-      localWarehouseFilter:{},readLocalWarehouse:async()=>({}),confirmsLocalWarehouse:()=>true,now:()=>'',extractScript:'fixture',salesSortEstablished:true,salesSort:{},classify:classifyPageState,
+      localWarehouseFilter:{},readLocalWarehouse:async()=>({}),confirmsLocalWarehouse:()=>true,inspectLocalWarehouse:()=>({}),inspectSalesSort:()=>({}),now:()=>'',extractScript:'fixture',salesSortEstablished:true,salesSort:{},classify:classifyPageState,
       execute:async()=>navigationRace?{url,rows:[]}:page,
       readSalesSort:async()=>{sortReads++;return {};},confirmsSalesSort,
       bootstrapPageState:async()=>page,
