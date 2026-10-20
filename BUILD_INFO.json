@@ -1,6 +1,7 @@
 {
-  "commit": "6146f0ce4727d0e79ea3ab97ca34dfcdb05e9e4c",
-  "built_at_utc": "2026-10-20T08:40:27.391470+00:00",
+  "commit": "19757b575e8387706dca7583de326fcee82162e7",
   "channel": "public",
-  "contains_company_credentials": false
+  "contains_company_credentials": false,
+  "distribution_kind": "source-with-incremental-update",
+  "full_deployment_base": "6146f0ce4727d0e79ea3ab97ca34dfcdb05e9e4c"
 }
