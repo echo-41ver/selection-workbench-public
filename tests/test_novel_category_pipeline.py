@@ -30,7 +30,7 @@ def novel_category():
     # Written from scratch: deliberately no existing category/template import.
     return {
         'category_key': 'fixture_mechanical_keyboard', 'category_name_zh': '测试机械键盘',
-        'amazon': {'bestsellers_url': 'https://www.amazon.com/zgbs/pc/fixture', 'target_count': 1},
+        'amazon': {'bestsellers_url': 'https://www.amazon.com/zgbs/pc/900000000002', 'target_count': 1},
         'temu': {'merge_key': 'goods_id', 'max_products_per_keyword': 3},
         'stage1': {'text_gate': 'declarative', 'rule_version': 'keyboard-text-fixture-1', 'attributes': [
             {'name': '按键布局协议', 'hard_conflict': True,

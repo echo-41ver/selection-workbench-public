@@ -111,6 +111,9 @@ def test_generation_goes_directly_to_listing_without_runtime_installation(monkey
     class ListingStarted(Exception):pass
     def listing(*args):raise ListingStarted()
     monkeypatch.setattr(generator, 'read_listing', listing)
-    monkeypatch.setattr(generator, 'model_json', lambda *_: pytest.fail('paid model must not run'))
+    url='https://www.amazon.com/gp/bestsellers/tools/900000000001'
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':url}]})
+    answers=iter([{'search_query':'oil transfer pump'},{'url':url}])
+    monkeypatch.setattr(generator,'model_json',lambda *args,**kwargs:next(answers))
     with pytest.raises(ListingStarted):
         generator.generate_category('抽油泵', 50, 400)

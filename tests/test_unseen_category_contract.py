@@ -17,7 +17,7 @@ from rule_editor import edit_rules,draft_view
 def test_unseen_category_one_contract_across_edit_text_vision_and_cache(tmp_path,key,name,left,right):
     # Mechanism fixtures from the generic authoring contract, not existing category templates.
     c=deepcopy(category_contract()['template']);c.update(category_key=key,category_name_zh=name)
-    c['amazon'].update(bestsellers_url='https://www.amazon.com/zgbs/home-garden/fixture',target_count=1)
+    c['amazon'].update(bestsellers_url='https://www.amazon.com/zgbs/home-garden/900000000003',target_count=1)
     c['temu'].update(base_queries=['fixture product'],max_products_per_keyword=3)
     c['stage1'].update(rule_version='fixture-v1',attributes=[
       {'name':'construction','hard_conflict':True,'values':{'one':[left],'two':[right]}},
