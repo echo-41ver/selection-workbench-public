@@ -2,7 +2,7 @@
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlsplit
+from .amazon_listing_url import listing_identity
 
 
 def collection_only(category):
@@ -16,8 +16,7 @@ def validate_collection(category):
     if not name or re.search(r'[<>:"/\\|?*\x00-\x1f]', name) or name in ('.', '..'):
         raise ValueError('invalid category display name')
     amazon, temu = category['amazon'], category['temu']
-    url = urlsplit(amazon.get('bestsellers_url', ''))
-    if url.scheme != 'https' or url.netloc != 'www.amazon.com' or '/zgbs/' not in url.path:
+    if not listing_identity(amazon.get('bestsellers_url')):
         raise ValueError('official Amazon US Best Sellers URL required')
     if type(amazon.get('target_count')) is not int or not 1 <= amazon['target_count'] <= 100:
         raise ValueError('Amazon target must be 1..100')

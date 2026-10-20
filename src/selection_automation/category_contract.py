@@ -36,7 +36,7 @@ def category_contract() -> dict:
             "visual_decision": "固定visible_core_binary_v1；最终看图结论只有同款/不同款。主体款式和核心结构对应即同款；颜色标识及无关未展示部位不阻断。主图不能体现核心对应时按不同款筛选并说明依据，图片读取或模型输出失败须自动重试，不能冒充商品结论。",
             "category_key": "必填；[a-z][a-z0-9_]{0,63}，新品类独立标识",
             "category_name_zh": "必填；真实品类显示名，不含Windows文件名非法字符",
-            "amazon.bestsellers_url": "必填；Agent实际核实的https://www.amazon.com/.../zgbs/... URL",
+            "amazon.bestsellers_url": "必填；实际核实的 Amazon 美国站 /zgbs/ 或 /gp/bestsellers/ 榜单 URL，保留真实完整路径",
             "amazon.target_count": "必填用户数量，整数1..100",
             "temu.base_queries": "必填非空英文代表关键词列表；首词用于后续关键词计划",
             "temu.keyword_features": "明确填写本品类可观察的英文结构、功能、外观或包装细化短语；不能把模板空数组当作已完成。包装短语不得当作商品本体属性，品牌和营销宣传不得当作身份特征。只在实际标题命中时生成有来源证据的查询；若确实无法支持细化词，允许空数组并明确提示缺口，后续使用通用标题数量等证据，不伪造精准覆盖。",

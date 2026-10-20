@@ -27,6 +27,7 @@ from selection_automation.identity_policy import compile_policy
 from selection_automation.identity_profiles import reviewed_profile
 from selection_automation.merge_temu_snapshots import atomic_write
 from selection_automation.model_transport import open_model_url
+from selection_automation.amazon_listing_url import listing_identity
 
 
 class CategoryGenerationError(RuntimeError):
@@ -171,26 +172,6 @@ def model_json(prompt: str, *, max_tokens: int = 8000, retry_truncated: bool = T
         raise CategoryGenerationError('连接模型服务失败：'+detail,'MODEL_NETWORK_ERROR') from None
     except (ValueError, KeyError, IndexError, TypeError):
         raise CategoryGenerationError('品类模型返回无效 JSON 或缺少结构字段；未创建任务', 'MODEL_INVALID_JSON') from None
-
-
-def listing_identity(url):
-    """Canonical category identity, ignoring Amazon's navigation tracking."""
-    if not isinstance(url, str) or any(ord(c) < 32 for c in url):
-        return None
-    try:
-        u = urlparse(url)
-        if (u.scheme != 'https' or u.hostname not in ('www.amazon.com', 'amazon.com')
-                or u.username or u.password or u.port not in (None, 443)):
-            return None
-        match = re.search(r'/(?:zgbs|gp/bestsellers)(?=/|$)(.*)', u.path)
-        if not match:
-            return None
-        path = match[1].split('/ref=')[0].strip('/')
-        if path and not re.fullmatch(r'[A-Za-z0-9_-]+(?:/\d+)?', path):
-            return None
-        return 'https://www.amazon.com/zgbs' + ('/' + path if path else '')
-    except ValueError:
-        return None
 
 
 def valid_url(url):

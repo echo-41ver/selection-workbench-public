@@ -114,11 +114,9 @@ def validate_rules(category: dict) -> None:
 
 def validate_execution_inputs(category: dict) -> None:
     """Require collection inputs only for freezing/running, never rule editing."""
-    from urllib.parse import urlparse
+    from .amazon_listing_url import listing_identity
     raw_url=category['amazon'].get('bestsellers_url')
-    if not isinstance(raw_url,str): raise ValueError('a real Amazon US Best Sellers URL is required')
-    url=urlparse(raw_url)
-    if url.scheme!='https' or url.netloc!='www.amazon.com' or '/zgbs/' not in url.path:
+    if not listing_identity(raw_url):
         raise ValueError('a real Amazon US Best Sellers URL is required')
     count=category['amazon'].get('target_count')
     if type(count) is not int or not 1<=count<=100:

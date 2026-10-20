@@ -430,3 +430,15 @@ def test_manual_url_preserves_full_observed_path(monkeypatch):
     monkeypatch.setattr(generator,'model_json',lambda *args,**kw:fixture_config())
     generator.generate_category('遥控器',100,500,bestsellers_url=url)
     assert reads==[url]
+
+
+@pytest.mark.parametrize('url',['https://www.amazon.com/zgbs/office-products/705323011',
+    'https://www.amazon.com/gp/bestsellers/office-products/705323011/ref=pd_zg_hrsr_office-products',
+    'https://www.amazon.com/Best-Sellers-Mouse-Pads/zgbs/office-products/705323011'])
+def test_verified_rank_url_passes_both_matching_and_collection_contracts(url):
+    from selection_automation.rules import validate
+    from selection_automation.collection_contract import validate_collection
+    category=generator.compile_generated_policy(fixture_config());category['amazon'].update(bestsellers_url=url,target_count=6)
+    category['temu']['max_products_per_keyword']=400
+    validate(category)
+    validate_collection(category)

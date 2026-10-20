@@ -1,14 +1,17 @@
 import json
 import os
 import subprocess
+import pytest
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[1]
 
 
-def test_real_collector_listing_only_never_opens_details(tmp_path):
+@pytest.mark.parametrize('url',['https://www.amazon.com/zgbs/hi/552794',
+                              'https://www.amazon.com/gp/bestsellers/hi/552794/ref=pd_zg_hrsr_hi'])
+def test_real_collector_listing_only_never_opens_details(tmp_path,url):
     cat={'category_key':'listing_fixture','amazon':{'mode':'BEST_SELLERS_FRONTEND','target_count':1,
-         'bestsellers_url':'https://www.amazon.com/zgbs/hi/552794'}}
+         'bestsellers_url':url}}
     config=tmp_path/'category.json';config.write_text(json.dumps(cat))
     (tmp_path/'page1.html').write_text('<div class="zg-grid-general-faceout"><span class="zg-bdg-ctr">#1</span>'
         '<a href="/dp/B000000001">Magnetic power drill</a>'

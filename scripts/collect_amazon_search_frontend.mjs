@@ -37,7 +37,9 @@ const saveCheckpoint = serializedJsonWriter(checkpointPath);
 const installedEdge = process.platform==='win32' ? [process.env['ProgramFiles(x86)'],process.env.ProgramFiles]
   .filter(Boolean).map(directory=>path.join(directory,'Microsoft/Edge/Application/msedge.exe')).find(existsSync) : null;
 const edge = arg('--browser', process.env.AMAZON_BROWSER_PATH || installedEdge || null);
-if (!searchUrl.startsWith('https://www.amazon.com/')) throw new Error('Amazon US HTTPS search URL is required');
+const sourceAddress=new URL(searchUrl);
+if (sourceAddress.protocol!=='https:' || !['www.amazon.com','amazon.com'].includes(sourceAddress.hostname)
+    || sourceAddress.username || sourceAddress.password || (sourceAddress.port && sourceAddress.port!=='443')) throw new Error('Amazon US HTTPS search URL is required');
 if (!(targetCount >= 1 && targetCount <= 100)) throw new Error('--count must be between 1 and 100');
 
 const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
@@ -243,8 +245,8 @@ const browser = recoverableAmazonBrowser(
     ...(process.env.AMAZON_BROWSER_PROXY?{proxy:{server:process.env.AMAZON_BROWSER_PROXY}}:{})}),
   {viewport:{width:1440,height:1000},locale:'en-US'}, Infinity);
 try {
-  const bestSellersMode = /\/zgbs\//i.test(new URL(searchUrl).pathname);
-  if (config.amazon.mode === 'BEST_SELLERS_FRONTEND' && !bestSellersMode) throw new Error('Best Sellers requires a verified /zgbs/ URL; search order cannot substitute ranks');
+  const bestSellersMode = /\/(?:zgbs|gp\/bestsellers)\//i.test(new URL(searchUrl).pathname);
+  if (config.amazon.mode === 'BEST_SELLERS_FRONTEND' && !bestSellersMode) throw new Error('Best Sellers requires a verified ranking URL; search order cannot substitute ranks');
   let cards=resumeRecords;
   if(!cards && bestSellersMode) {
     const rankingPath=`${outputPath}.listing-checkpoint.json`;

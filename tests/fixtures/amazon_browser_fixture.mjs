@@ -13,7 +13,7 @@ chromium.launch=async options=>{
     await context.route('**/*',async route=>{
       const url=new URL(route.request().url());
       await fs.appendFile(`${directory}/requests.jsonl`,JSON.stringify({url:url.href})+'\n');
-      if(!url.pathname.includes('/zgbs/')) return route.fulfill({status:500,body:'Unexpected detail request during listing preparation'});
+      if(!/\/(?:zgbs|gp\/bestsellers)\//.test(url.pathname)) return route.fulfill({status:500,body:'Unexpected detail request during listing preparation'});
       const page=url.searchParams.get('pg')==='2'?2:1;
       if(page===2 && process.env.AMAZON_FIXTURE_FAIL_PAGE2==='1')
         return route.fulfill({status:503,contentType:'text/html',body:'Temporary failure'});
