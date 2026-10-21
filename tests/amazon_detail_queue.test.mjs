@@ -1,6 +1,6 @@
 import test from 'node:test';
 import {openAmazonDetail} from '../scripts/amazon_browser_recovery.mjs';
-import {inspectAmazonPage} from '../scripts/amazon_page_state.mjs';
+import {inspectAmazonPage,sanitizeAmazonDiagnostic} from '../scripts/amazon_page_state.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -131,7 +131,7 @@ test('real collector classifies the verification page before waiting for a title
     const page={goto:async()=>({status:()=>200}),url:()=>'',waitForTimeout:async()=>{},close:async()=>{closed++;},
       evaluate:async()=>({captcha,url:'https://www.amazon.com/dp/A',page_title:'Amazon.com',text:captcha?'Continue shopping':'loading'}),
       locator:()=>({first:()=>({waitFor:async()=>{waits++;throw new Error('Timeout 15000ms exceeded');}})})};
-    const context=vm.createContext({amazonDetailBlock,openAmazonDetail,inspectAmazonPage,context:{newPage:async()=>page},record:card('A',1),
+    const context=vm.createContext({amazonDetailBlock,openAmazonDetail,inspectAmazonPage,sanitizeAmazonDiagnostic,context:{newPage:async()=>page},record:card('A',1),
       clean:value=>String(value).replace(/\s+/g,' ').trim()});
     vm.runInContext(facts,context);
     const result=await vm.runInContext('detailFacts(context,record,9)',context);
@@ -139,6 +139,44 @@ test('real collector classifies the verification page before waiting for a title
     assert.equal(result.detail_error.retryable,!captcha);
     assert.equal(waits,captcha?0:2);assert.equal(closed,1);assert.equal(result.detail_image_attempts,9);
   }
+});
+
+test('unresolved continuation is surfaced once and does not consume network retry waves',async()=>{
+  const requests=[];
+  const blocked=amazonDetailBlock({continuation_required:true,continue_shopping:false,http_status:200});
+  assert.equal(blocked.code,'AMAZON_CONTINUATION_REQUIRED');assert.equal(blocked.retryable,false);
+  const result=await runAmazonDetailQueue({records:[card('A',1),card('B',2)],onCheckpoint:noCheckpoint,
+    fetchDetail:async row=>{requests.push(row.asin);return row.asin==='A'?{...timeout(row),detail_error:blocked}:success(row);}});
+  assert.deepEqual(requests,['A','B']);assert.equal(result.queue.status,'MANUAL_ACTION_REQUIRED');
+  assert.deepEqual(result.queue.manual_action_asins,['A']);assert.equal(result.queue.completed_count,1);
+});
+
+test('collector preserves a failed visible continuation reason instead of relabelling it as retryable',async()=>{
+  const source=await fs.readFile(new URL('../scripts/collect_amazon_search_frontend.mjs',import.meta.url),'utf8');
+  const facts=source.slice(source.indexOf('async function detailFacts('),source.indexOf('const browser ='));
+  let closed=0,clicks=0;
+  const page={goto:async()=>({status:()=>200}),close:async()=>{closed++;},
+    evaluate:async()=>({url:'https://www.amazon.com/checkpoint/continue?token=fixture-sensitive',
+      captcha:false,continue_shopping:true,continuation_required:true}),
+    waitForNavigation:async()=>({status:()=>200}),getByRole:()=>({click:async()=>{clicks++;}})};
+  const context=vm.createContext({amazonDetailBlock,openAmazonDetail,inspectAmazonPage,sanitizeAmazonDiagnostic,
+    context:{newPage:async()=>page},record:card('A',1),clean:value=>String(value).replace(/\s+/g,' ').trim()});
+  vm.runInContext(facts,context);
+  const result=await vm.runInContext('detailFacts(context,record,8)',context);
+  assert.equal(result.detail_error.code,'AMAZON_CONTINUATION_REQUIRED');assert.equal(result.detail_error.retryable,false);
+  assert.equal(result.detail_image_attempts,8);assert.equal(closed,1);assert.equal(clicks,1);
+  assert.doesNotMatch(JSON.stringify(result),/fixture-sensitive/);
+});
+
+test('saved checkpoint errors strip navigation tokens while retaining item history',async()=>{
+  const prior={...card('A',1),detail_image_attempts:7,detail_error:{code:'AMAZON_CONTINUATION_REQUIRED',retryable:false,
+    url:'https://www.amazon.com/checkpoint/continue?token=fixture-sensitive#private',
+    message:'Navigation to https://www.amazon.com/checkpoint/continue?token=fixture-sensitive failed'}};
+  const result=await runAmazonDetailQueue({records:[prior],onCheckpoint:noCheckpoint,fetchDetail:()=>assert.fail('manual gate must remain paused')});
+  const serialized=JSON.stringify(result);
+  assert.doesNotMatch(serialized,/fixture-sensitive|#private/);
+  assert.equal(result.records[0].detail_image_attempts,7);
+  assert.equal(result.records[0].detail_error.url,'https://www.amazon.com/checkpoint/continue');
 });
 
 test('old misclassified continue-shopping entry resumes once without resetting attempts',async()=>{

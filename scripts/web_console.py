@@ -24,10 +24,44 @@ from selection_automation.frontend_market import build_frontend_market
 
 READONLY_PROGRESS_TIMEOUT_SECONDS=1800
 
+def draft_form_scope(category,amazon_payload=None):
+    """Expose only this saved category's validated non-secret form inputs."""
+    if not isinstance(category,dict):return None
+    amazon=category.get('amazon') or {};temu=category.get('temu') or {}
+    if not isinstance(amazon,dict) or not isinstance(temu,dict):return None
+    name=category.get('category_name_zh');url=amazon.get('bestsellers_url')
+    try:workers=category_worker_count(category)
+    except ValueError:return None
+    values=[amazon.get('target_count'),temu.get('max_products_per_keyword'),workers]
+    if (not isinstance(name,str) or not name.strip() or not isinstance(url,str) or
+            not all(type(value) is int and 1<=value<=limit for value,limit in zip(values,(100,100000,32)))):
+        return None
+    scope={'category':name.strip(),'amazon_count':values[0],'per_keyword':values[1],
+           'worker_count':values[2],'bestsellers_url':url,'commercial':{}}
+    commercial=category.get('commercial') or {}
+    limit=commercial.get('same_limit') if isinstance(commercial,dict) else None
+    if type(limit) is int and 1<=limit<=10000:scope['commercial']['same_limit']=limit
+    payload=amazon_payload if isinstance(amazon_payload,dict) else {}
+    route=payload.get('amazon_browser_route') or {}
+    rows=payload.get('records');rows=rows if isinstance(rows,list) else []
+    records_valid=(len(rows)==values[0] and all(isinstance(row,dict) and isinstance(row.get('asin'),str) and row['asin'] for row in rows)
+                   and all(type(row.get('rank')) is int for row in rows)
+                   and len({row['asin'] for row in rows})==values[0]
+                   and sorted(row.get('rank',0) for row in rows)==list(range(1,values[0]+1)))
+    if (payload.get('schema_version')=='amazon-bestsellers-frontend-v1' and payload.get('status')=='COMPLETE'
+            and payload.get('details_complete') is True and records_valid
+            and payload.get('category_key')==category.get('category_key') and category.get('category_key')
+            and payload.get('source_url')==url and payload.get('record_count')==values[0]
+            and payload.get('target_count',values[0])==values[0]
+            and isinstance(route,dict) and route.get('mode') in ('AUTO','DIRECT')):
+        scope['amazon_route_mode']=route['mode']
+    return scope
+
+
 def draft_view(category,draft_id,keyword_plan=None):
     view=_draft_view(category,draft_id)
     view['commercial']['same_operator']='lt'
-    return {**view, 'worker_count':category_worker_count(category),
+    return {**view, 'worker_count':category_worker_count(category), 'form_scope':draft_form_scope(category),
             "plain_text":category.get("plain_rules_summary",""), "plain_stage1":category.get("plain_stage1",""), "plain_stage3":category.get("plain_stage3",""),
             "change_summary":category.get("plain_rules_changes",[]),
             'match_criteria':category.get('match_criteria'),
@@ -271,6 +305,7 @@ class Console:
         self.root=root; self.lock=threading.Lock(); self.busy=False
         self.phase='尚未启动'; self.key=selection.read(root/'runtime/web-console/state.json',{}).get('category_key'); self.cancel=threading.Event(); self.progress_file=None; self.draft=None; self.draft_path=None; self.draft_key=None; self.draft_used=False; self.draft_amazon_path=None; self.draft_plan_path=None
         self.pending_scope=None; self.generation_error=None
+        self.preparation_path=None; self.preparation_stage=None
         self.pending_key=None
         self.workspace_stop_pending=False
         self.workspace_stop_started=None
@@ -312,6 +347,7 @@ class Console:
             for field,attribute in [('amazon_path','draft_amazon_path'),('plan_path','draft_plan_path')]:
                 path=Path(saved.get(field,''))
                 if path.is_file() and path.resolve().is_relative_to((root/'runtime/web-console').resolve()):setattr(self,attribute,path)
+            self.refresh_draft_form_scope()
             self.draft_key=self.saved_credential() if self.draft_amazon_path and self.draft_plan_path and self.draft_provider==settings() else None
             self.phase=(('草稿已恢复，可继续应用或运行' if self.draft_key else '草稿已恢复，请填写API key后应用或运行') if self.draft_amazon_path and self.draft_plan_path
                         else '旧草稿缺少 Amazon 商品与关键词，请重新点击生成规则与关键词')
@@ -335,7 +371,101 @@ class Console:
             elif self.phase=='连接品类模型超时或网络失败；未创建任务':
                 self.phase='上次完整规则请求中断；已改为流式接收，请重新填写 Key 后沿用已定位榜单重试'
             self.generation_error={'code':pending.get('code') or 'GENERATION_INTERRUPTED','message':self.phase}
+            try:recovered=self.recover_preparation(self.pending_scope,pending.get('preparation'),legacy=True)
+            except ConsoleError as error:
+                recovered=None;self.phase=error.message
+                self.generation_error={'code':error.code,'message':error.message}
+            if recovered:
+                self.preparation_path,self.preparation_stage=recovered
+                self.progress_file=self.preparation_path.with_suffix('.progress.json')
+                self.phase='准备任务可继续：沿用已生成规则与 Amazon 断点，不重复生成规则'
+                self.generation_error={'code':'PREPARATION_INTERRUPTED','message':self.phase}
         self.ensure_draft_visual_criteria()
+
+    def recover_preparation(self,scope,manifest=None,*,legacy=False):
+        """Reuse only a unique, validated local generation; never invent a draft."""
+        from selection_automation.rules import validate
+        from generate_category import validate_subject_rules,valid_url,CategoryGenerationError
+        from selection_automation.rule_provider import settings
+        from selection_automation.commercial import settings as commercial_settings
+        folder=self.root/'runtime/web-console'
+        explicit=isinstance(manifest,dict) and manifest.get('schema_version')=='web-preparation-v1'
+        name=manifest.get('category_file') if explicit else None
+        if explicit and (not isinstance(name,str) or not re.fullmatch(r'category-[0-9a-f]{32}\.json',name)):
+            return None
+        if explicit and manifest.get('stage') not in ('rules_ready','visual_complete','visual_mismatch'):return None
+        candidates=[folder/name] if explicit else sorted(folder.glob('category-*.json')) if legacy else []
+        found=[]
+        for path in candidates:
+            if not re.fullmatch(r'category-[0-9a-f]{32}\.json',path.name):continue
+            try:
+                if not path.is_file() or path.resolve().parent!=folder.resolve():continue
+                category=selection.read(path,{})
+                validate(category);validate_subject_rules(category)
+                provider=settings(scope.get('api_base_url',''),scope.get('api_model',''))
+                expected_commercial={**commercial_settings(scope.get('commercial')),'same_operator':'lt'}
+                if (category.get('category_name_zh')!=scope.get('category')
+                        or category['amazon']['target_count']!=scope.get('amazon_count')
+                        or category['temu']['max_products_per_keyword']!=scope.get('per_keyword')
+                        or category_worker_count(category)!=scope.get('worker_count')
+                        or category.get('rule_generation_provider')!=provider
+                        or {**commercial_settings(category.get('commercial')),'same_operator':'lt'}!=expected_commercial
+                        or not valid_url(category['amazon'].get('bestsellers_url'))
+                        or (scope.get('bestsellers_url') and category['amazon']['bestsellers_url']!=scope['bestsellers_url'])
+                        or (self.root/'runs'/category['category_key']).exists()
+                        or selection.read(path.with_suffix('.progress.json'),{}).get('stage')!='complete'):
+                    continue
+                if not explicit:
+                    # Legacy consoles lost their pointer on Stop. Require actual
+                    # collector observations from this exact generated category.
+                    amazon=selection.read(path.with_suffix('.amazon.json'),{})
+                    checkpoint=selection.read(path.with_suffix('.amazon.json.checkpoint.json'),{})
+                    source=category['amazon']['bestsellers_url'];count=category['amazon']['target_count']
+                    expected={'source_url':source,'category_key':category['category_key'],'target_count':count,'detail_standard':'LATEST_DETAIL_V2'}
+                    rows=amazon.get('records') or []
+                    checkpoint_rows=checkpoint.get('records') or []
+                    if (amazon.get('schema_version')!='amazon-bestsellers-frontend-v1'
+                            or amazon.get('category_key')!=category['category_key'] or amazon.get('source_url')!=source
+                            or amazon.get('target_count')!=count or amazon.get('listing_complete') is not True or len(rows)!=count
+                            or len({row.get('asin') for row in rows})!=count
+                            or sorted(row.get('rank',0) for row in rows)!=list(range(1,count+1))
+                            or any(not row.get('asin') or not row.get('title') or not row.get('product_url') for row in rows)
+                            or checkpoint.get('schema_version')!='amazon-detail-checkpoint-v1'
+                            or checkpoint.get('scope')!=expected
+                            or len(checkpoint_rows)!=count
+                            or any(not row.get('title') or not row.get('product_url') for row in checkpoint_rows)
+                            or {(row.get('asin'),row.get('rank')) for row in checkpoint_rows}!={(row['asin'],row['rank']) for row in rows}):continue
+                found.append((path,manifest.get('stage','rules_ready') if explicit else 'rules_ready'))
+            except (OSError,ValueError,KeyError,TypeError,AttributeError,CategoryGenerationError):continue
+        if len(found)>1:
+            raise ConsoleError('PREPARATION_RECOVERY_AMBIGUOUS','有多份同范围准备产物，无法安全选择；未重新请求模型，请检查准备记录',409)
+        return found[0] if found else None
+
+    def persist_preparation(self):
+        value={'scope':self.pending_scope}
+        if self.preparation_path:
+            value['preparation']={'schema_version':'web-preparation-v1','category_file':self.preparation_path.name,
+                                  'stage':self.preparation_stage or 'rules_ready'}
+        if self.generation_error:value.update(self.generation_error)
+        selection.save(self.root/'runtime/web-console/pending-generation.json',value)
+
+    @staticmethod
+    def visual_preparation_complete(category,snapshot):
+        """Require the existing review's full coverage of these exact records."""
+        from selection_automation.match_criteria import seed,SCHEMA,FIELD_MERGE_VERSION
+        from selection_automation.visual_criteria import VERSION
+        catalog=category.get('match_criteria') or {};review=catalog.get('image_review') or {}
+        expected=seed(category,snapshot);images=expected['image_sources'];asins=expected['source_asins']
+        return bool(images and len(set(asins))==category['amazon']['target_count']
+            and {row['asin'] for row in images}==set(asins)
+            and catalog.get('schema_version')==SCHEMA and catalog.get('state')=='ready'
+            and catalog.get('visual_version')==VERSION and catalog.get('field_merge_version')==FIELD_MERGE_VERSION
+            and catalog.get('source_fingerprint')==expected['source_fingerprint']
+            and catalog.get('source_asins')==asins and catalog.get('image_sources')==images
+            and review.get('version')==VERSION and review.get('state')=='ready'
+            and review.get('total_images')==len(images) and review.get('completed_images')==len(images)
+            and review.get('total_products')==len(set(asins)) and review.get('reviewed_products')==len(set(asins))
+            and review.get('missing_asins')==[] and review.get('failed_batches')==0)
 
     def ensure_draft_visual_criteria(self):
         """Upgrade only an unused draft; frozen runs and their choices stay intact."""
@@ -511,10 +641,11 @@ class Console:
         self.persist_draft()
 
     def invoke(self, argv, *, env=None, timeout=30, cancellable=False):
+        if (env is not None or cancellable) and self.cancel.is_set():raise ConsoleError('CANCELLED','已停止')
         if argv and argv[0]=='node':
             if any(Path(arg).name=='collect_amazon_search_frontend.mjs' for arg in argv):
                 from selection_automation.browser_transport import amazon_environment
-                env={**(env if env is not None else os.environ),**amazon_environment(self.root)}
+                env={**(env if env is not None else os.environ),**amazon_environment(self.root,mode=(env or {}).get('AMAZON_BROWSER_ROUTE_MODE'))}
         python=self.root/'.venv/Scripts/python.exe'
         provider_runtime=str(python) if argv and Path(argv[0]).name=='collect_market_evidence.py' and python.is_file() else sys.executable
         command=([shutil.which('node') or 'node',*argv[1:]] if argv and argv[0]=='node'
@@ -542,9 +673,12 @@ class Console:
         return key if key and len(key)<=4096 and not any(ord(c)<32 for c in key) else None
 
     def start(self, body):
-        if set(body)-{'worker_count','bestsellers_url','commercial','api_base_url','api_model'}!={'category_name','amazon_count','per_keyword','api_key'}:
+        if set(body)-{'worker_count','bestsellers_url','commercial','api_base_url','api_model','amazon_route_mode'}!={'category_name','amazon_count','per_keyword','api_key'}:
             raise ConsoleError('INVALID_INPUT','请填写品类、Amazon数量、每关键词数量及API key')
         body=dict(body)
+        route=body.get('amazon_route_mode','AUTO')
+        if route not in ('AUTO','DIRECT'):raise ConsoleError('INVALID_INPUT','Amazon 浏览器连接方式无效')
+        body['amazon_route_mode']=route
         from selection_automation.rule_provider import settings, DEFAULT_URL
         try:provider=settings(body.get('api_base_url',''),body.get('api_model',''))
         except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
@@ -582,57 +716,75 @@ class Console:
         for field,maximum in [('amazon_count',100),('per_keyword',100000)]:
             if type(body[field]) is not int or not 1<=body[field]<=maximum:
                 raise ConsoleError('INVALID_INPUT',f'{field}数量无效')
+        scope={'category':name.strip(),'amazon_count':body['amazon_count'],'commercial':body['commercial'],
+               'per_keyword':body['per_keyword'],'worker_count':count,'bestsellers_url':body['bestsellers_url'],
+               'api_base_url':provider['base_url'],'api_model':provider['model'],'amazon_route_mode':route}
         with self.lock:
             if self.busy or self.stage3_busy or self.owner(): raise ConsoleError('ALREADY_RUNNING','已有任务运行，请先停止',409)
+            business_scope=lambda value:{k:v for k,v in (value or {}).items() if k!='amazon_route_mode'}
+            manifest=selection.read(self.root/'runtime/web-console/pending-generation.json',{}).get('preparation') if business_scope(self.pending_scope)==business_scope(scope) else None
+            recovery=self.recover_preparation(scope,manifest,legacy=True)
+            if manifest and not recovery:
+                raise ConsoleError('PREPARATION_RECOVERY_INVALID','准备断点校验失败；原文件保留，未重新请求模型，请检查准备记录',409)
             self.busy=True; self.phase='生成品类配置并核实榜单中'; self.key=None; self.cancel.clear()
+            self.workspace_stop_pending=False;self.workspace_stop_started=None
             self.pending_key=None
             self.plain_application={}
             self.progress_file=None; self.generation_error=None
-            self.pending_scope={'category':name.strip(),'amazon_count':body['amazon_count'],
-                                'commercial':body['commercial'],
-                                'per_keyword':body['per_keyword'],'worker_count':count,'bestsellers_url':body['bestsellers_url'],
-                                'api_base_url':provider['base_url'],'api_model':provider['model']}
-            selection.save(self.root/'runtime/web-console/pending-generation.json',{'scope':self.pending_scope})
+            self.pending_scope=scope
+            self.preparation_path,self.preparation_stage=recovery or (None,None)
+            self.persist_preparation()
             previous_draft=({field:getattr(self,field) for field in
                             ('draft','draft_path','draft_amazon_path','draft_plan_path','draft_provider')}
                             if self.draft and not self.draft_used else None)
             self.draft=None; self.draft_key=None; self.draft_path=None; self.draft_used=False; self.draft_amazon_path=None; self.draft_plan_path=None
             thread=threading.Thread(target=self._start, args=(dict(body),previous_draft),daemon=True)
             thread.start()
-        return {'ok':True,'phase':self.phase}
+        return {'ok':True,'phase':self.phase,'preparation_resumed':bool(recovery)}
 
     def _start(self, body, previous_draft=None):
         from selection_automation.rule_provider import settings, environment
         provider=settings(body.pop('api_base_url',''),body.pop('api_model',''))
         supplied_key=body.pop('api_key').strip()
         env={**os.environ,**environment(provider),'DEEPSEEK_API_KEY':supplied_key,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
+        env['AMAZON_BROWSER_ROUTE_MODE']=body.pop('amazon_route_mode','AUTO')
+        env.pop('AMAZON_CONTINUATION_RECHECK',None)
+        if self.preparation_path:env['AMAZON_CONTINUATION_RECHECK']='1'
         try:
             folder=self.root/'runtime'/'web-console'; folder.mkdir(parents=True,exist_ok=True)
-            output=folder/f'category-{uuid.uuid4().hex}.json'
+            output=self.preparation_path or folder/f'category-{uuid.uuid4().hex}.json'
             env['SELECTION_MODEL_DRAFT_CONTEXT'] = output.stem
             self.progress_file=output.with_suffix('.progress.json')
-            generated=self.invoke([str(self.root/'scripts/generate_category.py'),'--category-name',body['category_name'],
-                '--amazon-count',str(body['amazon_count']),'--per-keyword',str(body['per_keyword']),'--output',str(output),'--progress-file',str(self.progress_file),
-                *(['--bestsellers-url',body['bestsellers_url']] if body.get('bestsellers_url') else [])],env=env,timeout=1800)
-            if generated.returncode: raise ConsoleError('GENERATION_FAILED', self.generation_progress().get('message') or '品类生成或榜单核实失败，请检查网络和API授权后重试')
-            category=json.loads(output.read_text('utf-8'))
-            category['rule_generation_provider']=provider
-            category['temu']['worker_count']=worker_count(body.get('worker_count',4))
-            if 'commercial' in body:category['commercial']=body['commercial']
-            from selection_automation.commercial import settings as commercial_settings
-            category['commercial']={**commercial_settings(category.get('commercial')),'same_operator':'lt'}
-            if not re.fullmatch('[a-z][a-z0-9_]{0,63}',category['category_key']): raise ValueError('invalid generated key')
-            category['category_key']=category['category_key'][:48]+'_'+uuid.uuid4().hex[:12]
-            output.write_text(json.dumps(category,ensure_ascii=False),encoding='utf-8')
+            if not self.preparation_path:
+                generated=self.invoke([str(self.root/'scripts/generate_category.py'),'--category-name',body['category_name'],
+                    '--amazon-count',str(body['amazon_count']),'--per-keyword',str(body['per_keyword']),'--output',str(output),'--progress-file',str(self.progress_file),
+                    *(['--bestsellers-url',body['bestsellers_url']] if body.get('bestsellers_url') else [])],env=env,timeout=1800)
+                if generated.returncode: raise ConsoleError('GENERATION_FAILED', self.generation_progress().get('message') or '品类生成或榜单核实失败，请检查网络和API授权后重试')
+                category=json.loads(output.read_text('utf-8'))
+                category['rule_generation_provider']=provider
+                category['temu']['worker_count']=worker_count(body.get('worker_count',4))
+                if 'commercial' in body:category['commercial']=body['commercial']
+                from selection_automation.commercial import settings as commercial_settings
+                category['commercial']={**commercial_settings(category.get('commercial')),'same_operator':'lt'}
+                if not re.fullmatch('[a-z][a-z0-9_]{0,63}',category['category_key']): raise ValueError('invalid generated key')
+                category['category_key']=category['category_key'][:48]+'_'+uuid.uuid4().hex[:12]
+                selection.save(output,category)
+                self.preparation_path=output;self.preparation_stage='rules_ready';self.persist_preparation()
+            category=selection.read(output,{})
             self.phase='正在采集 Amazon 商品标题、详情参数并提炼关键词'
             self.draft_amazon_path,self.draft_plan_path=self.collect_amazon_and_plan(output,category,env)
             self.phase='正在逐件核对全部 Amazon 商品主图并合并图片条件'
-            extracted=self.invoke([str(self.root/'scripts/extract_match_criteria.py'),'--category',str(output),
-                '--amazon',str(self.draft_amazon_path)],env=env,timeout=3600)
-            if extracted.returncode:
-                from selection_automation.match_criteria import attach,seed
-                attach(category,seed(category,selection.read(self.draft_amazon_path,{})))
-                selection.save(output,category)
+            category=selection.read(output,category);snapshot=selection.read(self.draft_amazon_path,{})
+            if not self.visual_preparation_complete(category,snapshot):
+                if self.preparation_stage in ('visual_complete','visual_mismatch'):
+                    self.preparation_stage='visual_mismatch';self.persist_preparation()
+                    raise ConsoleError('VISUAL_CHECKPOINT_MISMATCH','已保存的主图提取与当前 Amazon 商品证据不匹配；原记录保留，未自动重发付费请求')
+                extracted=self.invoke([str(self.root/'scripts/extract_match_criteria.py'),'--category',str(output),
+                    '--amazon',str(self.draft_amazon_path)],env=env,timeout=3600)
+                category=selection.read(output,category)
+                if extracted.returncode or not self.visual_preparation_complete(category,snapshot):
+                    raise ConsoleError('VISUAL_PREPARATION_INCOMPLETE','商品主图提取尚未完成；已完成批次和请求记录保留，请检查后继续准备，未知请求不会自动重复计费')
+            self.preparation_stage='visual_complete';self.persist_preparation()
             category=selection.read(output,category)
             plan=selection.read(self.draft_plan_path)
             # Save usable generated rules before the optional explanation.
@@ -654,7 +806,8 @@ class Console:
                 self.phase='规则与 Amazon 关键词已生成，请编辑确认后点击运行'
         except ConsoleError as exc:
             self.phase=exc.message
-            if exc.code!='CANCELLED': self.generation_error={'code':exc.code,'message':exc.message}
+            if exc.code=='CANCELLED':self.cancel.set()
+            else:self.generation_error={'code':exc.code,'message':exc.message}
         except Exception:
             self.phase='启动失败，请检查网络、本地依赖及配置'
             self.generation_error={'code':'GENERATION_FAILED','message':self.phase}
@@ -668,6 +821,9 @@ class Console:
                     for field,value in previous_draft.items():setattr(self,field,value)
                     # Preserve reviewed content, never inherit the prior draft key.
                     self.draft_key=None;self.persist_draft()
+                if self.cancel.is_set() and self.pending_scope:
+                    self.phase='准备已停止，已生成规则和 Amazon 断点已保留，可继续准备'
+                    self.generation_error={'code':'PREPARATION_STOPPED','message':self.phase}
                 if self.generation_error:
                     progress=selection.read(self.progress_file,{}) if self.progress_file else {}
                     if self.pending_scope and progress.get('failed_stage')=='generating':
@@ -676,12 +832,27 @@ class Console:
                         resolved=route[-1].get('url') if route and isinstance(route[-1],dict) else None
                         if valid_url(resolved):self.pending_scope['bestsellers_url']=resolved
                     if not self.cancel.is_set():self.pending_key=supplied_key
-                    selection.save(self.root/'runtime/web-console/pending-generation.json',{'scope':self.pending_scope,**self.generation_error})
+                    self.persist_preparation()
                 else:
                     (self.root/'runtime/web-console/pending-generation.json').unlink(missing_ok=True)
+                    self.preparation_path=None;self.preparation_stage=None
                 self.busy=False
 
+    def refresh_draft_form_scope(self):
+        if not isinstance(self.draft,dict) or not self.draft_path:return
+        category=selection.read(self.draft_path,{})
+        if not isinstance(category,dict):self.draft.pop('form_scope',None);return
+        amazon=category.get('amazon');amazon=amazon if isinstance(amazon,dict) else {}
+        if (category.get('category_name_zh')!=self.draft.get('category_name') or
+                self.draft.get('amazon_url') not in (None,amazon.get('bestsellers_url'))):
+            self.draft.pop('form_scope',None);return
+        payload=selection.read(self.draft_amazon_path,{}) if self.draft_amazon_path else None
+        scope=draft_form_scope(category,payload)
+        if scope is not None:self.draft['form_scope']=scope
+        else:self.draft.pop('form_scope',None)
+
     def persist_draft(self):
+        self.refresh_draft_form_scope()
         selection.save(self.root/'runtime/web-console/resume-draft.json',{'draft':self.draft,'category_path':str(self.draft_path),
                        'rule_provider':self.draft_provider,
                        'amazon_path':str(self.draft_amazon_path) if self.draft_amazon_path else '',
@@ -701,6 +872,16 @@ class Console:
                 payload.get('source_url')!=category['amazon']['bestsellers_url'] or payload.get('category_key')!=category['category_key']):
             raise ConsoleError('AMAZON_COLLECTION_FAILED','Amazon 榜单前N名尚未采齐，关键词未生成；请检查网络后重试')
         if result.returncode not in (0,2): raise ConsoleError('AMAZON_COLLECTION_FAILED','Amazon 采集失败；请检查网络后重试')
+        if (result.returncode!=0 or payload.get('status')!='COMPLETE' or payload.get('details_complete') is not True):
+            raise ConsoleError('AMAZON_DETAILS_INCOMPLETE','Amazon 详情尚未采齐或遇到访问门禁；已生成规则和商品断点已保留，请处理提示后继续准备')
+        # Use the collector's shared evidence contract, including image proof;
+        # listing counts and a claimed COMPLETE flag cannot authorize next steps.
+        verified=self.invoke(['node','--input-type=module','-e',
+            "import fs from 'node:fs'; import {detailComplete} from './scripts/collection_checkpoint.mjs'; "
+            "const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); process.exit(p.records.every(detailComplete)?0:2);",
+            str(amazon)],env=amazon_env,timeout=30)
+        if verified.returncode:
+            raise ConsoleError('AMAZON_DETAILS_INCOMPLETE','Amazon 详情和主图证据未通过完整检查；原规则与断点已保留，不能继续生成关键词或主图规则')
         keywords=build_category_keyword_plan(rows,category)
         if not keywords or any(not row.get('source_asins') and row.get('purpose')!='CATEGORY_SAMPLE' for row in keywords):
             raise ConsoleError('KEYWORD_PLAN_FAILED','Amazon 标题没有生成可追溯的关键词，请检查榜单商品')
@@ -925,6 +1106,7 @@ class Console:
         self.key=None;self.draft=None;self.draft_path=None;self.draft_key=None;self.draft_used=False
         self.draft_amazon_path=None;self.draft_plan_path=None;self.pending_scope=None
         self.generation_error=None;self.progress_file=None;self.plain_application={}
+        self.preparation_path=None;self.preparation_stage=None
         self.workspace_stop_pending=False;self.workspace_stop_started=None;self.phase='当前工作区已清空，可新建任务；历史任务可在历史记录中恢复'
         folder=self.root/'runtime/web-console'
         selection.save(folder/'state.json',{'category_key':None,'explicitly_restored':False})
@@ -1997,6 +2179,49 @@ class Console:
         started=raw.get('model_started_at')
         if raw.get('model_waiting') and type(started) in (int,float):
             result['message']=result.get('message','模型生成中')+f' · 已等待 {max(0,int(time.time()-started))} 秒'
+        if raw.get('stage')=='complete' and self.preparation_path:
+            # Generation is only the first phase. Publish collector facts rather
+            # than keeping its completed message over the real current phase.
+            payload=selection.read(self.preparation_path.with_suffix('.amazon.json'),{})
+            category=selection.read(self.preparation_path,{})
+            target=category.get('amazon',{}).get('target_count')
+            rows=payload.get('records') if isinstance(payload.get('records'),list) else []
+            expected=category.get('category_key')
+            valid=(payload.get('category_key')==expected and payload.get('source_url')==category.get('amazon',{}).get('bestsellers_url'))
+            queue=payload.get('detail_queue') if valid and isinstance(payload.get('detail_queue'),dict) else {}
+            completed=queue.get('completed_count')
+            if type(completed) is not int or type(target) is not int or not 0<=completed<=target:completed=None
+            gate_count=0;error_codes=set()
+            for row in rows if valid else []:
+                error=row.get('detail_error') or {}
+                continuation='/checkpoint/continue' in str(error.get('url','')).lower()
+                code='AMAZON_CONTINUATION_REQUIRED' if continuation else error.get('code')
+                if isinstance(code,str) and re.fullmatch('[A-Z0-9_]{1,80}',code):error_codes.add(code)
+                if continuation or error.get('retryable') is False:gate_count+=1
+            stage='amazon_details' if self.busy and self.phase.startswith('正在采集 Amazon') else 'preparation'
+            message=self.phase
+            if stage=='amazon_details':
+                message=f'正在采集 Amazon 详情：{completed if completed is not None else "待核对"}/{target or "待核对"} 件已完成'
+                if gate_count:message+=f'；{gate_count} 件遇到访问门禁，原断点保留'
+                elif completed is not None and completed<target:message+='；未完成商品仍需采齐详情'
+            elif valid and type(target) is int:
+                message+=f' · Amazon 详情：{completed if completed is not None else "待核对"}/{target} 件已完成'
+                if gate_count:message+=f'，{gate_count} 件访问门禁'
+            result={'stage':stage,'message':message,'rule_generation_complete':True,
+                    'amazon_details_completed':completed,'amazon_details_target':target,
+                    'amazon_gate_count':gate_count,'amazon_error_codes':sorted(error_codes)}
+            result['amazon_route_mode']=(self.pending_scope or {}).get('amazon_route_mode','AUTO')
+            route=payload.get('amazon_browser_route') if valid else None
+            if (isinstance(route,dict) and route.get('mode') in ('AUTO','DIRECT')
+                    and route.get('transport') in ('CONFIGURED_PROXY','SYSTEM_ROUTE','BROWSER_DIRECT')):
+                result['amazon_browser_route']={key:route[key] for key in ('mode','transport')}
+                result['amazon_browser_route']['egress_verified']=route.get('egress_verified') is True
+            if stage=='amazon_details':result['message']+='；Amazon 浏览器'+('直连' if result['amazon_route_mode']=='DIRECT' else '自动选择出口')
+            try:
+                age=max(0,int(time.time()-self.preparation_path.with_suffix('.amazon.json').stat().st_mtime))
+                result['observation_age_seconds']=age
+                if self.busy and stage=='amazon_details' and age>=60:result['message']+=f'；最近商品断点更新于 {age} 秒前'
+            except OSError:pass
         return result
 
     def select_local_proxy(self,body):
@@ -2031,7 +2256,12 @@ class Console:
             base=self.root/'runs'/self.key if self.key else None
             writers_stopped,self.workspace_writer_states=self.workspace_writers_stopped(base)
             if writers_stopped and (base is None or (not controller_alive(base) and not codex_review_control(base,scan_batches=False).get('running'))):
-                self.clear_workspace()
+                if self.pending_scope is not None:
+                    self.workspace_stop_pending=False;self.workspace_stop_started=None
+                    self.phase='准备已停止，已生成规则和 Amazon 断点已保留，可继续准备'
+                    self.generation_error={'code':'PREPARATION_STOPPED','message':self.phase}
+                    self.persist_preparation()
+                else:self.clear_workspace()
             else:
                 elapsed=time.monotonic()-(getattr(self,'workspace_stop_started',None) or time.monotonic())
                 self.phase=('停止中：等待独立后台程序退出，当前任务和断点保留' if elapsed<30 else
@@ -2089,6 +2319,8 @@ class Console:
         if generation and self.busy and self.phase.startswith('生成品类'):
             phase=generation.get('message') or phase
             if 'depth' in generation: phase=f"定位榜单 · 第{generation['depth']}步：{phase}"
+        elif generation.get('stage')=='amazon_details' and self.busy:
+            phase=generation.get('message') or phase
         stale=not owner and not self.busy and phase in ('运行中','启动中','停止中')
         if stale: phase='监督进程已退出，旧状态未完成更新'
         collection_complete=False
@@ -2201,13 +2433,14 @@ class Console:
                       'resume_launch':resume_launch,
                       'generation':generation,'generation_error':self.generation_error if preparing_new else None,
                       'can_retry_generation':bool(preparing_new and generation_failed and not self.busy),
+                      'can_resume_preparation':bool(preparing_new and self.preparation_path and not self.busy),
                       'can_resume':bool(not owner and not self.busy and not preparing_new and key and (self.root/'runs'/key/'category.json').is_file()),
                       'can_retry_preparation':bool(not owner and not self.busy and not preparing_new and details.get('阶段',{}).get('bootstrap',{}).get('状态')=='启动准备失败'),
                       'preparation_error':resume_error or (details.get('原因') if details.get('阶段',{}).get('bootstrap',{}).get('状态')=='启动准备失败' else None),
                       'draft':None if self.draft_used else self.draft,'scope':scope,
                       'plain_application':self.plain_application,
                       'saved_credential_available':bool(self.saved_credential()),
-                      'rule_provider':self.draft_provider if self.draft else {
+                      'rule_provider':self.draft_provider if self.draft and not preparing_new else {
                           'base_url':(self.pending_scope or {}).get('api_base_url','https://api.deepseek.com'),
                           'model':(self.pending_scope or {}).get('api_model','deepseek-flash')},
                       'excel_files':self.excel_files(key),

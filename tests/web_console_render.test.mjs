@@ -6,6 +6,22 @@ import vm from 'node:vm';
 const helperHtml=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 function sandbox(value){const context=vm.createContext(value);vm.runInContext(helperHtml.slice(helperHtml.indexOf('function stage3Heartbeat('),helperHtml.indexOf('function runtimeStage3(')),context);return context;}
 
+test('preparation displays current phase after rules complete and actual detail progress',()=>{
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);};
+ const context=sandbox({$:get});
+ vm.runInContext(helperHtml.slice(helperHtml.indexOf('function preparationOnly('),helperHtml.indexOf('function render(data)')),context);
+ context.data={console_busy:true,phase:'正在采集 Amazon 商品标题、详情参数并提炼关键词',
+   generation:{stage:'complete',message:'本品类配置已生成并通过检查'}};
+ vm.runInContext('renderPreparationProgress(data)',context);
+ assert.equal(get('create-progress').textContent,context.data.phase);
+ context.data.generation={stage:'amazon_details',message:'正在采集 Amazon 详情：0/10 件已完成；10 件遇到访问门禁，原断点保留'};
+ vm.runInContext('renderPreparationProgress(data)',context);
+ assert.equal(get('create-progress').textContent,context.data.generation.message);
+ assert.equal(get('create-progress').hidden,false);
+ context.data={category_key:'started'};vm.runInContext('renderPreparationProgress(data)',context);
+ assert.equal(get('create-progress').hidden,true);
+});
+
 
 test('history downloads show their actual publication time and filename',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');

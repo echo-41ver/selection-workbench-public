@@ -139,3 +139,59 @@ test('existing current input values and user edits are not replaced by an unrela
 test('the complete inline browser script remains syntactically valid',()=>{
  for(const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g))assert.doesNotThrow(()=>new vm.Script(match[1]));
 });
+
+function completedDraft(){
+ return {id:'ready-keyboard',category_name:'键盘',worker_count:4,commercial:{same_limit:5},keyword_plan:[],
+  form_scope:{category:'键盘',amazon_count:10,per_keyword:400,worker_count:4,bestsellers_url:listing,
+   commercial:{same_limit:5},amazon_route_mode:'DIRECT'}};
+}
+
+test('completed saved draft restores its proven form scope after a fresh page load',()=>{
+ const ui=setup(),draft=completedDraft();
+ ui.render({category_key:null,active:false,scope:{},draft});ui.context.renderDraft(draft);
+ assert.deepEqual(ui.values(),['键盘',listing,'10','400','4','5']);
+ assert.equal(ui.node('amazon-route-mode').value,'DIRECT');
+ ui.render({category_key:null,active:false,scope:{},draft});
+ assert.equal(ui.node('amazon-route-mode').value,'DIRECT');
+ assert.equal(ui.requests.length,0);
+});
+
+test('completed scope never replaces a newly edited form or route',()=>{
+ for(const edit of ['category','quantity','worker-count','biz-same_limit','route']){
+  const ui=setup(),draft=completedDraft();
+  if(edit==='route'){
+   ui.node('amazon-route-mode').value='AUTO';
+   for(const callback of ui.node('amazon-route-mode').listeners.change||[])callback();
+  }else ui.input(edit,edit==='category'?'杯子':2);
+  const before=ui.values();ui.render({category_key:null,scope:{},draft});ui.context.renderDraft(draft);
+  assert.deepEqual(ui.values(),before);
+  if(edit==='biz-same_limit')assert.equal(ui.node('biz-same_limit').value,'2');
+  if(edit==='route')assert.equal(ui.node('amazon-route-mode').value,'AUTO');
+ }
+});
+
+test('validated completed scope is not overwritten by stale saved display fields',()=>{
+ const ui=setup(),draft=completedDraft();draft.worker_count=12;draft.commercial.same_limit=9;
+ ui.render({category_key:null,scope:{},draft});ui.context.renderDraft(draft);
+ assert.deepEqual(ui.values(),['键盘',listing,'10','400','4','5']);
+ assert.equal(String(ui.node('biz-same_limit').value),'5');
+});
+
+test('pending and different existing inputs take precedence over completed draft hydration',()=>{
+ const ui=setup(),draft=completedDraft();ui.render(pending());const before=ui.values();
+ ui.context.renderDraft(draft);assert.deepEqual(ui.values(),before);
+ const other=setup();other.node('bestsellers-url').value='https://www.amazon.com/zgbs/tools/123';
+ const entered=other.values();other.render({category_key:null,scope:{},draft});other.context.renderDraft(draft);
+ assert.deepEqual(other.values(),entered);
+});
+
+test('invalid completed counts or a running task do not hydrate the new task form',()=>{
+ for(const mutate of [draft=>draft.form_scope.per_keyword='400',draft=>draft.form_scope.category='另一品类']){
+  const ui=setup(),draft=completedDraft();mutate(draft);const before=ui.values();
+  ui.render({category_key:null,scope:{},draft});ui.context.renderDraft(draft);
+  assert.equal(ui.node('category').value,before[0]);assert.equal(ui.node('quantity').value,before[3]);
+ }
+ const ui=setup(),draft=completedDraft(),before=ui.values();
+ ui.render({category_key:'existing-run',scope:{},draft});ui.context.renderDraft(draft);
+ assert.deepEqual(ui.values(),before);
+});

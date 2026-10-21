@@ -9,8 +9,9 @@ import {enrichListingImage,inspectPublicImage,inspectAmazonImage} from './amazon
 import {qualifyAmazonDetail,usefulSpecifications} from './amazon_detail_quality.mjs';
 import {openAmazonDetail,openAmazonRanking,recoverableAmazonBrowser} from './amazon_browser_recovery.mjs';
 import {collectRankedListing} from './amazon_listing_checkpoint.mjs';
-import {inspectAmazonPage} from './amazon_page_state.mjs';
+import {inspectAmazonPage,sanitizeAmazonDiagnostic} from './amazon_page_state.mjs';
 import {amazonUsdPrice} from './amazon_price.mjs';
+import {amazonBrowserRoute} from './amazon_browser_route.mjs';
 
 const arg = (name, fallback = null) => {
   const index = process.argv.indexOf(name);
@@ -24,6 +25,7 @@ const searchUrl = String(arg('--url', config.amazon.bestsellers_url || config.am
 const outputPath = path.resolve(arg('--output', path.join(root, 'runs', config.category_key, 'amazon', 'amazon_frontend_latest.json')));
 const checkpointPath = `${outputPath}.checkpoint.json`;
 const listingOnly = process.argv.includes('--listing-only');
+const browserRoute = amazonBrowserRoute();
 const checkpointScope = { source_url: searchUrl, category_key: config.category_key, target_count: targetCount, detail_standard: 'LATEST_DETAIL_V2' };
 let checkpoint = null;
 if (!process.argv.includes('--fresh')) {
@@ -226,14 +228,17 @@ async function detailFacts(context, record, attempt = 1) {
     };
   } catch (error) {
     const observed=await inspectFailure();
-    const failure=amazonDetailBlock(observed) || {code:/timeout/i.test(error.message)?'DETAIL_TIMEOUT':'DETAIL_REQUEST_FAILED',retryable:true,message:clean(error.message).slice(0,300)};
+    const failure=amazonDetailBlock(observed) ||
+      (error.code==='AMAZON_CONTINUATION_REQUIRED' && error.retryable===false
+        ? {code:error.code,retryable:false,message:error.message}
+        : {code:/timeout/i.test(error.message)?'DETAIL_TIMEOUT':'DETAIL_REQUEST_FAILED',retryable:true,message:sanitizeAmazonDiagnostic(clean(error.message)).slice(0,300)});
     return {
       ...record,
       specifications: record.specifications || [], variants: record.variants || [],
       image_source: record.image_source || '榜单卡片主图', image_status: record.image_status || '详情页回退',
       detail_image_attempts: attempt,
       detail_status: `详情页失败：${failure.message.slice(0,160)}`,
-      detail_error: {...observed,...failure},
+      detail_error: sanitizeAmazonDiagnostic({...observed,...failure}),
     };
   } finally {
     if(page) await page.close().catch(()=>{});
@@ -242,7 +247,7 @@ async function detailFacts(context, record, attempt = 1) {
 
 const browser = recoverableAmazonBrowser(
   ()=>chromium.launch({headless:true,executablePath:edge || chromium.executablePath(),
-    ...(process.env.AMAZON_BROWSER_PROXY?{proxy:{server:process.env.AMAZON_BROWSER_PROXY}}:{})}),
+    ...browserRoute.launchOptions}),
   {viewport:{width:1440,height:1000},locale:'en-US'}, Infinity);
 try {
   const bestSellersMode = /\/(?:zgbs|gp\/bestsellers)\//i.test(new URL(searchUrl).pathname);
@@ -263,6 +268,7 @@ try {
         try {return await collectBestSellerCards(page,url);} finally {await page.close().catch(()=>{});}
       },
       onProgress:state=>publishListing({schema_version:'amazon-bestsellers-frontend-v1',status:state.status,
+        amazon_browser_route:browserRoute.evidence,
         category_key:config.category_key,target_count:targetCount,source:'VISIBLE_AMAZON_US_FRONTEND',source_url:searchUrl,
         observed_at:state.updated_at,records:state.records,record_count:state.records.length,
         complete:false,listing_complete:state.status==='LISTING_COMPLETE',details_complete:false,listing_errors:state.errors})});
@@ -287,6 +293,7 @@ try {
   const publish = (complete = false) => {
     const records = [...active.values()].sort((a,b) => a.rank-b.rank);
     const payload = {schema_version:'amazon-bestsellers-frontend-v1',
+      amazon_browser_route:browserRoute.evidence,
       status:listingOnly?'LISTING_COMPLETE':'RUNNING',category_key:config.category_key,target_count:targetCount,
       source:'VISIBLE_AMAZON_US_FRONTEND', source_url:searchUrl, observed_at:new Date().toISOString(),
       listing_complete:true,details_complete:records.every(detailComplete),
@@ -296,6 +303,7 @@ try {
   let detailQueue=null;
   const persist = status => saveCheckpoint({
     schema_version: 'amazon-detail-checkpoint-v1', scope: checkpointScope, status,
+    amazon_browser_route:browserRoute.evidence,
     updated_at: new Date().toISOString(), records: [...active.values()], detail_queue:detailQueue,
   });
   await publish();
@@ -304,6 +312,7 @@ try {
     console.log(JSON.stringify({status:'LISTING_COMPLETE',output:outputPath,unique_asins:active.size,details_deferred:true}));
   } else {
   const outcome=await runAmazonDetailQueue({records:[...active.values()],concurrency:detailConcurrency,
+    recheckContinuation:process.env.AMAZON_CONTINUATION_RECHECK==='1',
     shouldStop:async()=>{try{await fs.access(path.resolve(path.dirname(outputPath),'../STOP'));return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}},
     fetchDetail:async(row,attempt)=>detailFacts(await browser.getContext(),row,attempt),
     repairImage:async row=>detailFacts(await browser.getContext(),row,row.detail_image_attempts),
@@ -324,6 +333,7 @@ try {
   const status = amazonCollectionStatus(records);
   const payload = {
     status,
+    amazon_browser_route:browserRoute.evidence,
     complete: status === 'COMPLETE',
     details_complete: missingDetails.length === 0,
     missing_details: missingDetails,

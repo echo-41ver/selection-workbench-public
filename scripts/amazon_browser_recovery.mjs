@@ -5,6 +5,8 @@ import {readAmazonDocument} from './amazon_page_read.mjs';
 export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep=ms=>page.waitForTimeout(ms),
     readySelector='#productTitle',hasContent=evidence=>evidence.has_product_title}) {
   let lastError;
+  const unresolvedContinuation=()=>Object.assign(new Error('Amazon 继续购物入口尚未解除，已保留商品断点，需要人工处理'),
+    {code:'AMAZON_CONTINUATION_REQUIRED',retryable:false});
   const readEvidence=()=>readAmazonDocument(page,inspect,{sleep});
   for(let load=0;load<2;load++) {
     let response=null,loadError=null;
@@ -20,15 +22,23 @@ export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep
     if(evidence.continue_shopping) {
       // This is a normal visible navigation button, with no CAPTCHA input.
       // Click once; never submit hidden fields or loop on a real challenge.
-      [response]=await Promise.all([
-        page.waitForNavigation({waitUntil:'domcontentloaded',timeout:30000}),
-        page.getByRole('button',{name:'Continue shopping',exact:true}).click({timeout:10000}),
-      ]);
+      try {
+        [response]=await Promise.all([
+          page.waitForNavigation({waitUntil:'domcontentloaded',timeout:30000}),
+          page.getByRole('button',{name:'Continue shopping',exact:true}).click({timeout:10000}),
+        ]);
+      } catch(error) {
+        evidence=await readEvidence();
+        block=amazonDetailBlock(evidence);
+        if(block)throw Object.assign(new Error(block.message),block);
+        if(evidence.continue_shopping || evidence.continuation_required)throw unresolvedContinuation();
+        throw error;
+      }
       onResponse(response);
       evidence=await readEvidence();
       block=amazonDetailBlock(evidence);
       if(block) throw Object.assign(new Error(block.message),block);
-      if(evidence.continue_shopping) throw new Error('Amazon继续购物入口未完成，保留队列等待重试');
+      if(evidence.continue_shopping) throw unresolvedContinuation();
       // Amazon may send the ordinary button to its home page. Resume the
       // requested product in this same context, preserving the established session.
       if(!hasContent(evidence)) {
@@ -37,7 +47,7 @@ export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep
         evidence=await readEvidence();
         block=amazonDetailBlock(evidence);
         if(block) throw Object.assign(new Error(block.message),block);
-        if(evidence.continue_shopping) throw new Error('Amazon再次显示继续购物入口，保留队列等待重试');
+        if(evidence.continue_shopping) throw unresolvedContinuation();
       }
       loadError=null;
     }
@@ -49,8 +59,10 @@ export async function openAmazonDetail(page,url,{inspect,onResponse=()=>{},sleep
     } catch(error) {
       lastError=error;
       // A challenge may appear while waiting for the title, not just at navigation.
-      const after=amazonDetailBlock(await readEvidence());
+      const afterEvidence=await readEvidence();
+      const after=amazonDetailBlock(afterEvidence);
       if(after) throw Object.assign(new Error(after.message),after);
+      if(afterEvidence.continue_shopping || afterEvidence.continuation_required)throw unresolvedContinuation();
       const transient=/timeout|timed.out|Execution context was destroyed|Cannot find context with specified id|ERR_(?:CONNECTION|NETWORK|INTERNET|NAME_NOT_RESOLVED)|HTTP (?:unknown|5\d\d)/i.test(error.message);
       if(!transient || load===1) throw error;
       await sleep(1000);

@@ -1,6 +1,6 @@
 import {usefulSpecifications} from './amazon_detail_quality.mjs';
 import {detailComplete} from './collection_checkpoint.mjs';
-import {recoverMisclassifiedContinuation} from './amazon_page_state.mjs';
+import {recoverMisclassifiedContinuation,sanitizeAmazonDiagnostic} from './amazon_page_state.mjs';
 
 export function amazonDetailBlock(evidence = {}) {
   if (evidence.captcha || /robot check|enter the characters you see|type the characters you see/i.test(evidence.text || '')) {
@@ -12,14 +12,34 @@ export function amazonDetailBlock(evidence = {}) {
   if (/\/ap\/signin(?:[/?]|$)/i.test(evidence.url || '')) {
     return {code:'AMAZON_LOGIN_REQUIRED',retryable:false,message:'Amazon 登录页面，需要人工处理'};
   }
+  if (evidence.continuation_required && !evidence.continue_shopping) {
+    return {code:'AMAZON_CONTINUATION_REQUIRED',retryable:false,message:'Amazon 继续购物入口尚未解除，已保留商品断点，需要人工处理'};
+  }
   return null;
 }
 
+// Reopen only this ordinary navigation gate after an explicit user continuation.
+// Keep its saved error non-retryable until the one request has finished: a crash
+// or background restart must not turn this authorization into an automatic loop.
+export function scheduleAmazonContinuationRecheck(items, authorized = false) {
+  const selected = new Set();
+  if (!authorized) return selected;
+  for (const item of items.values()) {
+    if (item.status !== 'MANUAL_ACTION_REQUIRED'
+      || item.last_error?.code !== 'AMAZON_CONTINUATION_REQUIRED') continue;
+    item.status = 'PENDING';
+    selected.add(item.asin);
+  }
+  return selected;
+}
+
 export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,repairImage,concurrency=4,
-  retryDelayMs=5000,maxRetryDelayMs=60000,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),shouldStop=()=>false}) {
+  retryDelayMs=5000,maxRetryDelayMs=60000,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),shouldStop=()=>false,
+  recheckContinuation=false}) {
   if (!Number.isFinite(retryDelayMs) || retryDelayMs<0 || !Number.isFinite(maxRetryDelayMs) || maxRetryDelayMs<retryDelayMs) throw new Error('Invalid detail retry delay');
   if (!Number.isInteger(concurrency) || concurrency<1 || concurrency>10) throw new Error('detail_concurrency must be 1..10');
-  records=records.map(recoverMisclassifiedContinuation);
+  records=records.map(recoverMisclassifiedContinuation).map(row=>row.detail_error
+    ? {...row,detail_error:sanitizeAmazonDiagnostic(row.detail_error)} : row);
   // Repair legacy image evidence without discarding the request history.
   if(repairImage) for(let i=0;i<records.length;i++) {
     const row=records[i];
@@ -40,6 +60,7 @@ export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,rep
       :attempts?'RETRY_PENDING':'PENDING';
     return [row.asin,{asin:row.asin,rank:row.rank,attempts,status,last_error:row.detail_error || null}];
   }));
+  const continuationRechecks=scheduleAmazonContinuationRecheck(items,recheckContinuation);
   let requests=0,retries=0,stopped=false,nextRetryAt=null;
   const retriedAsins=new Set();
   const snapshot=()=>{
@@ -51,7 +72,8 @@ export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,rep
       status:stopped?'STOPPED':pending.length?'RUNNING':!remaining.length?'COMPLETE':'MANUAL_ACTION_REQUIRED',
       completed_count:current.length-remaining.length,remaining_count:remaining.length,
       items:current,remaining_asins:remaining,retry_pending_asins:pending,
-      exhausted_asins:[],manual_action_asins:manual};
+      exhausted_asins:[],manual_action_asins:manual,
+      continuation_recheck_asins:[...continuationRechecks]};
   };
   const persist=()=>onCheckpoint({records:[...active.values()],queue:snapshot()});
   const runWave=async pending=>{
@@ -75,6 +97,12 @@ export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,rep
         }
         value={...row,...value,asin:row.asin,rank:row.rank,product_url:row.product_url,detail_image_attempts:item.attempts};
         if(!detailComplete(value) && !value.detail_error) value.detail_error={code:'DETAIL_INCOMPLETE',retryable:true,message:value.detail_status || '详情或主图不完整'};
+        if(continuationRechecks.has(item.asin) && !detailComplete(value) && value.detail_error?.retryable!==false) {
+          value={...value,detail_error:{code:'AMAZON_CONTINUATION_REQUIRED',retryable:false,
+            message:'Amazon 继续购物入口显式重查未完成，已保留断点，等待再次手动继续',
+            recheck_error:value.detail_error}};
+        }
+        if(value.detail_error)value={...value,detail_error:sanitizeAmazonDiagnostic(value.detail_error)};
         active.set(item.asin,value);
         item.last_error=detailComplete(value)?null:value.detail_error;
         item.status=detailComplete(value)?'COMPLETE':value.detail_error?.retryable===false?'MANUAL_ACTION_REQUIRED'

@@ -578,18 +578,30 @@ def test_generation_then_start_key_only_in_env(tmp_path,monkeypatch):
             Path(args[args.index('--output')+1]).write_text(json.dumps(category))
         if 'collect_amazon_search_frontend.mjs' in args[1]:
             category=json.loads(Path(args[args.index('--config')+1]).read_text('utf-8'))
-            rows=[{'asin':f'B00000000{n}','rank':n,'title':'Cordless power drill kit'} for n in range(1,4)]
+            rows=[{'asin':f'B00000000{n}','rank':n,'title':'Cordless power drill kit',
+                   'main_image_url':f'https://m.media-amazon.com/images/I/fixture{n}.jpg'} for n in range(1,4)]
             Path(args[args.index('--output')+1]).write_text(json.dumps({'records':rows,'record_count':3,
+                'status':'COMPLETE','details_complete':True,
                 'source_url':category['amazon']['bestsellers_url'],'category_key':category['category_key']}))
+        if 'extract_match_criteria.py' in args[0]:
+            from selection_automation.match_criteria import seed
+            from selection_automation.visual_criteria import start,VERSION
+            path=Path(args[args.index('--category')+1]);category=web.selection.read(path)
+            catalog=start(seed(category,web.selection.read(Path(args[args.index('--amazon')+1]))))
+            catalog.update(state='ready',image_review={'version':VERSION,'state':'ready','total_images':3,
+                'completed_images':3,'total_products':3,'reviewed_products':3,'missing_asins':[],'failed_batches':0})
+            category['match_criteria']=catalog;web.selection.save(path,category)
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(console,'invoke',invoke)
     monkeypatch.setattr(console,'explain_file',lambda source,*a:source)
     console.busy=True
     monkeypatch.setattr(console,'owner',lambda:{'category_key':console.key})
     console._start({'category_name':'测试','amazon_count':3,'per_keyword':5,'api_key':'private-key'})
-    assert len(calls)==3
+    assert len(calls)==4
     assert '--listing-only' not in calls[1][0]
-    assert 'extract_match_criteria.py' in calls[2][0][0]
+    assert 'AMAZON_CONTINUATION_RECHECK' not in calls[1][1]['env']
+    assert '--input-type=module' in calls[2][0]
+    assert 'extract_match_criteria.py' in calls[3][0][0]
     assert all('private-key' not in json.dumps(args) for args,kw in calls)
     assert console.phase=='规则与 Amazon 关键词已生成，请编辑确认后点击运行'
     assert console.draft and console.draft_key=='private-key'
@@ -772,8 +784,9 @@ def test_excel_http_download_and_open_only_allow_current_task(tmp_path,monkeypat
 
 
 def test_cancel_generation_terminates_owned_child(tmp_path,monkeypatch):
-    console=web.Console(tmp_path);console.cancel.set();child=SimpleNamespace(poll=lambda:None)
-    monkeypatch.setattr(web.subprocess,'Popen',lambda *a,**k:child)
+    console=web.Console(tmp_path);child=SimpleNamespace(poll=lambda:None)
+    def spawn(*args,**kwargs):console.cancel.set();return child
+    monkeypatch.setattr(web.subprocess,'Popen',spawn)
     stopped=[];monkeypatch.setattr(web.selection,'terminate_owned',lambda process:stopped.append(process))
     with pytest.raises(web.ConsoleError) as exc:console.invoke(['generate'],env={'DEEPSEEK_API_KEY':'secret'})
     assert exc.value.code=='CANCELLED' and stopped==[child]

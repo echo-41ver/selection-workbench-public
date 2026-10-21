@@ -28,6 +28,26 @@ test('transport timeout before target loads reopens the intended URL only once',
   f.page.goto=async requested=>{assert.equal(requested,url);loads++;throw new Error('net::ERR_CONNECTION_TIMED_OUT');};
   await assert.rejects(openAmazonDetail(f.page,url,f.options),/ERR_CONNECTION/);assert.equal(loads,2);
 });
+
+test('continuation that remains after its one visible click pauses without reloading',async()=>{
+  let clicks=0,loads=0,titleWaits=0;
+  const page={goto:async()=>{loads++;return {status:()=>200};},
+    waitForNavigation:async()=>({status:()=>200}),getByRole:()=>({click:async()=>{clicks++;}}),
+    locator:()=>({first:()=>({waitFor:async()=>{titleWaits++;}})})};
+  await assert.rejects(openAmazonDetail(page,url,{inspect:async()=>({continue_shopping:true,continuation_required:true}),sleep:async()=>{}}),
+    error=>error.code==='AMAZON_CONTINUATION_REQUIRED' && error.retryable===false);
+  assert.equal(clicks,1);assert.equal(loads,1);assert.equal(titleWaits,0);
+});
+
+test('continuation with no navigation after clicking also pauses with its reason',async()=>{
+  let clicks=0;
+  const page={goto:async()=>({status:()=>200}),
+    waitForNavigation:async()=>{throw new Error('Timeout 30000ms exceeded');},
+    getByRole:()=>({click:async()=>{clicks++;}})};
+  await assert.rejects(openAmazonDetail(page,url,{inspect:async()=>({continue_shopping:true,continuation_required:true}),sleep:async()=>{}}),
+    error=>error.code==='AMAZON_CONTINUATION_REQUIRED' && error.retryable===false);
+  assert.equal(clicks,1);
+});
 test('browser crash recovery shares a single replacement across parallel workers and is bounded',async()=>{
   const instances=[];
   const manager=recoverableAmazonBrowser(async()=>{
