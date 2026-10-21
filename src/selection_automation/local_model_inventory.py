@@ -20,6 +20,19 @@ _SCAN_SECONDS = 180
 _SKIP = {'$recycle.bin', 'system volume information'}
 
 
+def _pytest_fixture_path(path):
+    parts = [part for part in re.split(r'[/\\]+', str(path)) if part]
+    if any(re.fullmatch(r'pytest-of-.+', part, re.I) for part in parts[:-1]):
+        return True
+    # Explicit --basetemp directories do not carry pytest-of-* parents. Only
+    # recognize the pytest-base convention together with a numbered pytest test
+    # directory; a model named real, test_*, or stored in a normal cache is not
+    # evidence of a fixture. Arbitrarily named basetemp roots remain unclassified.
+    return any(part.lower() in {'pytest-base', 'pytest_base'} and
+               any(re.fullmatch(r'test_.+\d+', child, re.I) for child in parts[index + 1:])
+               for index, part in enumerate(parts))
+
+
 def presentation(name, *, path='', info=None):
     info = info or {}
     text = f'{name} {path}'.lower()
@@ -41,7 +54,7 @@ def presentation(name, *, path='', info=None):
         candidate = re.sub(r'[-_](?:Q\d[^\s]*|F16|BF16)$', '', candidate, flags=re.I)
         label = candidate if len(candidate) <= 60 and not re.search(r'[a-f0-9]{24,}|[/\\]|https?:', candidate, re.I) else '其他本地模型' + suffix
     return {'display_name': label, 'auxiliary': auxiliary,
-            'test_fixture': bool(re.search(r'[/\\]pytest-of-[^/\\]+[/\\]', str(path), re.I))}
+            'test_fixture': _pytest_fixture_path(path)}
 
 
 def vision_capability(info):

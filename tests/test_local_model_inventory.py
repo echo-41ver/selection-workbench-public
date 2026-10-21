@@ -22,6 +22,23 @@ def test_model_labels_are_readable_and_identify_auxiliary_and_test_files():
     assert inventory.presentation('real.gguf', path='C:/Temp/pytest-of-admin/pytest-1/real.gguf')['test_fixture']
 
 
+@pytest.mark.parametrize('path,expected', [
+    ('D:/acceptance/temp/pytest-base/test_inventory_checks0', True),
+    ('D:/acceptance/temp/pytest-base/test_inventory_checks0/real.gguf', True),
+    ('D:/acceptance/temp/pytest-base/test_all_disks0/disk_d/d1-3B.gguf', True),
+    (r'D:\acceptance\temp\pytest_base\test_scanner1\disk\models\real.gguf', True),
+    ('/tmp/acceptance/pytest-base/test_inventory_checks12/model.safetensors', True),
+    ('D:/AI/models/test_training0/real.gguf', False),
+    ('D:/AI/pytest-base/LiquidAI-d1-3B/model.safetensors', False),
+    ('D:/AI/pytest-base/test_trained/model.safetensors', False),
+    ('D:/AI/my-pytest-base/test_inventory0/real.gguf', False),
+    ('D:/AI/unrelated-base/test_inventory0/real.gguf', False),
+    ('D:/AI/models/pytest-of-custom.gguf', False),
+])
+def test_custom_basetemp_fixture_detection_keeps_legitimate_model_paths(path, expected):
+    assert inventory.presentation('real.gguf', path=path)['test_fixture'] is expected
+
+
 def test_same_ollama_weights_share_one_choice_without_losing_selected_connections(tmp_path, monkeypatch):
     endpoints = ['http://127.0.0.1:11434', 'http://127.0.0.1:19761']
     monkeypatch.setattr(service, '_endpoints', lambda: endpoints)

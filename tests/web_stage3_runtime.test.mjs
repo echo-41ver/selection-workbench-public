@@ -7,6 +7,27 @@ const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('
 function view(){const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'liquid_d1',dataset:{},style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel(){},renderStage3Settings(){},stage3ProviderSettings:()=>undefined});vm.runInContext(html.slice(html.indexOf('function stage3ActivityText('),html.indexOf('function runtimeStage3('))+code,context);return {get,context};}
 test('initial page before the first status response initializes controls',()=>{const {get,context}=view();assert.doesNotThrow(()=>vm.runInContext('stage3Button(null)',context));assert.equal(get('start-stage3').disabled,true);});
 
+test('native model summary and concurrency help use the backend batch capacity instead of twelve',()=>{
+ const {get,context}=view();context.localModelOptions=[];context.localModelLabel=row=>row.name;
+ context.data={category_key:'task',stage3_provider:{mode:'local_model',model:'LiquidAI/d1-3B'},
+  stage3_control:{running:false,progress:{total:24,pending:24}},stage3_runtime:{}};
+ for(const limit of [10,5,1]){
+  context.data.stage3_batch_capacity={ready:true,max_pairs:limit};vm.runInContext('stage3Button(data)',context);
+  assert.match(get('stage3-current').textContent,new RegExp('每组最多 '+limit+' 个 TEMU'));
+  assert.match(get('stage3-batch-hint').textContent,new RegExp('每组最多 '+limit+' 个 TEMU'));
+  assert.doesNotMatch(get('stage3-current').textContent,/每组最多 12/);
+ }
+});
+
+test('missing or blocked capacity is shown honestly without inventing a batch maximum',()=>{
+ const {get,context}=view();context.data={category_key:'task',stage3_control:{progress:{total:1,pending:1}}};
+ vm.runInContext('stage3Button(data)',context);assert.match(get('stage3-current').textContent,/每组容量待读取/);
+ context.data.stage3_batch_capacity={ready:false,max_pairs:0,message:'单个商品对需要 11 题，当前模型不能承载完整规则'};
+ vm.runInContext('stage3Button(data)',context);
+ assert.match(get('stage3-current').textContent,/11 题/);assert.match(get('stage3-batch-hint').textContent,/完整规则/);
+ assert.doesNotMatch(get('stage3-current').textContent,/每组最多 (?:0|12)/);
+});
+
 test('Agent speed and ETA use Agent groups instead of API history',()=>{
  const {get,context}=view();context.data={category_key:'task',stage3_control:{running:false,
   codex_review:{running:true,speed:{recent_rate_per_hour:120,window_seconds:900,estimated_rate_per_hour:240,sample_groups:10}},

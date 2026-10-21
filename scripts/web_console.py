@@ -24,6 +24,16 @@ from selection_automation.frontend_market import build_frontend_market
 
 READONLY_PROGRESS_TIMEOUT_SECONDS=1800
 
+def stage3_batch_capacity(category,provider):
+    """Expose the dispatcher's existing bound; never alter rules or dispatch."""
+    from selection_automation.stage3_provider import request_batch_size
+    from selection_automation.local_d1 import LocalD1InputError
+    try:
+        return {'ready':True,'max_pairs':request_batch_size(provider,category)}
+    except LocalD1InputError as error:
+        return {'ready':False,'max_pairs':0,'message':str(error)}
+
+
 def draft_form_scope(category,amazon_payload=None):
     """Expose only this saved category's validated non-secret form inputs."""
     if not isinstance(category,dict):return None
@@ -504,11 +514,13 @@ class Console:
         if not key:return value
         base=self.root/'runs'/key
         category=json.loads((base/'category.json').read_text(encoding='utf-8'))
+        provider=from_category(category)
         control_path=base/'stage123/runtime_control.json'
         # A read error must not masquerade as an empty, cleared verification gate.
         runtime=json.loads(control_path.read_text(encoding='utf-8')) if control_path.exists() else {}
         if not isinstance(runtime,dict):raise ValueError('invalid dispatch control')
-        value.update(stage3_runtime=runtime,stage3_provider=from_category(category),
+        value.update(stage3_runtime=runtime,stage3_provider=provider,
+            stage3_batch_capacity=stage3_batch_capacity(category,provider),
             stage3_concurrency=selection.read(base/'stage123/concurrency.json',{}),
             review=codex_review_control(base,scan_batches=False),
             running=controller_alive(base),
@@ -528,7 +540,7 @@ class Console:
         if live.get('live_loading') or live.get('category_key')!=state.get('category_key'):
             state['live_loading']=True
             return state
-        for field in ('stage3_runtime','stage3_provider','stage3_concurrency'):
+        for field in ('stage3_runtime','stage3_provider','stage3_concurrency','stage3_batch_capacity'):
             if field in live:state[field]=live[field]
         if not live.get('category_key'):return state
         state['task_stopped']=bool(live.get('task_stopped'))
@@ -2454,6 +2466,7 @@ class Console:
                       'stage3_key_configured':bool((key,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)['base_url']) in self.stage3_keys or __import__('selection_automation.stage3_credentials',fromlist=['saved_key']).saved_key(self.root,__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category))),
                       'stage3_concurrency':selection.read(self.root/'runs'/key/'stage123/concurrency.json',{}) if key else {},
                       'stage3_provider':provider,
+                      'stage3_batch_capacity':stage3_batch_capacity(category,provider),
                       'stage3_control':stage3_control})
 
 

@@ -35,6 +35,7 @@ def test_live_state_overrides_cached_captcha_without_rescanning_results(tmp_path
     console=web.Console(tmp_path);console.key='fixture'
     old={'ok':True,'category_key':'fixture','stage3_runtime':{'paused':True,'agent_blocks':{'doubao':{'code':'HUMAN_VERIFICATION_REQUIRED'}}},
          'stage3_provider':{'mode':'local_agent','agent_ids':['doubao']},
+         'stage3_batch_capacity':{'ready':True,'max_pairs':12},
          'stage3_control':{'progress':{'total':100,'completed':12,'pending':88},
                            'codex_review':{'target':96,'imported':12,'pool':{'running_groups':0,'phase':'等待验证码'}}}}
     monkeypatch.setattr(console.monitor,'get',lambda:json.loads(json.dumps(old)))
@@ -42,6 +43,7 @@ def test_live_state_overrides_cached_captcha_without_rescanning_results(tmp_path
         'status_sample':{'age_seconds':0,'sampled_at':time.time(),'error':False},
         'stage3_runtime':{'paused':False,'agent_blocks':{},'paused_agents':['acciowork']},
         'stage3_provider':{'mode':'local_agent','agent_ids':['doubao'],'agent_models':{'doubao':'专家'}},
+        'stage3_batch_capacity':{'ready':True,'max_pairs':5},
         'stage3_concurrency':{'workers':8},'running':False,'enabled':False,'controller':{},
         'review':{'available':True,'running':True,'phase':'分析中','pool':{'running':True,'running_groups':8,'phase':'分析中'}}})
     monkeypatch.setattr(console,'stage3_snapshot',lambda *a:pytest.fail('live overlay must never rescan results'))
@@ -51,11 +53,49 @@ def test_live_state_overrides_cached_captcha_without_rescanning_results(tmp_path
     assert state['stage3_control']['codex_review']['pool']['running_groups']==8
     assert state['stage3_control']['codex_review']['imported']==12
     assert state['stage3_control']['progress']['completed']==12
+    assert state['stage3_batch_capacity']=={'ready':True,'max_pairs':5}
     assert not state['details']['阶段']['stage3'].get('需人工介入')
     # A task switch must never combine another task's current control state.
     console.live_monitor.get=lambda:{'ok':True,'category_key':'other','status_sample':{'age_seconds':0}}
     assert console.monitor_status()['live_loading']
     assert old['stage3_runtime']['paused']
+
+
+@pytest.mark.parametrize('visual_count,configured,expected', [(0,12,10),(1,12,5),(1,2,2),(9,12,1)])
+def test_native_batch_capacity_is_read_only_and_matches_dispatch_in_full_and_live_status(tmp_path,monkeypatch,visual_count,configured,expected):
+    from selection_automation.stage3_provider import request_batch_size,settings
+    provider=settings({'mode':'local_model','base_url':'http://127.0.0.1:7863/v1/decide',
+                       'model':'LiquidAI/d1-3B','protocol':'decisions','workers':1})
+    category={'category_name_zh':'测试','category_key':'fixture',
+              'stage3':{'provider':provider,'batch_size':configured},
+              'match_criteria':{'schema_version':'amazon-match-criteria-v1','enabled':True,
+                  'items':[{'id':f'visual_{i}','selected':True,'kind':'visual','label':f'完整条件{i}','rule':'保持完整规则'} for i in range(visual_count)]}}
+    base=tmp_path/'runs/fixture';base.mkdir(parents=True)
+    web.selection.save(base/'category.json',category)
+    console=web.Console(tmp_path);console.key='fixture'
+    monkeypatch.setattr(console,'owner',lambda:None)
+    monkeypatch.setattr(console,'stage3_snapshot',lambda key:{'total':0,'completed':0,'pending':0})
+    monkeypatch.setattr(console,'matching_snapshot',lambda *args:{})
+    before=(base/'category.json').read_bytes()
+    assert request_batch_size(provider,category)==expected
+    for state in [console.live_status(),console.status()]:
+        assert state['stage3_batch_capacity']=={'ready':True,'max_pairs':expected}
+        assert state['stage3_provider']==provider
+    assert (base/'category.json').read_bytes()==before
+
+
+def test_native_batch_capacity_displays_rule_overflow_without_mutating_or_dispatching(tmp_path,monkeypatch):
+    from selection_automation.stage3_provider import settings
+    provider=settings({'mode':'local_model','base_url':'http://127.0.0.1:7863/v1/decide',
+                       'model':'LiquidAI/d1-3B','protocol':'decisions','workers':1})
+    category={'stage3':{'provider':provider,'batch_size':12},
+              'match_criteria':{'schema_version':'amazon-match-criteria-v1','enabled':True,
+                  'items':[{'id':f'v{i}','selected':True,'kind':'visual'} for i in range(10)]}}
+    before=json.dumps(category,sort_keys=True)
+    result=web.stage3_batch_capacity(category,provider)
+    assert result['ready'] is False and result['max_pairs']==0
+    assert '单个商品对需要 11 题' in result['message']
+    assert json.dumps(category,sort_keys=True)==before
 
 
 def test_fast_review_reader_does_not_scan_batch_tree(tmp_path,monkeypatch):
