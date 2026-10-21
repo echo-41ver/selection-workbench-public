@@ -37,6 +37,8 @@ def test_diagnostic_zip_excludes_private_state_and_redacts_log_secrets(tmp_path)
     attempt.mkdir(parents=True)
     secret = 'TEST_ONLY_PRIVATE_VALUE'
     (attempt/'install.stderr.log').write_text('api_key='+secret+'\n--password '+secret+'\nAuthorization: Bearer '+secret+'\n', encoding='utf-8')
+    for name in ('stdout.log', 'stderr.log', 'worker.stdout.log', 'worker.stderr.log'):
+        (attempt/name).write_text('实际部署日志 中文 api_key='+secret+'\n', encoding='utf-8')
     (runtime/'company.dpapi').write_text(secret, encoding='utf-8')
     (runtime/'company.local.json').write_text(secret, encoding='utf-8')
     (runtime/'install-status.json').write_text('{"stage":"failed","succeeded":false}', encoding='utf-8')
@@ -47,11 +49,14 @@ def test_diagnostic_zip_excludes_private_state_and_redacts_log_secrets(tmp_path)
         names = archive.namelist()
         assert 'runtime/install-status.json' in names
         assert any(n.endswith('install.stderr.log') for n in names)
+        for name in ('stdout.log', 'stderr.log', 'worker.stdout.log', 'worker.stderr.log'):
+            assert 'runtime/deployment-entry/' + ('a'*32) + '/' + name in names
         assert not any('company' in n.lower() for n in names)
         text = '\n'.join(archive.read(n).decode('utf-8') for n in names)
     assert secret not in text
     assert '[REDACTED]' in text
     assert 'succeeded' in text
+    assert '实际部署日志 中文' in text
 
 
 def test_unconfirmed_worker_never_tells_user_to_repeat_deployment(tmp_path):
@@ -61,6 +66,15 @@ def test_unconfirmed_worker_never_tells_user_to_repeat_deployment(tmp_path):
     assert data['native_exit_code'] == 124
     assert '后台安装可能仍在运行' in data['reason']
     assert '请勿重复启动' in data['next_step']
+
+
+def test_captured_failure_returns_reason_without_requiring_dialog(tmp_path):
+    result = invoke(tmp_path, 'Show-DeploymentFailure -Root $env:SUPPORT_ROOT -NativeExitCode 124\n')
+    assert result.returncode == 0, result.stderr
+    data = json.loads((tmp_path/'runtime/deployment-user-failure.json').read_text(encoding='utf-8-sig'))
+    assert data['native_exit_code'] == 124
+    assert '后台安装可能仍在运行' in result.stderr
+    assert '请勿重复启动' in result.stderr and '导出诊断' in data['next_step']
 
 
 def test_export_does_not_overwrite_existing_diagnostic(tmp_path):

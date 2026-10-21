@@ -81,7 +81,7 @@ function Export-DeploymentDiagnostics([string]$Root, [string]$OutputPath) {
         if ([IO.Directory]::Exists($entryRoot) -and (Test-DeploymentSupportPath $Root $entryRoot)) {
             $attempts = @(Get-ChildItem -LiteralPath $entryRoot -Directory | Where-Object { $_.Name -match '^[a-f0-9]{32}$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 3)
             foreach ($attempt in $attempts) {
-                $files += Get-ChildItem -LiteralPath $attempt.FullName -File | Where-Object { $_.Name -match '^(?:install|start-web)\.(?:stdout|stderr)\.log$|^(?:result|parent-error|parent-timeout)\.json$' }
+                $files += Get-ChildItem -LiteralPath $attempt.FullName -File | Where-Object { $_.Name -match '^(?:(?:install|start-web|worker)\.)?(?:stdout|stderr)\.log$|^(?:result|parent-error|parent-timeout)\.json$' }
             }
         }
         $included = @()
@@ -113,7 +113,7 @@ function Show-DeploymentFailure([string]$Root, [int]$NativeExitCode, [string]$St
     [void][IO.Directory]::CreateDirectory((Join-Path $Root 'runtime'))
     [IO.File]::WriteAllText((Join-Path $Root 'runtime\deployment-user-failure.json'), ($friendly | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     [Console]::Error.WriteLine($friendly.reason + "`n" + $friendly.next_step)
-    if ($NoDialog -or [Console]::IsInputRedirected -or -not [Environment]::UserInteractive) { return }
+    if ($NoDialog -or [Console]::IsInputRedirected -or [Console]::IsOutputRedirected -or [Console]::IsErrorRedirected -or -not [Environment]::UserInteractive) { return }
     Add-Type -AssemblyName System.Windows.Forms
     $form = New-Object System.Windows.Forms.Form
     $form.Text = '选品工作台 · 部署未完成'; $form.Width=590; $form.Height=300; $form.StartPosition='CenterScreen'

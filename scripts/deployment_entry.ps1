@@ -54,6 +54,44 @@ public sealed class SelectionEntryCapture {
   Process.StartInfo.StandardOutputEncoding=Utf8;Process.StartInfo.StandardErrorEncoding=Utf8;
   Process.Start();Output=Task.Run(()=>Pump(Process.StandardOutput,stdout));Error=Task.Run(()=>Pump(Process.StandardError,stderr));
  }
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] private struct StartupInfo {
+  public int cb; public string reserved,desktop,title; public int x,y,xSize,ySize,xChars,yChars,fill,flags;
+  public short showWindow,reservedLength; public IntPtr reservedBytes,input,output,error;
+ }
+ [StructLayout(LayoutKind.Sequential)] private struct StartupInfoEx {public StartupInfo info;public IntPtr attributes;}
+ [StructLayout(LayoutKind.Sequential)] private struct ProcessInfo {public IntPtr process,thread;public int pid,threadId;}
+ [DllImport("kernel32.dll",SetLastError=true)] private static extern bool InitializeProcThreadAttributeList(IntPtr list,int count,int flags,ref IntPtr bytes);
+ [DllImport("kernel32.dll",SetLastError=true)] private static extern bool UpdateProcThreadAttribute(IntPtr list,uint flags,IntPtr attribute,IntPtr value,IntPtr bytes,IntPtr previous,IntPtr returnedBytes);
+ [DllImport("kernel32.dll")] private static extern void DeleteProcThreadAttributeList(IntPtr list);
+ [DllImport("kernel32.dll",SetLastError=true)] private static extern bool SetHandleInformation(IntPtr handle,uint mask,uint flags);
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] private static extern bool CreateProcessW(string application,StringBuilder command,IntPtr processSecurity,IntPtr threadSecurity,bool inherit,uint flags,IntPtr environment,string cwd,ref StartupInfoEx startup,out ProcessInfo process);
+ [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+ public static Process StartDetached(string exe,string arguments,string cwd,string stdin,string stdout,string stderr) {
+  // A redirected caller may own inheritable pipe handles unrelated to the three
+  // standard handles. Only an explicit handle list keeps a detached worker from
+  // retaining those pipes after the observer returns its real timeout code.
+  using(var input=new FileStream(stdin,FileMode.CreateNew,FileAccess.ReadWrite,FileShare.Read))
+  using(var output=new FileStream(stdout,FileMode.CreateNew,FileAccess.Write,FileShare.Read))
+  using(var error=new FileStream(stderr,FileMode.CreateNew,FileAccess.Write,FileShare.Read)) {
+   var handles=new[]{input.SafeFileHandle.DangerousGetHandle(),output.SafeFileHandle.DangerousGetHandle(),error.SafeFileHandle.DangerousGetHandle()};
+   IntPtr list=IntPtr.Zero,values=IntPtr.Zero,bytes=IntPtr.Zero;bool initialized=false;
+   try {
+    foreach(var handle in handles)if(!SetHandleInformation(handle,1,1))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    InitializeProcThreadAttributeList(IntPtr.Zero,1,0,ref bytes);
+    int sizingError=Marshal.GetLastWin32Error();
+    if(bytes==IntPtr.Zero||sizingError!=122)throw new System.ComponentModel.Win32Exception(sizingError);
+    list=Marshal.AllocHGlobal(bytes);
+    if(!InitializeProcThreadAttributeList(list,1,0,ref bytes))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    initialized=true;values=Marshal.AllocHGlobal(IntPtr.Size*handles.Length);Marshal.Copy(handles,0,values,handles.Length);
+    if(!UpdateProcThreadAttribute(list,0,new IntPtr(0x20002),values,new IntPtr(IntPtr.Size*handles.Length),IntPtr.Zero,IntPtr.Zero))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    var startup=new StartupInfoEx();startup.info.cb=Marshal.SizeOf(typeof(StartupInfoEx));startup.info.flags=0x100;
+    startup.info.input=handles[0];startup.info.output=handles[1];startup.info.error=handles[2];startup.attributes=list;
+    ProcessInfo created;
+    if(!CreateProcessW(exe,new StringBuilder("\""+exe+"\" "+arguments),IntPtr.Zero,IntPtr.Zero,true,0x08080000,IntPtr.Zero,cwd,ref startup,out created))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    try{return Process.GetProcessById(created.pid);}finally{CloseHandle(created.thread);CloseHandle(created.process);}
+   }finally{if(initialized)DeleteProcThreadAttributeList(list);if(list!=IntPtr.Zero)Marshal.FreeHGlobal(list);if(values!=IntPtr.Zero)Marshal.FreeHGlobal(values);}
+  }
+ }
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint GetFinalPathNameByHandle(IntPtr handle,StringBuilder path,uint length,uint flags);
  public static string FinalPath(IntPtr handle){var b=new StringBuilder(32768);if(GetFinalPathNameByHandle(handle,b,(uint)b.Capacity,0)==0)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return b.ToString();}
  public static void ReplaceRecord(string source,string destination){File.Replace(source,destination,null);}
@@ -179,10 +217,10 @@ try{
   $dispatched=$true
   Write-Record (Join-Path $attempt 'dispatch.json') @{task_name=$request.task_name;instance_guid=$running.InstanceGuid;sid=$sid;session_id=$sessionId;logon_type=3;run_level=0;at=[DateTimeOffset]::Now.ToString('o')}
  }else{
-  $start=New-Object Diagnostics.ProcessStartInfo;$start.FileName=$systemPS;$start.Arguments=Task-Arguments $request;$start.WorkingDirectory=$root;$start.UseShellExecute=$false;$start.CreateNoWindow=$true
-  $process=[Diagnostics.Process]::Start($start)
+  $workerInput=Join-Path $attempt 'worker.stdin.txt';$workerOutput=Join-Path $attempt 'worker.stdout.log';$workerError=Join-Path $attempt 'worker.stderr.log'
+  $process=[SelectionEntryCapture]::StartDetached($systemPS,(Task-Arguments $request),$root,$workerInput,$workerOutput,$workerError)
   $dispatched=$true
-  Write-Record (Join-Path $attempt 'dispatch.json') @{process=@{pid=$process.Id;start_time_utc=$process.StartTime.ToUniversalTime().ToString('o')};at=[DateTimeOffset]::Now.ToString('o')}
+  Write-Record (Join-Path $attempt 'dispatch.json') @{process=@{pid=$process.Id;start_time_utc=$process.StartTime.ToUniversalTime().ToString('o')};stdio=@{mode='attempt_files_handle_allowlist';stdout=$workerOutput;stderr=$workerError};at=[DateTimeOffset]::Now.ToString('o')}
  }
  $state=@{stdout=@{offset=[long]0;decoder=$utf8.GetDecoder()};stderr=@{offset=[long]0;decoder=$utf8.GetDecoder()}}
  $handshakeDeadline=[DateTime]::UtcNow.AddSeconds($request.handshake_seconds);$completionDeadline=$null;$acknowledged=$false

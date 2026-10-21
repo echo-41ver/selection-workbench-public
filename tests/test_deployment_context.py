@@ -241,6 +241,73 @@ def check_short_path_alias_preflight(tmp_path):
         cleanup_finished_task(folder)
 
 
+def check_direct_worker_does_not_inherit_observer_pipes(tmp_path):
+    root = fixture(tmp_path)
+    probe = root / "direct-handle-probe"
+    probe.mkdir()
+    worker = probe / "worker.ps1"
+    worker.write_text(r'''
+param([string]$Root)
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+[IO.File]::WriteAllText((Join-Path $Root 'entered.json'),(@{fixture_only=$true;pid=$PID}|ConvertTo-Json))
+$deadline=[DateTime]::UtcNow.AddSeconds(15)
+while(-not [IO.File]::Exists((Join-Path $Root 'release.txt'))){
+ if([DateTime]::UtcNow -ge $deadline){[IO.File]::WriteAllText((Join-Path $Root 'expired.txt'),'fixture deadline');exit 86}
+ Start-Sleep -Milliseconds 50
+}
+[Console]::Out.WriteLine('worker stdout 中文 after observer exit')
+[Console]::Error.WriteLine('worker stderr 中文 after observer exit')
+[IO.File]::WriteAllText((Join-Path $Root 'ended.txt'),'fixture released')
+''', encoding="utf-8-sig")
+    observer = probe / "observer.ps1"
+    observer.write_text(r'''
+param([string]$Root,[string]$Worker,[string]$Entry)
+$ErrorActionPreference='Stop'
+$definition=[regex]::Match([IO.File]::ReadAllText($Entry),'(?s)Add-Type -TypeDefinition @''\r?\n(.*?)\r?\n''@')
+if(-not $definition.Success){throw 'Actual deployment capture type was not found'}
+Add-Type -TypeDefinition $definition.Groups[1].Value
+$exe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$Worker+'" -Root "'+$Root+'"'
+$process=[SelectionEntryCapture]::StartDetached($exe,$arguments,$Root,(Join-Path $Root 'worker.stdin.txt'),(Join-Path $Root 'worker.stdout.log'),(Join-Path $Root 'worker.stderr.log'))
+$deadline=[DateTime]::UtcNow.AddSeconds(8)
+while(-not [IO.File]::Exists((Join-Path $Root 'entered.json'))){if([DateTime]::UtcNow -ge $deadline){exit 71};Start-Sleep -Milliseconds 50}
+[Console]::Out.WriteLine('observer native timeout fixture')
+exit 124
+''', encoding="utf-8-sig")
+    process = subprocess.Popen([str(PS), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(observer),
+                                "-Root", str(probe), "-Worker", str(worker), "-Entry", str(root / "scripts/deployment_entry.ps1")],
+                               cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    observation = {"fixture_only": True, "worker_killed": False}
+    try:
+        code = process.wait(timeout=15)
+        observation["observer_native_exit_code"] = code
+        assert code == 124
+        assert read(probe / "entered.json")["fixture_only"] is True
+        assert not (probe / "ended.txt").exists()
+        # A native wait alone would miss inherited PIPE handles. EOF must arrive
+        # while the marked worker is still waiting for this test to release it.
+        stdout, stderr = process.communicate(timeout=2)
+        observation["pipe_eof_before_worker_release"] = True
+        assert b"observer native timeout fixture" in stdout
+        assert b"worker stdout" not in stdout and not stderr
+        assert not (probe / "ended.txt").exists()
+    finally:
+        (probe / "release.txt").write_text("release only this marked fixture", encoding="utf-8")
+        stdout, stderr = process.communicate(timeout=20)
+        (probe / "observer.stdout").write_bytes(stdout)
+        (probe / "observer.stderr").write_bytes(stderr)
+        deadline = time.monotonic() + 10
+        while not (probe / "ended.txt").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        observation["worker_released"] = (probe / "ended.txt").exists()
+        observation["worker_expired"] = (probe / "expired.txt").exists()
+        (probe / "observation.json").write_text(json.dumps(observation, indent=2), encoding="utf-8")
+    assert observation["worker_released"] and not observation["worker_expired"]
+    assert "worker stdout 中文 after observer exit" in (probe / "worker.stdout.log").read_text("utf-8-sig")
+    assert "worker stderr 中文 after observer exit" in (probe / "worker.stderr.log").read_text("utf-8-sig")
+
+
 def check_deploy_wrapper_preserves_bom_and_crlf_contract():
     data = (ROOT / "deploy.cmd").read_bytes()
     assert not data.startswith(b"\xef\xbb\xbf")
@@ -347,6 +414,9 @@ class DeploymentContextTests(unittest.TestCase):
 
     def test_short_path_alias_preflight(self):
         check_short_path_alias_preflight(self.directory)
+
+    def test_direct_worker_does_not_inherit_observer_pipes(self):
+        check_direct_worker_does_not_inherit_observer_pipes(self.directory)
 
 
 if __name__ == "__main__":
