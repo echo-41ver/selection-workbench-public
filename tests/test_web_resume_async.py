@@ -115,12 +115,23 @@ def test_thread_start_failure_releases_busy_and_leaves_durable_failure(tmp_path,
 
 
 def test_explicit_resume_cancellation_terminates_only_its_owned_child_without_env(tmp_path,monkeypatch):
-    console,_=fixture_console(tmp_path,monkeypatch);console.cancel.set()
+    console,_=fixture_console(tmp_path,monkeypatch)
     child=SimpleNamespace(poll=lambda:None)
-    monkeypatch.setattr(web.subprocess,'Popen',lambda *a,**kw:child)
+    def launch(*args,**kwargs):
+        console.cancel.set()
+        return child
+    monkeypatch.setattr(web.subprocess,'Popen',launch)
     stopped=[];monkeypatch.setattr(web.selection,'terminate_owned',lambda p:stopped.append(p))
     with pytest.raises(web.ConsoleError) as error:console.invoke(['selection.py','start'],cancellable=True)
     assert error.value.code=='CANCELLED' and stopped==[child]
+
+
+def test_already_cancelled_resume_never_spawns_a_child(tmp_path,monkeypatch):
+    console,_=fixture_console(tmp_path,monkeypatch);console.cancel.set()
+    monkeypatch.setattr(web.subprocess,'Popen',lambda *a,**k:pytest.fail('must not launch after Stop'))
+    monkeypatch.setattr(web.selection,'terminate_owned',lambda *a:pytest.fail('there is no owned child to stop'))
+    with pytest.raises(web.ConsoleError) as error:console.invoke(['selection.py','start'],cancellable=True)
+    assert error.value.code=='CANCELLED'
 
 
 def test_stop_write_error_cannot_leave_resume_busy_forever(tmp_path,monkeypatch):

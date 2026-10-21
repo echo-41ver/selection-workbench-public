@@ -76,7 +76,7 @@ def test_browser_separates_codex_progress_from_stopped_paid_api():
     code = html[html.index('function stage3Button(data)'):html.index('function excelButtons(data)')]
     script = """
 const nodes=new Map();
-const $=id=>{if(!nodes.has(id))nodes.set(id,{style:{},value:'',replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
+const $=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},value:'',replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
 let statusFresh=true,busy=false;
 function renderStage3Settings(){}
 function stage3ProviderSettings(){return undefined;}

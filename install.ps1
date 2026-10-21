@@ -455,7 +455,10 @@ Checked $python @('scripts/verify_deployment.py','--require-parity')
 Write-DeploymentStatus -Root $root -Stage '完成' -Succeeded $true -RolledBack $false
 Write-Output '部署检查通过，可以启动工作台。公司配置已按当前 Windows 用户加密；AdsPower 通过公司密钥连接。选择本机 Agent 时使用该机自己的账号。'
 } catch {
-    $failure = @{ exception_type=$_.Exception.GetType().FullName; line=$_.InvocationInfo.ScriptLineNumber; category=$_.CategoryInfo.Category.ToString(); command=$script:DeploymentCommandFailure }
+    $failure = @{ exception_type=$_.Exception.GetType().FullName; line=$_.InvocationInfo.ScriptLineNumber; category=$_.CategoryInfo.Category.ToString(); command=$script:DeploymentCommandFailure; stage=$stage }
+    $support=Join-Path $root 'scripts\deployment_support.ps1'
+    $failureMessage=$_.Exception.Message
+    if(Test-Path -LiteralPath $support){try{. $support;$failure.message=Protect-DeploymentSupportText $failureMessage}catch{$failure.message='安装未完成，诊断摘要生成失败；原始失败类型和退出码仍保留。'}}
     $restored = $false
     if ($transaction) {
         try { Restore-ProjectDeployment $transaction; $restored = $true }
@@ -464,6 +467,6 @@ Write-Output '部署检查通过，可以启动工作台。公司配置已按当
     Write-DeploymentStatus -Root $root -Stage $stage -Succeeded $false -RolledBack $restored
     [IO.File]::WriteAllText((Join-Path $root 'runtime\install-failure.json'), ($failure | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     Write-Warning "失败位置：install.ps1:$($failure.line)，异常类型：$($failure.exception_type)"
-    Write-Error "部署在【$stage】失败。项目环境恢复状态：$restored。原数据与断点保留；查看上方命令错误和 runtime/install-status.json。" -ErrorAction Continue
+    Write-Error "部署在【$stage】未完成。原数据与断点保留。请双击“导出诊断.cmd”，把诊断包交给维护者；无需查看日志或手工安装依赖。" -ErrorAction Continue
     exit 1
 }

@@ -4,7 +4,16 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const helperHtml=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
-function sandbox(value){const context=vm.createContext(value);vm.runInContext(helperHtml.slice(helperHtml.indexOf('function stage3Heartbeat('),helperHtml.indexOf('function runtimeStage3(')),context);return context;}
+function sandbox(value){
+ const context=vm.createContext(value);
+ // Load the real render dependencies, rather than replacing new UI behavior with no-ops.
+ const sourceCounts=helperHtml.split('\n').find(line=>line.startsWith('function renderSourceCounts('));
+ const secretKey=helperHtml.split('\n').find(line=>line.startsWith('const secretKey='));
+ const diagnostics=helperHtml.slice(helperHtml.indexOf('function runtimeDiagnosticSnapshot('),helperHtml.indexOf('function text(value)'));
+ assert.ok(sourceCounts&&secretKey&&diagnostics,'current render dependencies must be present');
+ vm.runInContext(helperHtml.slice(helperHtml.indexOf('function stage3Heartbeat('),helperHtml.indexOf('function runtimeStage3('))+'\n'+secretKey+'\n'+diagnostics+'\n'+sourceCounts,context);
+ return context;
+}
 
 test('preparation displays current phase after rules complete and actual detail progress',()=>{
  const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);};
@@ -114,7 +123,7 @@ test('collection status polls keep hidden controls attached across repeated rend
   const code=html.slice(html.indexOf('function render(data)'),html.indexOf('\nlet polling='));
   const nodes=new Map();
   function node(id){
-    const n={id,connected:true,children:[],hidden:false,
+    const n={id,connected:true,children:[],hidden:false,dataset:{},style:{},
       replaceChildren(){for(const child of this.children)child.connected=false;this.children=[];},
       append(...children){for(const child of children){assert.ok(child,'cannot append a missing element');child.connected=true;this.children.push(child);}},
     };
@@ -211,7 +220,7 @@ test('current lane evidence clears stale alerts and still displays real verifica
 test('third layer starts during collection and displays live queue and stop controls',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const a=html.indexOf('function stage3Button(data)'),b=html.indexOf('\n}',a)+2;
- const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
  const context=sandbox({$:get,statusFresh:true,busy:false,Math,Number,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined,stage3ResumeRequired:()=>false});
  vm.runInContext(html.slice(a,b),context);
  context.data={active:true,category_key:'task',scope:{execution_mode:'full'},stage3_control:{can_start:true,running:false,progress:{total:100,completed:40,pending:60,percent:40,rate_per_hour:60,eta_seconds:3600,rate_source:'history'}}};
@@ -224,7 +233,7 @@ test('third layer starts during collection and displays live queue and stop cont
 test('combined paid and Codex completion shows full progress without stale ETA',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
- const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
  const context=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);
  context.data={category_key:'fixture',stage3_control:{can_start:false,progress:{total:10855,completed:10855,api_completed:5976,codex_completed:4879,pending:0,pending_after_codex:0,eta_seconds:1616}}};
@@ -240,7 +249,7 @@ test('combined paid and Codex completion shows full progress without stale ETA',
 test('cold candidate progress never unlocks paid action while collection is active',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
- const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
  const context=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);context.data={active:true,category_key:'fixture',stage3_control:{can_start:true,progress:{counting:true}}};
  vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,true);
@@ -251,7 +260,7 @@ test('cold candidate progress never unlocks paid action while collection is acti
 test('old authorized retry success is pending free review instead of current API completion',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
- const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
  const context=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});vm.runInContext(code,context);
  context.data={category_key:'fixture',stage3_control:{can_start:false,progress:{total:1,completed:0,api_completed:0,pending:1,pending_after_codex:1,runnable_pending:0,billing_retry_consumed_pairs:1}}};
  vm.runInContext('stage3Button(data)',context);
@@ -264,7 +273,7 @@ test('old authorized retry success is pending free review instead of current API
 test('changed candidate input retains dated completion snapshot without claiming current zero queue',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
- const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
  const context=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel:()=>{},renderStage3Settings:()=>{},stage3ProviderSettings:()=>undefined});vm.runInContext(code,context);
  for(const flag of ['refreshing','current_inputs_pending']){
   context.data={category_key:'fixture',stage3_control:{can_start:true,progress:{total:10855,completed:10855,api_completed:5976,codex_completed:4879,pending_after_codex:0,eta_seconds:0,updated_at:1791566063,[flag]:true}}};

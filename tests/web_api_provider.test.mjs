@@ -6,7 +6,7 @@ const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 
 test('form submits the matching endpoint, model and key, then clears the key',()=>{
  const values={'category':'钢笔','amazon':'20','quantity':'200','worker-count':'4','new-same-limit':'5',
-  'bestsellers-url':'','api-key':'TEST_ONLY_CUSTOM_KEY','api-base-url':'http://127.0.0.1:8080/v1','api-model':'test-model'};
+  'bestsellers-url':'','amazon-route-mode':'DIRECT','api-key':'TEST_ONLY_CUSTOM_KEY','api-base-url':'http://127.0.0.1:8080/v1','api-model':'test-model'};
  const nodes=Object.fromEntries(Object.entries(values).map(([k,value])=>[k,{value}]));
  let callback,submitted;
  nodes['task-form']={addEventListener:(_event,fn)=>callback=fn};
@@ -17,13 +17,14 @@ test('form submits the matching endpoint, model and key, then clears the key',()
  assert.equal(submitted.body.api_base_url,values['api-base-url']);
  assert.equal(submitted.body.api_model,'test-model');
  assert.equal(submitted.body.api_key,'TEST_ONLY_CUSTOM_KEY');
+ assert.equal(submitted.body.amazon_route_mode,'DIRECT');
  assert.equal(nodes['api-key'].value,'');
 });
 
 test('generation retry retains the user-selected provider',()=>{
  let callback,submitted;
  const nodes={'retry-generation':{addEventListener:(_event,fn)=>callback=fn},
-  'retry-listing-url':{value:''},'bestsellers-url':{value:''},'new-same-limit':{value:'5'},'api-key':{value:'TEST_ONLY_KEY'},
+  'retry-listing-url':{value:''},'bestsellers-url':{value:''},'amazon-route-mode':{value:'DIRECT'},'new-same-limit':{value:'5'},'api-key':{value:'TEST_ONLY_KEY'},
   'api-base-url':{value:'http://localhost:8080/v1'},'api-model':{value:'test-model'}};
  const context=vm.createContext({$:id=>nodes[id],lastStatus:{active:false,scope:{category:'钢笔',
   amazon_count:20,per_keyword:200,worker_count:4}},action:(endpoint,body)=>submitted=body});
@@ -31,4 +32,5 @@ test('generation retry retains the user-selected provider',()=>{
  callback();assert.equal(submitted.api_base_url,'http://localhost:8080/v1');
  assert.equal(submitted.api_model,'test-model');assert.equal(nodes['api-key'].value,'');
  assert.equal(submitted.commercial.same_limit,5);assert.equal(submitted.commercial.same_operator,'lt');
+ assert.equal(submitted.amazon_route_mode,'DIRECT');
 });

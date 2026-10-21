@@ -14,8 +14,10 @@ jobs:
       - run: python -m pip install -r requirements.lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
       - run: python -m pip install --no-deps -e ".[test]"
       - run: npm ci
+      - run: npx playwright install chromium
       - run: python -m pytest -q
         env:
           PYTHONUTF8: '1'
           DEEPSEEK_API_KEY: ''
       - run: npm run check
+      - run: npm test

@@ -40,7 +40,7 @@ test('finished reviews still show Excel pending until latest publication is deli
 test('API historical speed is not shown as the ETA for active free review',()=>{
  const nodes=new Map();
  const get=id=>{
-  if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(){},replaceChildren(){}});
+  if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},setAttribute(){},replaceChildren(){}});
   return nodes.get(id);
  };
  const ctx=sandbox({$:get,statusFresh:true,busy:false,codexReviewPanel(){},renderStage3Settings(){},stage3ProviderSettings:()=>undefined});

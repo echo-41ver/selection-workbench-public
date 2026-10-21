@@ -90,6 +90,7 @@ def test_http403_preserves_reason_without_exposing_credentials(monkeypatch,body,
 
 
 def test_web_generation_keeps_provider_for_edits_without_persisting_key(tmp_path, monkeypatch):
+    from offline_preparation import completed_amazon_snapshot,extract_complete_visual
     console = web.Console(tmp_path);calls=[]
     def invoke(args, **kwargs):
         calls.append((args, dict(kwargs['env'])))
@@ -99,9 +100,9 @@ def test_web_generation_keeps_provider_for_edits_without_persisting_key(tmp_path
             Path(args[args.index('--output')+1]).write_text(json.dumps(category))
         elif len(args)>1 and 'collect_amazon_search_frontend.mjs' in args[1]:
             category=json.loads(Path(args[args.index('--config')+1]).read_text('utf-8'))
-            Path(args[args.index('--output')+1]).write_text(json.dumps({'records':[
-                {'asin':'B000000001','rank':1,'title':'Cordless power drill kit'}], 'record_count':1,
-                'source_url':category['amazon']['bestsellers_url'],'category_key':category['category_key']}))
+            Path(args[args.index('--output')+1]).write_text(json.dumps(completed_amazon_snapshot(category)))
+        elif 'extract_match_criteria.py' in args[0]:
+            extract_complete_visual(args)
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(console, 'invoke', invoke)
     monkeypatch.setattr(console, 'explain_file', lambda source,*args: source)

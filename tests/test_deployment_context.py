@@ -18,6 +18,8 @@ def fixture(tmp_path: Path, *, install_exit: int = 0, web_exit: int = 0, delay: 
     root = tmp_path / "工具夹具 中文 空格"
     (root / "scripts").mkdir(parents=True)
     shutil.copy2(ROOT / "scripts/deployment_entry.ps1", root / "scripts/deployment_entry.ps1")
+    for name in ("deployment_support.ps1", "export_deployment_diagnostics.ps1"):
+        shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
     shutil.copy2(ROOT / "deploy.cmd", root / "deploy.cmd")
     (root / "FIXTURE_ONLY.txt").write_text("Observer/coordinator fixture only; no dependencies or business validation.", encoding="utf-8")
     (root / "install.ps1").write_text(

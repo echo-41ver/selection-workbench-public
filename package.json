@@ -5,6 +5,7 @@
   "engines": {"node": ">=20"},
   "dependencies": {"playwright": "1.63.0"},
   "scripts": {
-    "check": "node --check scripts/collect_amazon_search_frontend.mjs && node --check scripts/temu_flower_collect.mjs"
+    "check": "node --check scripts/collect_amazon_search_frontend.mjs && node --check scripts/temu_flower_collect.mjs",
+    "test": "node --test"
   }
 }

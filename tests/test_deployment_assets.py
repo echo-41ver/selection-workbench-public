@@ -138,11 +138,15 @@ function Get-AuthenticodeSignature { param($LiteralPath) return [pscustomobject]
 function Start-Process {
  param($FilePath,$ArgumentList,$WindowStyle,[switch]$Wait,[switch]$PassThru)
  $script:CapturedArguments=@($ArgumentList)
- return [pscustomobject]@{ExitCode=0}
+ $process=[pscustomobject]@{ExitCode=0;Handle=[IntPtr]1;Id=4242;StartTime=(Get-Date)}
+ $process | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value {$script:FixtureWaited=$true}
+ $process | Add-Member -MemberType ScriptMethod -Name Refresh -Value {$script:FixtureRefreshed=$true}
+ $process | Add-Member -MemberType ScriptMethod -Name Dispose -Value {$script:FixtureDisposed=$true}
+ return $process
 }
 function Refresh-Path { }
 Install-FixedRuntime 'python'
-ConvertTo-Json -InputObject @($script:CapturedArguments) -Compress
+@{arguments=@($script:CapturedArguments);waited=[bool]$script:FixtureWaited;refreshed=[bool]$script:FixtureRefreshed;disposed=[bool]$script:FixtureDisposed}|ConvertTo-Json -Compress
 '''
     script = tmp_path / 'probe.ps1'
     script.write_text(harness, encoding='utf-8-sig')
@@ -150,7 +154,9 @@ ConvertTo-Json -InputObject @($script:CapturedArguments) -Compress
                             env={**os.environ, 'INSTALL_FILE': str(ROOT / 'install.ps1'), 'PROBE_ROOT': str(tmp_path)},
                             capture_output=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    arguments = json.loads(result.stdout.decode('utf-8-sig'))
+    output = json.loads(result.stdout.decode('utf-8-sig'))
+    assert output['waited'] and output['refreshed'] and output['disposed']
+    arguments = output['arguments']
     parse = ctypes.windll.shell32.CommandLineToArgvW
     parse.argtypes = (ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int))
     parse.restype = ctypes.POINTER(ctypes.c_wchar_p)

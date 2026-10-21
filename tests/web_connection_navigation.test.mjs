@@ -73,7 +73,7 @@ test('rule application feedback is independent and never overwrites typed requir
 });
 
 test('cold page controls accept absent task state before the first status request',()=>{
- const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('const excelOpening='));
  const context=sandbox({$:get,statusFresh:false,busy:false,renderStage3Settings(){},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);
@@ -85,7 +85,7 @@ test('cold page controls accept absent task state before the first status reques
 });
 
 test('Codex pool status stays separate from full candidate progress and reports Excel publishing',()=>{
- const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};
  const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('const excelOpening='));
  const context=sandbox({$:get,statusFresh:true,busy:false,renderStage3Settings(){},stage3ProviderSettings:()=>undefined});
  vm.runInContext(code,context);

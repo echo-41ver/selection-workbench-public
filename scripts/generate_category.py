@@ -119,7 +119,7 @@ def model_json(prompt: str, *, max_tokens: int = 8000, retry_truncated: bool = T
             return _model_json(prompt, max_tokens=max_tokens, retry_truncated=retry_truncated, images=images, _evidence=evidence)
     finally:
         if MODEL_PROGRESS_REPORTER:
-            try:MODEL_PROGRESS_REPORTER(model_evidence_id=evidence.record['logical_call_id'], model_evidence_state=evidence.storage_state,
+            try:MODEL_PROGRESS_REPORTER(model_waiting=False,model_evidence_id=evidence.record['logical_call_id'], model_evidence_state=evidence.storage_state,
                 **({'model_evidence_error_code': 'MODEL_EVIDENCE_WRITE_FAILED'} if evidence.storage_state != 'recorded' else {}))
             except Exception:pass
 

@@ -220,4 +220,15 @@ try{
  }
  $exitCode=70
 }finally{if($entryLock){$entryLock.Dispose()}}
+if($exitCode -ne 0){
+ $support=Join-Path $PSScriptRoot 'deployment_support.ps1'
+ if(Test-Path -LiteralPath $support){
+  try{
+   . $support
+   $failedStage=if($result -and $result.web -and [int]$result.web.native_exit_code -ne 0){'启动工作台'}else{''}
+   $message=if($result -and $result.error){[string]$result.error}elseif($request){$record=Read-Record (Join-Path $request.attempt_dir 'parent-error.json');[string]$record.error}else{''}
+   Show-DeploymentFailure -Root $root -NativeExitCode $exitCode -Stage $failedStage -Message $message
+  }catch{[Console]::Error.WriteLine('部署未完成。请双击程序目录中的导出诊断.cmd，将诊断包交给维护者。')}
+ }else{[Console]::Error.WriteLine('部署文件不完整，请重新下载完整公司包并完整解压后运行 deploy.cmd。')}
+}
 exit $exitCode

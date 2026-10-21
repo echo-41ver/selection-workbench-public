@@ -227,6 +227,7 @@ def test_web_uses_local_generated_summary_without_a_second_model_request(tmp_pat
     from pathlib import Path
     from types import SimpleNamespace
     from selection_automation.compact_authoring import add_summary
+    from offline_preparation import completed_amazon_snapshot,extract_complete_visual
     console=web.Console(tmp_path)
     def invoke(args,**kwargs):
         if 'generate_category.py' in args[0]:
@@ -235,9 +236,9 @@ def test_web_uses_local_generated_summary_without_a_second_model_request(tmp_pat
             Path(args[args.index('--output')+1]).write_text(json.dumps(add_summary(category)),encoding='utf-8')
         elif len(args)>1 and 'collect_amazon_search_frontend.mjs' in args[1]:
             category=json.loads(Path(args[args.index('--config')+1]).read_text('utf-8'))
-            Path(args[args.index('--output')+1]).write_text(json.dumps({'records':[
-                {'asin':'B000000001','rank':1,'title':'Cordless power drill kit'}], 'record_count':1,
-                'source_url':category['amazon']['bestsellers_url'],'category_key':category['category_key']}))
+            Path(args[args.index('--output')+1]).write_text(json.dumps(completed_amazon_snapshot(category)))
+        elif 'extract_match_criteria.py' in args[0]:
+            extract_complete_visual(args)
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(console,'invoke',invoke)
     def no_explanation(*args,**kwargs):pytest.fail('generated semantic rules must not incur an explanation call')

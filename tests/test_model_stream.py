@@ -70,11 +70,13 @@ def test_model_request_uses_stream_and_long_read_window_without_changing_provide
     (URLError(TimeoutError('connect timed out')),'MODEL_CONNECT_TIMEOUT'),
     (URLError('DNS lookup failed'),'MODEL_NETWORK_ERROR')])
 def test_timeouts_and_network_failures_are_distinct_and_never_retried(monkeypatch,error,code):
-    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY');calls=[]
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY');calls=[];updates=[]
+    monkeypatch.setattr(generator,'MODEL_PROGRESS_REPORTER',lambda **fields:updates.append(fields))
     def fail(*args,**kwargs):calls.append(True);raise error
     monkeypatch.setattr(generator,'open_model_url',fail)
     with pytest.raises(generator.CategoryGenerationError) as captured:generator.model_json('test')
     assert captured.value.code==code and len(calls)==1
+    assert updates[0]['model_waiting'] is True and updates[-1]['model_waiting'] is False
 
 
 def test_stream_service_error_cannot_echo_key(monkeypatch):

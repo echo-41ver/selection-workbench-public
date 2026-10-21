@@ -41,19 +41,25 @@ def test_failed_new_generation_keeps_previous_draft_visible_after_restart(tmp_pa
 def test_new_usable_draft_is_not_replaced_by_previous_when_explanation_fails(tmp_path,monkeypatch,explanation_fails):
     from test_generic_agent_entry import authored_case
     from selection_automation.identity_policy import compile_policy
+    from offline_preparation import completed_amazon_snapshot,extract_complete_visual
     console=web.Console(tmp_path);console.busy=True
     old=tmp_path/'old.json';old.write_text('old reviewed bytes',encoding='utf8')
     previous={'draft':{'id':'old'},'draft_path':old,'draft_amazon_path':None,'draft_plan_path':None}
     new=compile_policy(authored_case('new_cap','新杯盖','threaded join','snap join'))
+    calls=[];before_explanation={}
     def invoke(argv,**kwargs):
+        calls.append(argv)
         if 'generate_category.py' in argv[0]:
             Path(argv[argv.index('--output')+1]).write_text(json.dumps(new),encoding='utf8')
+        elif len(argv)>1 and 'collect_amazon_search_frontend.mjs' in argv[1]:
+            category=web.selection.read(Path(argv[argv.index('--config')+1]))
+            web.selection.save(Path(argv[argv.index('--output')+1]),completed_amazon_snapshot(category,'Fixture cup lid'))
+        elif 'extract_match_criteria.py' in argv[0]:
+            extract_complete_visual(argv)
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(console,'invoke',invoke)
-    amazon=tmp_path/'a.json';amazon.write_text('{}',encoding='utf8')
-    plan=tmp_path/'p.json';plan.write_text('{"keywords":[],"coverage":{}}',encoding='utf8')
-    monkeypatch.setattr(console,'collect_amazon_and_plan',lambda *a:(amazon,plan))
     def explanation(source,*args):
+        before_explanation.update(web.selection.read(source))
         if explanation_fails:raise web.ConsoleError('EXPLANATION_FAILED','离线模拟解释失败')
         return source
     monkeypatch.setattr(console,'explain_file',explanation)
@@ -61,6 +67,42 @@ def test_new_usable_draft_is_not_replaced_by_previous_when_explanation_fails(tmp
     assert console.draft['category_name']=='新杯盖' and console.draft['id']!='old'
     generated=json.loads(console.draft_path.read_text('utf8'))
     assert console.draft_path!=old and generated['category_key'].startswith('new_cap_')
-    assert all(generated[layer]==new[layer] for layer in ('stage1','stage2','stage3'))
+    assert all(generated[layer]==before_explanation[layer] for layer in ('stage1','stage2','stage3'))
+    assert all(generated[layer]==new[layer] for layer in ('stage1','stage2'))
+    assert all(generated['stage3'][key]==value for key,value in new['stage3'].items())
+    assert web.Console.visual_preparation_complete(generated,web.selection.read(console.draft_amazon_path))
+    assert sum('generate_category.py' in row[0] for row in calls)==1
+    assert sum('extract_match_criteria.py' in row[0] for row in calls)==1
     assert old.read_text('utf8')=='old reviewed bytes'
     assert not console.busy
+
+
+@pytest.mark.parametrize('failure',['nonzero','incomplete'])
+def test_unfinished_visual_preparation_keeps_previous_and_never_explains(tmp_path,monkeypatch,failure):
+    from test_generic_agent_entry import authored_case
+    from selection_automation.identity_policy import compile_policy
+    from offline_preparation import completed_amazon_snapshot,extract_complete_visual
+    console=web.Console(tmp_path);console.busy=True
+    old=tmp_path/'old.json';old.write_text('reviewed old rules',encoding='utf-8')
+    saved={'id':'previous-reviewed','category_name':'旧品类'}
+    previous={'draft':saved,'draft_path':old,'draft_amazon_path':None,'draft_plan_path':None}
+    category=compile_policy(authored_case('new_cap','新杯盖','threaded join','snap join'))
+    def invoke(argv,**kwargs):
+        if 'generate_category.py' in argv[0]:
+            web.selection.save(Path(argv[argv.index('--output')+1]),category)
+        elif len(argv)>1 and 'collect_amazon_search_frontend.mjs' in argv[1]:
+            current=web.selection.read(Path(argv[argv.index('--config')+1]))
+            web.selection.save(Path(argv[argv.index('--output')+1]),completed_amazon_snapshot(current,'Fixture cup lid'))
+        elif 'extract_match_criteria.py' in argv[0]:
+            if failure=='nonzero':return SimpleNamespace(returncode=2)
+            partial=extract_complete_visual(argv)
+            partial['match_criteria']['image_review']['completed_images']=0
+            web.selection.save(Path(argv[argv.index('--category')+1]),partial)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(console,'invoke',invoke)
+    monkeypatch.setattr(console,'explain_file',lambda *a:pytest.fail('unfinished images cannot reach explanation'))
+    console._start({'category_name':'新杯盖','amazon_count':1,'per_keyword':2,'api_key':'test-placeholder'},previous)
+    assert console.draft==saved and console.draft_path==old
+    assert console.generation_error['code']=='VISUAL_PREPARATION_INCOMPLETE'
+    assert console.preparation_path and console.preparation_path!=old
+    assert old.read_text('utf-8')=='reviewed old rules' and not console.busy

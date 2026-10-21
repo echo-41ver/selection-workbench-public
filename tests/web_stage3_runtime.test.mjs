@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
 const code=html.slice(html.indexOf('function stage3Button(data)'),html.indexOf('function codexReviewPanel(data)'));
-function view(){const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'liquid_d1',style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel(){},renderStage3Settings(){},stage3ProviderSettings:()=>undefined});vm.runInContext(html.slice(html.indexOf('function stage3ActivityText('),html.indexOf('function runtimeStage3('))+code,context);return {get,context};}
+function view(){const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{value:'liquid_d1',dataset:{},style:{},replaceChildren(){},setAttribute(){}});return nodes.get(id);};const context=vm.createContext({$:get,statusFresh:true,busy:false,codexReviewPanel(){},renderStage3Settings(){},stage3ProviderSettings:()=>undefined});vm.runInContext(html.slice(html.indexOf('function stage3ActivityText('),html.indexOf('function runtimeStage3('))+code,context);return {get,context};}
 test('initial page before the first status response initializes controls',()=>{const {get,context}=view();assert.doesNotThrow(()=>vm.runInContext('stage3Button(null)',context));assert.equal(get('start-stage3').disabled,true);});
 
 test('Agent speed and ETA use Agent groups instead of API history',()=>{
