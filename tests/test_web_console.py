@@ -355,8 +355,12 @@ def test_resume_uses_current_saved_task_and_never_regenerates_or_enables_paid_an
     data=base/'temu/products.jsonl';data.parent.mkdir();data.write_text('existing-data')
     monkeypatch.setattr(console,'owner',lambda:None)
     calls=[]
-    monkeypatch.setattr(console,'invoke',lambda argv:(calls.append(argv) or SimpleNamespace(returncode=0)))
+    monkeypatch.setattr(console,'invoke',lambda argv,**kwargs:(calls.append(argv) or SimpleNamespace(returncode=0)))
+    monkeypatch.setattr(console,'registered_owner',lambda key:{'pid':101,'created':123,'category_key':key})
     assert console.resume_current({})['category_key']=='current'
+    deadline=time.monotonic()+3
+    while console.busy and time.monotonic()<deadline:time.sleep(.01)
+    assert not console.busy
     assert calls[0][1:]==['start','--preserve-prepared','--category',str(base/'category.json')]
     assert '--paid' not in calls[0]
     assert data.read_text()=='existing-data'

@@ -11,7 +11,7 @@ import socket
 import subprocess
 import time
 from urllib.parse import urlsplit
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import build_opener, ProxyHandler, Request, HTTPRedirectHandler
 
 from .process_lock import ProcessLock
@@ -23,14 +23,21 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
+class _UnavailableMetadata(OSError):
+    """A silent or non-HTTP listener must not consume each protocol timeout."""
+
+
 def _json(base, path, payload=None):
     request = Request(base + path, data=None if payload is None else json.dumps(payload).encode(),
                       headers={'Content-Type': 'application/json'})
     try:
         with build_opener(ProxyHandler({}), _NoRedirect()).open(request, timeout=1) as response:
             data = response.read(2 * 1024 * 1024 + 1)
-    except HTTPException as error:
-        raise OSError('Local listener does not provide valid HTTP metadata') from error
+    except (HTTPException, TimeoutError, ConnectionError) as error:
+        raise _UnavailableMetadata('Local listener does not provide valid HTTP metadata') from error
+    except URLError as error:
+        if isinstance(error, HTTPError):raise
+        raise _UnavailableMetadata('Local listener does not provide valid HTTP metadata') from error
     if len(data) > 2 * 1024 * 1024:
         raise ValueError('Local model metadata is too large')
     return json.loads(data)
@@ -104,9 +111,20 @@ def _describe(base, row):
 
 
 def _probe(base):
-    rows = _tags(base)
-    if rows is not None:
-        return {'base_url': base, 'source': 'Ollama', 'rows': rows}
+    try:
+        data=_json(base,'/api/tags')
+        if isinstance(data,dict) and isinstance(data.get('models'),list):
+            return {'base_url':base,'source':'Ollama','rows':data['models']}
+    except _UnavailableMetadata:
+        return None
+    except HTTPError as error:
+        if error.code in (401,403):
+            return {'base_url':base,'source':'需授权的本地服务','rows':[],'authentication_required':True}
+    except (OSError,ValueError):
+        pass
+    from .local_d1 import discover,SOURCE
+    if model := discover(base,_json):
+        return {'base_url':base,'source':SOURCE,'rows':[model]}
     for path, source, key in (('/api/v1/models', 'LM Studio', 'models'),
                               ('/api/v0/models', 'LM Studio', 'data'),
                               ('/v1/models', 'OpenAI 兼容本地服务', 'data')):
@@ -124,6 +142,8 @@ def _probe(base):
 
 def _api_models(service):
     base, source = service['base_url'], service['source']
+    from .local_d1 import SOURCE
+    if source==SOURCE:return service['rows'],[]
     result, candidates = [], []
     props = None
     if source != 'LM Studio':
@@ -159,10 +179,17 @@ def _api_models(service):
     return result, candidates
 
 
-def catalog(root, start=False, *, full=False, cancel=None):
+def catalog(root, start=False, *, full=False, cancel=None, preferred=None):
     endpoints = _endpoints()
+    if preferred:
+        address=urlsplit(preferred)
+        base=address._replace(path='',query='',fragment='').geturl().rstrip('/')
+        if address.hostname in {'localhost','127.0.0.1','::1'}:
+            endpoints=[base]+[item for item in endpoints if item!=base]
     services, partial = [], False
-    pool = ThreadPoolExecutor(max_workers=12)
+    # Listening ports include silent/non-HTTP services. Bound each first HTTP
+    # probe once, and keep a late model listener from sitting behind 80 ports.
+    pool = ThreadPoolExecutor(max_workers=min(32,max(1,len(endpoints))))
     pending = [pool.submit(_probe, base) for base in endpoints]
     try:
         for future in as_completed(pending, timeout=None if full else 8):
@@ -248,7 +275,10 @@ def catalog(root, start=False, *, full=False, cancel=None):
         grouped[identity]['connections'].append(model)
     models = list(grouped.values())
     connected = any(not service.get('authentication_required') for service in services)
-    message = ('已读取本机实际安装的看图模型；检测不会发送分析请求。' if models else
+    from .local_d1 import SOURCE
+    native_d1=any(model['source']==SOURCE for model in models)
+    message = ('D1 原生图片决策接口已连接；检测未发送推理请求，实际图片推理尚待验证。' if native_d1 else
+               '已读取本机实际安装的看图模型；检测不会发送分析请求。' if models else
                '本机模型服务已连接，但没有检测到已安装的看图模型；其他模型及授权状态见扫描结果。' if connected else
                '本机服务暂未就绪，请检查服务启动日志；其他分析方案不受影响。' if _installed() else
                '未安装可自动启动的 Ollama 服务；可填写自定义本地服务，或选择 API / Agent 分析。')
@@ -259,19 +289,34 @@ def catalog(root, start=False, *, full=False, cancel=None):
 
 def repair_provider(root, provider, allow_default=False):
     address = urlsplit(provider['base_url'])
+    from .local_d1 import discover,native_endpoint,SOURCE
+    if native_endpoint({'mode':'local_model',**provider}):
+        base=address._replace(path='',query='',fragment='').geturl().rstrip('/')
+        model=discover(base,_json)
+        if model and model['id']==provider['model']:
+            # An explicitly selected native endpoint needs only its own health
+            # and contract, not a wait on every unrelated Windows listener.
+            return {'models':[{**model,'connections':[model]}], 'candidates':[],
+                    'service_connected':True,'started':False,'partial':False,
+                    'services':[{'base_url':base,'source':SOURCE}],
+                    'provider':{**provider,'base_url':model['base_url'],'protocol':model['protocol']},
+                    'message':'D1 原生图片决策接口已连接；实际图片推理尚待验证。'}
     legacy_default = (address.port == 18181 and address.path.rstrip('/') == '/v1/systemone'
                       and provider['model'] == 'd1-3b' and provider['protocol'] == 'decisions')
     eligible = legacy_default or address.port == 11434 or allow_default
-    data = catalog(root, start=eligible)
+    data = catalog(root, start=eligible,preferred=provider['base_url'])
     connections = [connection for model in data['models'] for connection in model.get('connections', [model])]
     matching = sorted([model for model in connections if model['id'] == provider['model']],
                       key=lambda model: model['base_url'].rstrip('/') != provider['base_url'].rstrip('/'))
     selected = (matching[0] if matching else data['models'][0] if data['models'] and (legacy_default or allow_default) else None)
     data['provider'] = None
-    if eligible and selected:
+    native_exact=bool(selected and selected.get('source')==SOURCE
+                      and selected['base_url'].rstrip('/')==provider['base_url'].rstrip('/'))
+    if (eligible or native_exact) and selected:
         data['provider'] = {**provider, 'model': selected['id'],
                             **{key: selected[key] for key in ('base_url', 'protocol')}}
-        data['message'] = f"已连接{selected.get('display_name', '本机看图模型')}，点击开始分析后使用。"
+        data['message'] = ('D1 原生图片决策接口已连接；实际图片推理尚待验证。' if selected.get('source')==SOURCE else
+                           f"已连接{selected.get('display_name', '本机看图模型')}，点击开始分析后使用。")
     elif data['models']:
         data['message'] = '已发现其他可用的本地看图模型；保留你指定的服务和模型，可在下拉框中选择。'
     return data

@@ -274,6 +274,7 @@ class Console:
         self.pending_key=None
         self.workspace_stop_pending=False
         self.workspace_stop_started=None
+        self.resume_launch_active=False
         saved_view=selection.read(root/'runtime/web-console/state.json',{})
         if self.key and not saved_view.get('explicitly_restored'):
             from selection_automation.stage3_progress import controller_alive
@@ -509,7 +510,7 @@ class Console:
             for i,p in enumerate(plan)])
         self.persist_draft()
 
-    def invoke(self, argv, *, env=None, timeout=30):
+    def invoke(self, argv, *, env=None, timeout=30, cancellable=False):
         if argv and argv[0]=='node':
             if any(Path(arg).name=='collect_amazon_search_frontend.mjs' for arg in argv):
                 from selection_automation.browser_transport import amazon_environment
@@ -521,7 +522,7 @@ class Console:
         child=subprocess.Popen(command,cwd=self.root,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         deadline=time.monotonic()+timeout
         while child.poll() is None:
-            if env is not None and self.cancel.is_set():
+            if (env is not None or cancellable) and self.cancel.is_set():
                 selection.terminate_owned(child)
                 raise ConsoleError('CANCELLED','已停止')
             if time.monotonic()>deadline:
@@ -1858,18 +1859,75 @@ class Console:
         if body:
             raise ConsoleError('INVALID_INPUT','继续任务无需重新填写参数')
         with self.lock:
-            if self.busy or self.owner():
+            if self.busy or self.stage3_busy or self.workspace_stop_pending or self.owner():
                 raise ConsoleError('TASK_BUSY','任务仍在运行或退出中，请稍后重试',409)
             key,_ = self.current_run_key()
             if not key:key=selection.read(self.root/'runtime/last_run.json',{}).get('category_key')
             if not key:
                 raise ConsoleError('NO_TASK','没有可继续的任务，请先新建任务',409)
             base,category = self.history_base(key)
-            result = self.invoke([str(self.root/'scripts/selection.py'),'start','--preserve-prepared','--category',str(base/'category.json')])
-            if result.returncode or selection.read(base/'status.json',{}).get('状态')=='启动失败':
-                raise ConsoleError('RESUME_FAILED','继续启动失败，已保留数据和断点，请查看准备环境状态',409)
-            self.key=key; self.draft_used=True; self.phase='正在继续原任务，保留已采集数据'
-            return {'ok':True,'phase':self.phase,'category_key':key}
+            self.key=key; self.draft_used=True; self.busy=True; self.resume_launch_active=True; self.cancel.clear()
+            self.phase='继续请求已提交，正在启动后台程序；尚未确认运行'
+            queued_phase=self.phase
+            job={'id':uuid.uuid4().hex,'category_key':key,'requested_at':time.time()}
+            try:
+                self.record_resume_launch(base,job,'queued')
+                threading.Thread(target=self._resume_current,args=(base,job),daemon=True).start()
+            except Exception:
+                self.busy=False;self.resume_launch_active=False;self.phase='继续启动失败，启动线程未创建；已保留数据和断点'
+                selection.request_task_stop(base)
+                self.record_resume_launch(base,job,'failed',error_code='THREAD_START_FAILED',message=self.phase)
+                raise ConsoleError('RESUME_FAILED',self.phase,500) from None
+            return {'ok':True,'phase':queued_phase,'category_key':key,'launch_id':job['id'],'launch_pending':True}
+
+    def record_resume_launch(self,base,job,state,**fields):
+        """Keep launch evidence without recording credentials or command lines."""
+        row={**job,'state':state,'updated_at':time.time(),**fields}
+        selection.save(base/'resume_launch.json',row)
+        folder=base/'logs';folder.mkdir(parents=True,exist_ok=True)
+        with (folder/'resume_launch.jsonl').open('a',encoding='utf-8') as stream:
+            stream.write(json.dumps(row,ensure_ascii=False)+'\n');stream.flush()
+        return row
+
+    def _resume_current(self,base,job):
+        key=job['category_key']
+        try:
+            if self.cancel.is_set():raise ConsoleError('CANCELLED','继续启动已取消，数据和断点已保留')
+            self.record_resume_launch(base,job,'launching')
+            result=self.invoke([str(self.root/'scripts/selection.py'),'start','--preserve-prepared',
+                                '--category',str(base/'category.json')],timeout=90,cancellable=True)
+            if self.cancel.is_set():raise ConsoleError('CANCELLED','继续启动已取消，数据和断点已保留')
+            if result.returncode:
+                raise ConsoleError('RESUME_EXIT_FAILED',f'继续启动失败（退出码 {result.returncode}），数据和断点已保留')
+            owner=self.registered_owner(key)
+            if self.cancel.is_set():raise ConsoleError('CANCELLED','继续启动已取消，数据和断点已保留')
+            if not owner:
+                raise ConsoleError('OWNER_NOT_REGISTERED','继续启动失败：监督进程未登记，数据和断点已保留')
+            with self.lock:
+                if self.cancel.is_set():raise ConsoleError('CANCELLED','继续启动已取消，数据和断点已保留')
+                self.record_resume_launch(base,job,'running',owner={'pid':owner['pid'],'created':owner['created']})
+                self.phase='已确认原任务监督进程启动，保留已采集数据和断点'
+        except ConsoleError as exc:
+            selection.request_task_stop(base)
+            cancelled=exc.code=='CANCELLED' or self.cancel.is_set()
+            self.phase=('继续启动已取消，数据和断点已保留' if cancelled else exc.message)
+            self.record_resume_launch(base,job,'cancelled' if cancelled else 'failed',error_code=exc.code,message=self.phase)
+            if not cancelled:
+                selection.save(base/'status.json',{'状态':'继续启动失败，已请求停止','原因':self.phase,
+                    '阶段':{'resume':{'状态':'启动失败','错误码':exc.code,'日志':str(base/'logs/resume_launch.jsonl')}}})
+        except Exception as exc:
+            selection.request_task_stop(base)
+            self.phase='继续启动失败，已请求停止；数据和断点已保留，请查看启动记录'
+            self.record_resume_launch(base,job,'failed',error_code='RESUME_FAILED',error_type=type(exc).__name__,message=self.phase)
+            selection.save(base/'status.json',{'状态':'继续启动失败，已请求停止','原因':self.phase,
+                '阶段':{'resume':{'状态':'启动失败','错误码':'RESUME_FAILED','日志':str(base/'logs/resume_launch.jsonl')}}})
+        finally:
+            # The CLI may have cleared an earlier STOP while cancellation arrived.
+            # Reassert all cooperative gates; never kill an unrelated scheduled host.
+            try:
+                if self.cancel.is_set():selection.request_task_stop(base)
+            finally:
+                with self.lock:self.busy=False;self.resume_launch_active=False
 
     def retry_preparation(self, body):
         with self.lock:
@@ -1906,6 +1964,12 @@ class Console:
                     else:self.phase='停止中'
                     return {'ok':True,'phase':self.phase}
                 raise ConsoleError('NO_ACTIVE_TASK','没有可换session的任务',409)
+            if name=='stop' and self.resume_launch_active:
+                # A resume job must remain cancellable before it has an owner.
+                # Waiting for a second CLI here would block HTTP status and Stop.
+                selection.request_task_stop(self.root/'runs'/key)
+                self.phase='停止中：正在取消启动并保留任务断点'
+                return {'ok':True,'phase':self.phase}
             if name!='stop':
                 if not owner or (self.root/'runs'/key/'STOP').exists():
                     raise ConsoleError('NO_ACTIVE_TASK','当前没有运行中的采集监督器，请先启动采集任务',409)
@@ -2036,7 +2100,7 @@ class Console:
                 all(worker.get('status')=='WORKER_COMPLETE' for worker in workers) and
                 type(target) is int and target>0 and amazon.get('status')=='COMPLETE' and
                 amazon.get('details_complete') is True and len(amazon.get('records') or [])>=target)
-            if collection_complete:phase='全部采集已完成'
+            if collection_complete and not self.resume_launch_active:phase='全部采集已完成'
         def tone(value):
             if not isinstance(value,dict): return 'neutral'
             state=' '.join(str(value.get(field) or '') for field in ('状态','status','采集状态','query_status')).upper()
@@ -2125,17 +2189,21 @@ class Console:
             phase=self.phase
             details['后台停止状态']={name:('已退出' if value is False else '仍在运行' if value is True else '身份待核对')
                 for name,value in getattr(self,'workspace_writer_states',{}).items()}
+        resume_launch=selection.read(self.root/'runs'/key/'resume_launch.json',{}) if key else {}
+        resume_error=(resume_launch.get('message') if resume_launch.get('state')=='failed' and not owner and not self.busy else None)
+        if resume_error:phase=resume_error
         return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,'api_reasoning_supported':True,
                       'task_stopped':bool(stopped.get('task_stopped')) and not self.workspace_stop_pending,'match_criteria':category.get('match_criteria'),
                       'network_readiness':network_readiness,
                       'task_runtime':selection.read(self.root/'runs'/key/'runtime_version.json',{}) if key else {},
-                      'console_busy':self.busy,'active':bool(owner) or self.busy or self.stage3_busy or self.workspace_stop_pending,'category_key':key,'phase':phase if self.workspace_stop_pending else '已停止' if stopped.get('task_stopped') else phase,
-                      'severity':'yellow' if self.workspace_stop_pending else 'neutral' if stopped.get('task_stopped') else 'red' if red else 'yellow' if yellow else 'green' if owner or self.busy or self.stage3_busy else 'neutral','workers':workers,'details':details,
+                      'console_busy':self.busy,'active':bool(owner) or self.busy or self.stage3_busy or self.workspace_stop_pending,'category_key':key,'phase':phase if self.workspace_stop_pending or resume_error else '已停止' if stopped.get('task_stopped') else phase,
+                      'severity':'yellow' if self.workspace_stop_pending else 'red' if resume_error else 'neutral' if stopped.get('task_stopped') else 'red' if red else 'yellow' if yellow else 'green' if owner or self.busy or self.stage3_busy else 'neutral','workers':workers,'details':details,
+                      'resume_launch':resume_launch,
                       'generation':generation,'generation_error':self.generation_error if preparing_new else None,
                       'can_retry_generation':bool(preparing_new and generation_failed and not self.busy),
                       'can_resume':bool(not owner and not self.busy and not preparing_new and key and (self.root/'runs'/key/'category.json').is_file()),
                       'can_retry_preparation':bool(not owner and not self.busy and not preparing_new and details.get('阶段',{}).get('bootstrap',{}).get('状态')=='启动准备失败'),
-                      'preparation_error':details.get('原因') if details.get('阶段',{}).get('bootstrap',{}).get('状态')=='启动准备失败' else None,
+                      'preparation_error':resume_error or (details.get('原因') if details.get('阶段',{}).get('bootstrap',{}).get('状态')=='启动准备失败' else None),
                       'draft':None if self.draft_used else self.draft,'scope':scope,
                       'plain_application':self.plain_application,
                       'saved_credential_available':bool(self.saved_credential()),

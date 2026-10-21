@@ -7,9 +7,25 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+
+
+def launch_diagnostic(path, identity, state, **fields):
+    """Persist fixed launch phases, never configurations, credentials or commands."""
+    try:prior=json.loads(path.read_text('utf-8-sig'))
+    except (OSError,ValueError):prior={}
+    row={**identity,'phase':prior.get('phase','powershell_start'),'state':state,'updated_at':time.time()}
+    for name in ('error_type','hresult'):
+        if name in prior:row[name]=prior[name]
+    row.update(fields)
+    from selection_automation.merge_temu_snapshots import atomic_write
+    atomic_write(path,json.dumps(row,ensure_ascii=False,indent=2))
+    with path.with_suffix('.jsonl').open('a',encoding='utf-8') as stream:
+        stream.write(json.dumps(row,ensure_ascii=False)+'\n');stream.flush()
+    return row
 
 
 def start(port, root=ROOT, amazon_category=None,resume_category=None, *, paid=False, preserve_prepared=True):
@@ -35,15 +51,38 @@ def start(port, root=ROOT, amazon_category=None,resume_category=None, *, paid=Fa
         configuration['arguments']='"'+configuration['script']+'" --collection-host --port '+str(port)+' --resume-category "'+str(category)+'"'
         if paid: configuration['arguments']+=' --paid'
         if not preserve_prepared: configuration['arguments']+=' --new-preparation'
+    launch_id=uuid.uuid4().hex
+    diagnostic_path=environment_path.parent/f'launch-{launch_id}.json'
+    identity={'launch_id':launch_id,'kind':'collection' if resume_category else 'amazon' if amazon_category else 'web',
+              'started_at':time.time()}
+    configuration.update(launch_id=launch_id,launch_kind=identity['kind'],launch_started_at=identity['started_at'],
+                         diagnostic_path=str(diagnostic_path),diagnostic_events_path=str(diagnostic_path.with_suffix('.jsonl')))
+    launch_diagnostic(diagnostic_path,identity,'starting')
     script = r'''
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $configuration = [Console]::In.ReadToEnd() | ConvertFrom-Json
+function Record-LaunchPhase($phase,$state='starting',$errorType=$null,$hresult=$null) {
+    $script:launchPhase=$phase
+    $row=@{launch_id=$configuration.launch_id;kind=$configuration.launch_kind;started_at=$configuration.launch_started_at;
+        phase=$phase;state=$state;updated_at=([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()/1000.0)}
+    if($errorType){$row.error_type=$errorType;$row.hresult=$hresult}
+    $raw=$row|ConvertTo-Json -Compress
+    $encoding=New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($configuration.diagnostic_path,$raw,$encoding)
+    [IO.File]::AppendAllText($configuration.diagnostic_events_path,$raw+"`n",$encoding)
+}
+try {
+Record-LaunchPhase 'create_scheduler'
 $scheduler = New-Object -ComObject Schedule.Service
+Record-LaunchPhase 'connect_scheduler'
 $scheduler.Connect()
+Record-LaunchPhase 'get_folder'
 $folder = $scheduler.GetFolder('\')
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+Record-LaunchPhase 'create_definition'
 $definition = $scheduler.NewTask(0)
+Record-LaunchPhase 'configure_definition'
 $definition.RegistrationInfo.Description = 'Local selection console; manually started, independent of Codex. No automatic trigger.'
 $definition.Principal.UserId = $user
 $definition.Principal.LogonType = 3
@@ -59,18 +98,40 @@ $action = $definition.Actions.Create(0)
 $action.Path = $configuration.python
 $action.Arguments = $configuration.arguments
 $action.WorkingDirectory = $configuration.root
+Record-LaunchPhase 'register_task'
 $registered = $folder.RegisterTaskDefinition($configuration.name, $definition, 6, $user, $null, 3, $null)
+Record-LaunchPhase 'run_task'
 $null = $registered.Run($null)
+Record-LaunchPhase 'task_launched' 'launched'
 @{task_name=$configuration.name; launch_mode='WINDOWS_TASK_SCHEDULER'; automatic_trigger=$false} | ConvertTo-Json -Compress
+} catch {
+    Record-LaunchPhase $script:launchPhase 'failed' $_.Exception.GetType().FullName $_.Exception.HResult
+    [Console]::Error.WriteLine('Scheduler launch failed at '+$script:launchPhase+'; HRESULT='+$_.Exception.HResult)
+    exit 1
+}
 '''
     import base64
     command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
                '-EncodedCommand', base64.b64encode(script.encode('utf-16-le')).decode()]
-    result = subprocess.run(command, input=json.dumps(configuration), encoding='utf-8', errors='replace',
-                            capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        result = subprocess.run(command, input=json.dumps(configuration), encoding='utf-8', errors='replace',
+                                capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        row=launch_diagnostic(diagnostic_path,identity,'failed',error_code='SCHEDULER_TIMEOUT',timeout_seconds=30)
+        raise RuntimeError(f"Windows 独立后台启动超时（阶段 {row['phase']}；记录 launch-{launch_id}.json）") from None
+    except OSError as exc:
+        row=launch_diagnostic(diagnostic_path,identity,'failed',error_code='SCHEDULER_PROCESS_FAILED',error_type=type(exc).__name__,
+                              winerror=getattr(exc,'winerror',None),errno=exc.errno)
+        raise RuntimeError(f"Windows 独立后台启动失败（阶段 {row['phase']}；记录 launch-{launch_id}.json）") from None
     if result.returncode:
-        raise RuntimeError('Windows 独立后台启动失败：' + result.stderr.strip())
-    return json.loads(result.stdout.strip())
+        row=launch_diagnostic(diagnostic_path,identity,'failed',error_code='SCHEDULER_EXIT_FAILED',native_exit_code=result.returncode)
+        raise RuntimeError(f"Windows 独立后台启动失败（阶段 {row['phase']}；退出码 {result.returncode}；记录 launch-{launch_id}.json）")
+    try:launch=json.loads(result.stdout.strip())
+    except ValueError:
+        launch_diagnostic(diagnostic_path,identity,'failed',error_code='SCHEDULER_INVALID_RESPONSE',native_exit_code=result.returncode)
+        raise RuntimeError(f'Windows 独立后台启动未返回有效结果（记录 launch-{launch_id}.json）') from None
+    launch_diagnostic(diagnostic_path,identity,'launched',native_exit_code=result.returncode,phase='task_launched')
+    return launch
 
 
 def configure_environment(port):

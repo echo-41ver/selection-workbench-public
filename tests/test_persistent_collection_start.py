@@ -94,3 +94,43 @@ def test_independent_host_creates_logs_for_brand_new_prepared_task(tmp_path,monk
  monkeypatch.setattr(persistent.subprocess,'run',launch)
  assert persistent.collection_host(8765,category,preserve_prepared=False)==0
  assert len(calls)==1 and (category.parent/'logs/supervisor.log').read_bytes()==b'cold supervisor launch\n'
+
+
+@pytest.mark.parametrize('failure',['timeout','native_error','invalid_response'])
+def test_launch_failure_preserves_safe_last_phase_without_leaking_process_output(tmp_path,monkeypatch,failure):
+ import subprocess
+ def run(command,**kwargs):
+  config=json.loads(kwargs['input']);path=Path(config['diagnostic_path'])
+  path.write_text(json.dumps({'phase':'register_task','hresult':-2147024891,'error_type':'System.UnauthorizedAccessException'}),encoding='utf-8')
+  if failure=='timeout':raise subprocess.TimeoutExpired(command,30,output='do-not-record-raw-configuration')
+  return SimpleNamespace(returncode=5 if failure=='native_error' else 0,stdout='do-not-record-raw-configuration',stderr='secret-that-must-not-be-logged')
+ monkeypatch.setattr(persistent.subprocess,'run',run)
+ with pytest.raises(RuntimeError):persistent.start(8765,root=tmp_path)
+ paths=list((tmp_path/'runtime/web-console').glob('launch-*.json'))
+ assert len(paths)==1
+ state=json.loads(paths[0].read_text('utf-8'))
+ assert state['state']=='failed' and state['phase']=='register_task'
+ assert state['hresult']==-2147024891
+ if failure=='timeout':assert state['error_code']=='SCHEDULER_TIMEOUT' and state['timeout_seconds']==30
+ evidence=paths[0].read_text('utf-8')+paths[0].with_suffix('.jsonl').read_text('utf-8')
+ assert 'do-not-record-raw-configuration' not in evidence and 'secret-that-must-not-be-logged' not in evidence
+ assert 'PATH' not in evidence and str(tmp_path) not in evidence
+
+
+@pytest.mark.skipif(os.name!='nt',reason='parse the actual Windows PowerShell launcher without executing it')
+def test_actual_encoded_powershell_diagnostic_script_parses_without_registering_task(tmp_path,monkeypatch):
+ import base64
+ native_run=persistent.subprocess.run;captured={}
+ def capture(command,**kwargs):
+  captured['encoded']=command[-1]
+  return SimpleNamespace(returncode=0,stdout='{"launch_mode":"WINDOWS_TASK_SCHEDULER","task_name":"probe"}',stderr='')
+ monkeypatch.setattr(persistent.subprocess,'run',capture)
+ persistent.start(8765,root=tmp_path)
+ script=("$source=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('"+captured['encoded']+"'));"
+         "$tokens=$null;$errors=$null;[void][System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors);"
+         "if($errors.Count){$errors.Message|ConvertTo-Json;exit 1};'syntax valid; launcher not executed'")
+ result=native_run(['powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',base64.b64encode(script.encode('utf-16-le')).decode()],
+                   capture_output=True,encoding='utf-8',errors='replace',timeout=15,creationflags=0)
+ assert result.returncode==0,result.stdout+result.stderr
+ state=json.loads(next((tmp_path/'runtime/web-console').glob('launch-*.json')).read_text('utf-8'))
+ assert state['state']=='launched' and state['phase']=='task_launched' and state['native_exit_code']==0

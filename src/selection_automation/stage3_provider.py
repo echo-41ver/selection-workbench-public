@@ -117,6 +117,8 @@ def from_category(category):
 
 def apply(category, value):
     provider = settings(value)
+    from .local_d1 import native_endpoint,question_batch_limit
+    batch_size=question_batch_limit(category) if native_endpoint(provider) else 12
     stage = category['stage3']
     if provider != from_category(category):
         from copy import deepcopy
@@ -125,8 +127,16 @@ def apply(category, value):
         if previous not in checkpoints:checkpoints.append(previous)
     stage.update(provider=provider, base_url=provider['base_url'], model=provider['model'],
                  max_concurrency=provider['workers'])
-    stage['batch_size']=12
+    stage['batch_size']=batch_size
     return provider
+
+
+def request_batch_size(provider, category):
+    """Honor native service question limits without removing selected rules."""
+    if provider['mode']=='liquid_d1':return 1
+    configured=max(1,min(12,category.get('stage3',{}).get('batch_size',12)))
+    from .local_d1 import native_endpoint,question_batch_limit
+    return min(configured,question_batch_limit(category)) if native_endpoint(provider) else configured
 
 
 def request_key(provider):
@@ -267,6 +277,8 @@ class VisualClient:
             response.raise_for_status()
         except Exception as exc:
             exc.status_code=response.status_code
+            from .local_d1 import native_endpoint,rejection_body
+            if native_endpoint(self.provider):exc.body=rejection_body(response)
             raise
         raw = response.json()
         expected=set(json.loads(data)['questions']);answers=raw['answers']
@@ -315,8 +327,12 @@ class VisualClient:
                     payload['questions'][identity+'__condition__'+condition['id']]={'type':'choice',
                         'instructions':question['instructions']+'\n本题只核实已勾选条件：'+condition['label']+'。'+condition['rule'],
                         'criteria':{'same':'双方证据均清楚且该项一致','different':'双方证据均清楚且该项不同','unknown':'任一方未提供、不可读、被遮挡或不能可靠比较'}}
+        from .local_d1 import native_endpoint,prepare_payload
+        if native_endpoint(self.provider):
+            payload,metadata=prepare_payload(payload,self.provider)
+            self.last_prepare_metadata=metadata
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        if len(data) >= 4_500_000:
+        if not native_endpoint(self.provider) and len(data) >= 4_500_000:
             raise ValueError('决策 API 图片与文字请求超过 4.5 MB，请补采适当尺寸图片')
         return data
 

@@ -513,7 +513,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
         if not billing_uncertain:
             settle_intent()
         return completed
-    size = 1 if schema_retry or provider['mode']=='liquid_d1' else max(1,min(12,stage.get('batch_size',12)))
+    from selection_automation.stage3_provider import request_batch_size
+    size = 1 if schema_retry else request_batch_size(provider,cat)
     if stage.get('match_criteria_visual_count'):
         per_pair=640*len(stage['modules'])+1200*len(stage.get('set_inventory_features') or {})+256*stage['match_criteria_visual_count']
         size=min(size,max(1,(65536-8192)//per_pair))
