@@ -19,6 +19,7 @@ MODULE_FIELDS=('modules','module_descriptions','confirmation_minimums','identity
 
 def draft_view(category, draft_id):
     validate_rules(category)
+    verification=category['amazon'].get('verification') or {}
     stage1=category.get('human_stage1_text') or '\n'.join(
         f"属性：{a['name']}；双边明确不同{'排除' if a.get('hard_conflict') else '不硬排除'}；"+
         '取值及文字证据：'+json.dumps(a['values'],ensure_ascii=False)+'；歧义短语：'+json.dumps(a.get('ambiguous_phrases',[]),ensure_ascii=False)
@@ -26,7 +27,9 @@ def draft_view(category, draft_id):
     return {'id':draft_id,'stage1_text':stage1,'stage2_threshold':category['stage2']['candidate_threshold'],
             'stage3_text':protocol(category,1)[0],
             'stage3_modules_json':json.dumps({k:category['stage3'].get(k,{ } if k in MODULE_FIELDS[:3] else []) for k in MODULE_FIELDS},ensure_ascii=False,indent=2),
-            'amazon_url':category['amazon']['bestsellers_url'],'category_name':category['category_name_zh'],
+            'amazon_url':category['amazon']['bestsellers_url'],
+            'amazon_title':verification.get('heading') or verification.get('title') or '',
+            'category_name':category['category_name_zh'],
             'commercial': commercial_settings(category.get('commercial'))}
 
 

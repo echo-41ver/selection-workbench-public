@@ -10,6 +10,23 @@ from rule_editor import draft_view,edit_rules
 def fixture(): return json.loads((ROOT/'config/categories/power_drill.json').read_text('utf-8'))
 
 
+@pytest.mark.parametrize('verification,expected',[
+    ({'heading':'Best Sellers in Shower Curtains','title':'Amazon Best Sellers: Best Shower Curtains'},
+     'Best Sellers in Shower Curtains'),
+    ({'title':'Amazon Best Sellers: Best Shower Curtains'},'Amazon Best Sellers: Best Shower Curtains'),
+    ({},''),
+    (None,''),
+])
+def test_draft_uses_observed_listing_title_and_keeps_missing_evidence_empty(verification,expected):
+    cat=fixture()
+    if verification is not None:cat['amazon']['verification']=verification
+    before=json.loads(json.dumps(cat))
+    view=draft_view(cat,'draft')
+    assert view['amazon_title']==expected
+    assert view['amazon_url']==cat['amazon']['bestsellers_url']
+    assert cat==before
+
+
 def test_unchanged_text_no_model_and_edited_prompt_threshold_apply():
     cat=fixture();edit=draft_view(cat,'draft')
     edit['stage2_threshold']=77;edit['stage3_text']='用户完整视觉提示词'
