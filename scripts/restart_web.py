@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 from urllib.request import build_opener, ProxyHandler
 
 import psutil
@@ -110,10 +111,10 @@ def validate_kept_task(console, root, state):
         raise RuntimeError('无法确认本安装的独立运行任务，未停止任何程序') from exc
 
 
-def native_process_active(pid):
+def native_process_info(pid):
     """A terminated Windows process can retain its PID while kernel I/O drains."""
     if os.name != 'nt':
-        return True
+        return {'active':True,'exit_code':None}
     import ctypes
     from ctypes import wintypes
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -121,6 +122,8 @@ def native_process_active(pid):
     kernel.OpenProcess.restype = wintypes.HANDLE
     kernel.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
     kernel.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)]*4)]
+    kernel.GetProcessTimes.restype = wintypes.BOOL
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
     handle = kernel.OpenProcess(0x1000, False, pid)
     if not handle:
@@ -132,9 +135,155 @@ def native_process_active(pid):
         code = wintypes.DWORD()
         if not kernel.GetExitCodeProcess(handle, ctypes.byref(code)):
             raise OSError(ctypes.get_last_error(), 'Cannot read process exit code')
-        return code.value == 259
+        times=[wintypes.FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle,*(ctypes.byref(value) for value in times)):
+            raise OSError(ctypes.get_last_error(), 'Cannot read process creation identity')
+        def epoch(value):
+            ticks=(value.dwHighDateTime<<32)|value.dwLowDateTime
+            return ticks/10000000-11644473600 if ticks else None
+        return {'active':code.value==259,'exit_code':code.value,
+                'created':epoch(times[0]),'exited':epoch(times[1])}
     finally:
         kernel.CloseHandle(handle)
+
+
+def native_process_active(pid):
+    return native_process_info(pid)['active']
+
+
+def registered_persistent_host(root,port):
+    """Distinguish a dead host from an unreadable or unrelated live identity."""
+    path=root/f'runtime/web-console/persistent-service-{port}.json'
+    try:
+        record=json.loads(path.read_text('utf-8-sig'))
+    except FileNotFoundError:
+        return None,{'state':'missing_registration'}
+    except (OSError,ValueError):
+        raise RuntimeError('常驻宿主登记无法读取；现有网页保留，未启动重复宿主') from None
+    if (not isinstance(record,dict) or record.get('root')!=str(root) or record.get('port')!=port
+            or record.get('launch_mode')!='WINDOWS_TASK_SCHEDULER'
+            or type(record.get('pid')) is not int or record['pid']<=0
+            or type(record.get('created')) not in (int,float)
+            or not math.isfinite(record['created']) or record['created']<=0):
+        raise RuntimeError('常驻宿主登记身份无效；现有网页保留，未启动重复宿主')
+    identity={'pid':record['pid'],'created':record['created']}
+    try:
+        process=psutil.Process(record['pid'])
+        native=native_process_info(process.pid)
+        if (abs(process.create_time()-record['created'])>=.01 or
+                (native.get('created') is not None and abs(native['created']-record['created'])>=.01)):
+            raise RuntimeError('常驻宿主 PID 身份已变化；现有网页保留，未启动重复宿主')
+        if not native['active']:
+            return None,{'state':'exited','registration':identity,'native_exit_code':native['exit_code'],
+                         'exited_at':native.get('exited')}
+        validate_persistent_host(process,root,port)
+        return identity,{'state':'running','registration':identity}
+    except psutil.NoSuchProcess:
+        return None,{'state':'process_missing','registration':identity}
+    except (OSError,psutil.AccessDenied):
+        raise RuntimeError('无法核验常驻宿主的内核身份；现有网页保留，未启动重复宿主') from None
+
+
+def validate_persistent_host(process,root,port):
+    args=process.cmdline();expected=(root/'scripts/persistent_web_service.py').resolve()
+    if (Path(process.cwd()).resolve()!=root.resolve() or process.name().lower() not in {'python.exe','pythonw.exe'}
+            or args.count('--host')!=1 or args.count('--port')!=1 or '--collection-host' in args
+            or args.index('--port')+1>=len(args) or args[args.index('--port')+1]!=str(port)
+            or not any((root/arg).resolve()==expected for arg in args[1:] if arg.endswith('.py'))):
+        raise RuntimeError('常驻宿主进程身份无法确认；现有网页保留，未启动重复宿主')
+
+
+def confirm_no_unregistered_host(root,port):
+    """Never race a live host whose registration is missing or still being written."""
+    for process in psutil.process_iter(['pid','name']):
+        candidate=False
+        try:
+            if str(process.info.get('name') or '').lower() not in {'python.exe','pythonw.exe'}:
+                continue
+            args=process.cmdline()
+            if ('--host' not in args or '--port' not in args
+                    or args.index('--port')+1>=len(args) or args[args.index('--port')+1]!=str(port)):
+                continue
+            if not any((root/arg).resolve()==(root/'scripts/persistent_web_service.py').resolve()
+                       for arg in args[1:] if arg.endswith('.py')):
+                continue
+            candidate=True
+            if Path(process.cwd()).resolve()!=root.resolve():
+                continue
+            if native_process_active(process.pid):
+                raise RuntimeError('发现未完成登记的本安装常驻宿主；现有网页保留，请稍后重试')
+        except (psutil.NoSuchProcess,psutil.ZombieProcess):
+            continue
+        except (OSError,psutil.AccessDenied):
+            # Unknown Python processes are not evidence that this root is safe.
+            # Only a candidate already identified by this root's script is relevant.
+            if candidate:
+                raise RuntimeError('本安装常驻宿主身份暂不可读；现有网页保留，未启动重复宿主') from None
+    try:
+        with ProcessLock(root/f'runtime/web-console/persistent-service-{port}.lock'):
+            pass
+    except RuntimeError:
+        raise RuntimeError('常驻宿主锁仍被占用；现有网页保留，未启动重复宿主') from None
+
+
+def ensure_running(port,root=ROOT,*,independent=True):
+    """Normal startup repairs a missing watchdog without restarting a healthy web."""
+    root=Path(root).resolve()
+    with ProcessLock(root/f'runtime/web-console/restart-{port}.lock'):
+        current=listener(port)
+        if not current:
+            result=_restart_locked(port,root,independent=independent,reuse_existing=True)
+            if os.name!='nt' or not independent:
+                return result
+            current=listener(port)
+            if not current:
+                raise RuntimeError('网页状态已变化；未启动重复服务，请重新运行启动入口')
+        validate_console(current,root)
+        original={'pid':current.pid,'created':current.create_time()}
+        result={'ok':True,'pid':current.pid,'url':f'http://127.0.0.1:{port}/'}
+        if os.name!='nt' or not independent:
+            return result
+        from persistent_web_service import healthy,start,launch_diagnostic
+        def confirm_web():
+            actual=listener(port)
+            if (not actual or actual.pid!=original['pid'] or
+                    abs(actual.create_time()-original['created'])>=.01):
+                raise RuntimeError('恢复常驻宿主期间网页身份发生变化；未报告无中断启动成功')
+            validate_console(actual,root)
+            if not native_process_active(actual.pid) or not healthy(port):
+                raise RuntimeError('现有网页健康检查未通过；未报告常驻启动成功')
+        confirm_web()
+        host,prior=registered_persistent_host(root,port)
+        if host:
+            confirm_web()
+            return {**result,'persistent_ready':True,'persistent_host':host,'host_recovered':False}
+        recovery_id=uuid.uuid4().hex
+        diagnostic=root/f'runtime/web-console/host-recovery-{recovery_id}.json'
+        diagnostic.parent.mkdir(parents=True,exist_ok=True)
+        identity={'recovery_id':recovery_id,'kind':'web_host_adoption','started_at':time.time(),
+                  'web':original,'previous_host':prior}
+        def record(state,**fields):
+            return launch_diagnostic(diagnostic,identity,state,phase='adopt_existing_web',**fields)
+        record('checking')
+        try:
+            confirm_no_unregistered_host(root,port)
+            confirm_web()
+            record('launching')
+            launch=start(port,root)
+            deadline=time.monotonic()+15
+            while time.monotonic()<deadline:
+                confirm_web()
+                host,_=registered_persistent_host(root,port)
+                if host:
+                    confirm_web()
+                    record('ready',host=host)
+                    return {**result,**launch,'persistent_ready':True,'persistent_host':host,
+                            'host_recovered':True,'host_recovery_record':str(diagnostic)}
+                time.sleep(.1)
+            raise RuntimeError('常驻宿主未在限定时间完成真实登记；现有网页保留，请查看恢复记录')
+        except Exception as exc:
+            record('failed',error_type=type(exc).__name__)
+            raise RuntimeError(f'网页仍保留，但常驻宿主恢复未确认；记录 {diagnostic.name}；{exc}') from None
 
 
 def validate_readonly_idle(console, root, state):
@@ -175,56 +324,61 @@ def validate_readonly_idle(console, root, state):
 
 def restart(port, root=ROOT, *, keep_task=False, task_root=None, independent=False):
     with ProcessLock(root / f'runtime/web-console/restart-{port}.lock'):
-        previous = listener(port)
-        kept=None
-        if previous:
-            validate_console(previous, root)
-            state = status(port)
-            if keep_task:validate_maintenance_idle(state)
-            if state.get('ok') is not True or state.get('active') is not False or state.get('market_busy'):
-                if not keep_task or state.get('active') is not True:
-                    raise RuntimeError('任务正在运行或状态无法确认，请先在网页停止任务再重启网页')
-                owner_root=Path(task_root) if task_root else root
-                if (owner_root/'runtime').resolve()!=(root/'runtime').resolve():
-                    raise RuntimeError('旧任务与网页不共享同一运行记录，未停止任何程序')
-                kept=validate_kept_task(previous,owner_root,state)
-            if keep_task: validate_readonly_idle(previous, root, state)
-            # psutil checks process identity (PID + creation time) before terminate.
-            stop_console(previous,root)
-        if not independent and listener(port):
-            raise RuntimeError('端口仍被占用，未启动重复网页服务')
-        logs = root / 'runtime/web-console'
-        logs.mkdir(parents=True, exist_ok=True)
-        launch = None
-        child = None
-        if independent and os.name == 'nt':
-            from persistent_web_service import start
-            launch = start(port, root)
-        else:
-            with (logs / f'service-{port}.log').open('ab') as output:
-                child = subprocess.Popen(
-                    [sys.executable, str(root / 'scripts/web_console.py'), '--port', str(port)],
-                    cwd=root, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-                )
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if child is not None and child.poll() is not None:
-                raise RuntimeError(f'网页启动失败，请查看 {logs / f"service-{port}.log"}')
-            try:
-                current = listener(port)
-                if current and (launch is not None or current.pid == child.pid or child.pid in [p.pid for p in current.parents()]):
-                    validate_console(current, root)
-                    if status(port).get('ok') is True:
-                        result={'ok': True, 'pid': current.pid, 'url': f'http://127.0.0.1:{port}/'}
-                        if launch:result.update(launch)
-                        if kept:result['task_preserved']=kept
-                        return result
-            except (OSError, ValueError, psutil.Error):
-                pass
-            time.sleep(.3)
-        raise RuntimeError(f'网页启动等待超时，请查看 {logs / f"service-{port}.log"}')
+        return _restart_locked(port,root,keep_task=keep_task,task_root=task_root,independent=independent)
 
+
+def _restart_locked(port,root,*,keep_task=False,task_root=None,independent=False,reuse_existing=False):
+    previous = listener(port)
+    kept=None
+    if previous:
+        validate_console(previous, root)
+        if reuse_existing:
+            return {'ok':True,'pid':previous.pid,'url':f'http://127.0.0.1:{port}/'}
+        state = status(port)
+        if keep_task:validate_maintenance_idle(state)
+        if state.get('ok') is not True or state.get('active') is not False or state.get('market_busy'):
+            if not keep_task or state.get('active') is not True:
+                raise RuntimeError('任务正在运行或状态无法确认，请先在网页停止任务再重启网页')
+            owner_root=Path(task_root) if task_root else root
+            if (owner_root/'runtime').resolve()!=(root/'runtime').resolve():
+                raise RuntimeError('旧任务与网页不共享同一运行记录，未停止任何程序')
+            kept=validate_kept_task(previous,owner_root,state)
+        if keep_task: validate_readonly_idle(previous, root, state)
+        # psutil checks process identity (PID + creation time) before terminate.
+        stop_console(previous,root)
+    if not independent and listener(port):
+        raise RuntimeError('端口仍被占用，未启动重复网页服务')
+    logs = root / 'runtime/web-console'
+    logs.mkdir(parents=True, exist_ok=True)
+    launch = None
+    child = None
+    if independent and os.name == 'nt':
+        from persistent_web_service import start
+        launch = start(port, root)
+    else:
+        with (logs / f'service-{port}.log').open('ab') as output:
+            child = subprocess.Popen(
+                [sys.executable, str(root / 'scripts/web_console.py'), '--port', str(port)],
+                cwd=root, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+            )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if child is not None and child.poll() is not None:
+            raise RuntimeError(f'网页启动失败，请查看 {logs / f"service-{port}.log"}')
+        try:
+            current = listener(port)
+            if current and (launch is not None or current.pid == child.pid or child.pid in [p.pid for p in current.parents()]):
+                validate_console(current, root)
+                if status(port).get('ok') is True:
+                    result={'ok': True, 'pid': current.pid, 'url': f'http://127.0.0.1:{port}/'}
+                    if launch:result.update(launch)
+                    if kept:result['task_preserved']=kept
+                    return result
+        except (OSError, ValueError, psutil.Error):
+            pass
+        time.sleep(.3)
+    raise RuntimeError(f'网页启动等待超时，请查看 {logs / f"service-{port}.log"}')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -238,10 +392,8 @@ if __name__ == '__main__':
     if not 1 <= args.port <= 65535:
         parser.error('port must be 1–65535')
     try:
-        existing=listener(args.port) if args.ensure_running else None
-        if existing:
-            validate_console(existing,ROOT)
-            result={'ok':True,'pid':existing.pid,'url':f'http://127.0.0.1:{args.port}/'}
+        if args.ensure_running:
+            result=ensure_running(args.port,independent=not args.attached)
         else:
             result=restart(args.port,keep_task=args.keep_task,task_root=args.task_root,independent=not args.attached)
         if args.open_browser:
