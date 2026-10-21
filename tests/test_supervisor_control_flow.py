@@ -302,3 +302,127 @@ def test_stop_during_local_config_read_prevents_bootstrap_spawn(tmp_path, monkey
     run.request_and_run()
     assert run.spawns == []
     assert selection.read(run.base/'status.json')['状态'] == '已停止'
+
+
+def retired_checkpoint(run):
+    """Isolated evidence of the real cleanup/manifest-removal failure boundary."""
+    run.cat['temu']['worker_count'] = 1
+    run.cat['amazon']['target_count'] = 1
+    selection.save(run.category, run.cat)
+    selection.save(run.root/'runtime/machine.json', {'id':'isolated-machine'})
+    manifest = {'machine_id':'isolated-machine', 'task_key':run.cat['category_key'],
+                'used':True, 'workers':[{'name':'worker-01','profile_id':'retired-owned-profile'}]}
+    selection.save(run.root/'runtime/profile_retirement/receipt.json', {
+        'machine_id':'isolated-machine', 'new_task_key':run.cat['category_key'],
+        'records':[{'path':str(run.root/'config/sessions.json'),'manifest':manifest}],
+        'deleted':['retired-owned-profile']})
+    (run.root/'config/sessions.json').unlink()
+    selection.save(run.base/'temu/keyword_plan.json', {
+        'finalized':True, 'keywords':[{'query':'fixture query','max_products':1}]})
+    selection.save(run.base/'temu/supervisors/assignments.json', {'jobs':[{
+        'query':'fixture query','max_products':1,'owner':'worker-01','complete':True,
+        'sort_passes':{order:{'owner':'worker-01','complete':True} for order in ('sales','recent')}}]})
+    selection.save(run.base/'temu/supervisors/worker-01.json', {
+        'status':'WORKER_COMPLETE','environment_cleanup':'COMPLETE',
+        'deleted_profile_id':'retired-owned-profile'})
+    source = run.base/'temu/workers/worker-01/fixture/products.jsonl'
+    source.parent.mkdir(parents=True)
+    source.write_text('{"goods_id":"fixture-real-boundary"}\n', encoding='utf-8')
+    selection.save(run.base/'cleanup_status.json', {'status':'COMPLETE','pending_workers':[],'waiting_workers':[]})
+    selection.save(run.base/'amazon/amazon_frontend_latest.json', {
+        'status':'COMPLETE','details_complete':True,'source_url':run.cat['amazon']['bestsellers_url'],
+        'missing_details':[], 'records':[{'asin':'FIXTURE','rank':1}]})
+    selection.save(run.base/'stage123/paid_enabled.json', {'controller':'independent'})
+    return manifest
+
+
+def test_retired_complete_collection_resumes_downstream_and_stops_without_browser_recreation(tmp_path, monkeypatch):
+    from selection_automation.completed_collection import completed_checkpoint, unchanged
+    import watch_temu_union
+    run = LocalRun(tmp_path, monkeypatch)
+    retired_checkpoint(run)
+    monkeypatch.setattr(watch_temu_union,'watch_health',lambda base:{'状态':'已更新','阻断':False})
+    proof = completed_checkpoint(run.root, run.base, run.cat)
+    assert proof and unchanged(proof)
+    before = {path:Path(path).read_bytes() for path in proof['files']}
+
+    def stop_after_real_loop():
+        status = selection.read(run.base/'status.json')
+        assert status['阶段']['bootstrap']['状态'] == '采集已完成，仅续接汇总、分析和导出'
+        assert selection.live_owner()['category_key'] == run.cat['category_key']
+        assert {'temu_union','stage12','market','excel'} <= {item['name'] for item in run.spawns}
+        run.command('stop')
+
+    run.on_sleep = stop_after_real_loop
+    # Execute the actual supervisor control flow twice across the same checkpoint.
+    for _ in range(2):
+        selection.request_start(run.category, run.cat, run.base, False, background=False, preserve_prepared=True)
+        selection.supervise(run.category, False, preserve_prepared=True)
+        assert selection.read(run.base/'status.json')['状态'] == '已停止'
+        assert not selection.live_owner()
+        assert not (run.root/'config/sessions.json').exists()
+        assert all(Path(path).read_bytes() == data for path, data in before.items())
+    assert not ({'bootstrap','binding_recovery','amazon','worker-01','cleanup','stage3'} & {item['name'] for item in run.spawns})
+
+
+@pytest.mark.parametrize('broken', ['unfinished_plan','unfinished_pass','missing_pass','new_query',
+                                  'amazon_details','amazon_rank','amazon_listing','missing_source',
+                                  'foreign_machine','foreign_task','foreign_receipt_path','wrong_deleted_profile',
+                                  'cleanup_pending','pending_rotation','malformed_dispatch'])
+def test_incomplete_or_foreign_checkpoint_never_bypasses_strict_browser_resume(tmp_path, monkeypatch, broken):
+    from selection_automation.completed_collection import completed_checkpoint
+    run = LocalRun(tmp_path, monkeypatch)
+    retired_checkpoint(run)
+    paths = {
+        'plan':run.base/'temu/keyword_plan.json',
+        'dispatch':run.base/'temu/supervisors/assignments.json',
+        'amazon':run.base/'amazon/amazon_frontend_latest.json',
+        'receipt':run.root/'runtime/profile_retirement/receipt.json',
+        'worker':run.base/'temu/supervisors/worker-01.json',
+        'cleanup':run.base/'cleanup_status.json'}
+    if broken == 'missing_source':
+        (run.base/'temu/workers/worker-01/fixture/products.jsonl').unlink()
+    elif broken == 'pending_rotation':
+        selection.save(run.base/'commands/rotate/pending.json', {
+            'status':'QUEUED','created_at':1,'id':'pending'})
+    else:
+        key = ('plan' if broken in {'unfinished_plan','new_query'} else
+               'dispatch' if broken in {'unfinished_pass','missing_pass','malformed_dispatch'} else
+               'amazon' if broken.startswith('amazon_') else
+               'worker' if broken == 'wrong_deleted_profile' else
+               'cleanup' if broken == 'cleanup_pending' else 'receipt')
+        value = selection.read(paths[key])
+        if broken == 'unfinished_plan': value['finalized'] = False
+        elif broken == 'new_query': value['keywords'].append({'query':'new query','max_products':1})
+        elif broken == 'unfinished_pass': value['jobs'][0]['sort_passes']['recent']['complete'] = False
+        elif broken == 'missing_pass': del value['jobs'][0]['sort_passes']['recent']
+        elif broken == 'malformed_dispatch': value['jobs'] = ['invalid']
+        elif broken == 'amazon_details': value['details_complete'] = False
+        elif broken == 'amazon_rank': value['records'][0]['rank'] = 2
+        elif broken == 'amazon_listing': value['source_url'] = 'https://www.amazon.com/zgbs/different/123'
+        elif broken == 'foreign_machine': value['machine_id'] = 'other-machine'
+        elif broken == 'foreign_task': value['records'][0]['manifest']['task_key'] = 'other_task'
+        elif broken == 'foreign_receipt_path': value['records'][0]['path'] = str(run.root/'other/sessions.json')
+        elif broken == 'wrong_deleted_profile': value['deleted_profile_id'] = 'someone-elses-profile'
+        elif broken == 'cleanup_pending': value['pending_workers'] = ['worker-01']
+        selection.save(paths[key], value)
+    assert completed_checkpoint(run.root, run.base, run.cat) is None
+    if broken != 'pending_rotation':
+        # Missing old manifest still fails visibly; no new environment is created.
+        with pytest.raises(RuntimeError, match='维护续接必须属于本任务与本安装'):
+            selection.supervise(run.category, False, preserve_prepared=True)
+        assert not run.spawns
+
+
+def test_analysis_only_resume_rejects_checkpoint_changes_after_its_owner_started(tmp_path, monkeypatch):
+    import watch_temu_union
+    run = LocalRun(tmp_path, monkeypatch)
+    retired_checkpoint(run)
+    monkeypatch.setattr(watch_temu_union,'watch_health',lambda base:{'状态':'已更新','阻断':False})
+    run.on_sleep = lambda: selection.save(run.base/'temu/keyword_plan.json', {
+        'finalized':False,'keywords':[{'query':'fixture query','max_products':1}]})
+    with pytest.raises(RuntimeError, match='续接依据发生变化'):
+        selection.supervise(run.category, False, preserve_prepared=True)
+    assert selection.read(run.base/'status.json')['状态'] == '启动或运行失败'
+    assert not (run.root/'config/sessions.json').exists()
+    assert not ({'bootstrap','amazon','worker-01','stage3'} & {item['name'] for item in run.spawns})

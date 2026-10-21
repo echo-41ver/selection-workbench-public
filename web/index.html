@@ -188,10 +188,12 @@ function chooseStage3Mode(){
  const values={liquid_d1:['https://api.liquid.ai/decisions/v1/systemone','d1','decisions',4],multimodal_api:['https://api.deepseek.com','deepseek-flash','responses',4],local_model:['http://127.0.0.1:11434/v1','','chat_completions',2],local_agent:['','gpt-6.1-sol','responses',6]};
  const [url,model,protocol,workers]=values[$('stage3-mode').value];$('stage3-base-url').value=url;$('stage3-model').value=model;$('stage3-protocol').value=protocol;$('stage3-workers').value=workers;$('stage3-api-key').value='';if($('stage3-auto'))$('stage3-auto').checked=true;
  stage3ManualConcurrency=false;stage3SettingsDirty=true;stage3ProviderFields();if($('stage3-mode').value==='local_agent'){stage3AgentSelection=[];refreshLocalAgents();}refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);
- if($('stage3-mode').value==='local_model'){localModelLoadedFor=lastStatus?.category_key||'';repairLocalModelConnection();startLocalModelScan();}
+ if($('stage3-mode').value==='local_model'){localModelLoadedFor=lastStatus?.category_key||'';startLocalModelScan();}
 }
 let localModelReadGeneration=0,localModelLoadedFor=null,localModelOptions=[];
-let localModelScanTimer=null,localModelScanGeneration=0;
+let localModelScanTimer=null,localModelScanGeneration=0,localModelPollDeadline=0,localModelPollFailures=0,localModelAutoSelectIdentity=null,localModelCancelPending=false;
+function localModelConnectionIdentity(){return JSON.stringify([lastStatus?.category_key||'',$('stage3-base-url').value,$('stage3-model').value,$('stage3-protocol').value]);}
+function localModelEmptyDefault(){return !$('stage3-model').value.trim()&&/^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):11434\/v1\/?$/.test($('stage3-base-url').value)&&$('stage3-protocol').value==='chat_completions';}
 function localModelLabel(row){
  if(row.display_name)return row.display_name;const raw=row.name||row.id||'',text=raw+' '+(row.path||''),size=text.match(/(\d+(?:\.\d+)?)b(?:\b|_)/i),suffix=size?'（'+size[1]+'B）':'';
  if(/qwen[._-]?2[._-]?5[\s_:/-]*vl/i.test(text))return '通义千问 2.5 视觉版'+suffix;
@@ -206,7 +208,12 @@ function renderLocalModelOptions(models){
 }
 function renderLocalModelScan(data){
  $('stage3-local-scan-stop').hidden=!data.running;$('stage3-local-scan').disabled=Boolean(data.running);
- if(data.services?.models)renderLocalModelOptions(data.services.models);
+ if(data.services?.models){renderLocalModelOptions(data.services.models);
+  if(localModelOptions.length&&localModelAutoSelectIdentity===localModelConnectionIdentity()&&localModelEmptyDefault()&&!localAgentSettingsLocked()){
+   localModelAutoSelectIdentity=null;$('stage3-local-model').value='0';chooseLocalModel();
+  }
+  if(localModelOptions.length)$('stage3-local-status').textContent=data.services.message||'已发现已连接的本机模型，可以选择使用；继续查找不会启动分析。';
+ }
  const list=$('stage3-local-inventory-list');list.replaceChildren();
  const all=[...(data.services?.models||[]),...(data.services?.candidates||[]),...(data.models||[])],groups=new Map(),ollamaConnected=(data.services?.services||[]).some(service=>service.source==='Ollama');
  for(const row of all){if(row.auxiliary||row.test_fixture||/[/\\]pytest-of-[^/\\]+[/\\]/i.test(row.path||'')||/clip-vit|siglip/i.test(row.path||'')||row.vision===false||row.source==='Ollama 文件'&&ollamaConnected)continue;
@@ -215,22 +222,32 @@ function renderLocalModelScan(data){
   item.className='local-model-card';name.textContent=label;badge.className='local-model-badge'+(ready?'':' pending');badge.textContent=ready?'已连接':row.status==='incomplete_files'?'文件不完整':row.path?'尚未连接':'需要确认';
   detail.textContent=ready?'选中此模型后，点击“启动第三层”开始分析。':row.status==='incomplete_files'?'模型文件不完整，请先在本机模型程序中补齐。':row.path?'已找到模型文件。启动本机模型程序后，点击“重新连接”。':'已找到模型，暂时不能确认它能否看图。';heading.append(name,badge);item.append(heading,detail);list.append(item);}
  const count=groups.size,available=[...groups.values()].filter(row=>row.vision===true&&!row.path).length;
- $('stage3-local-scan-status').textContent=(data.running?'正在查找本机模型…':data.status==='cancelled'?'查找已停止。':data.status==='failed'?'查找未完成，可以重试。':'查找完成。')+(count?'已找到 '+count+' 种模型，'+available+' 种已连接。':data.running?'找到后会自动显示。':'暂时没有找到可供看图的模型。');
+ $('stage3-local-scan-status').textContent=(data.running?(data.phase==='files'?'正在继续查找模型文件，已连接的模型现在可用。':'正在读取本机模型服务，发现后立即显示。'):data.status==='cancelled'?'查找已停止。':data.status==='failed'?'查找未完成，可以重试。':data.partial||data.status==='partial'?'本轮查找部分完成，已发现结果保留。':'查找完成。')+(count?'已找到 '+count+' 种模型，'+available+' 种已连接。':data.running?'找到后会自动显示。':'暂时没有找到可供看图的模型。');
  $('stage3-local-technical').textContent=JSON.stringify({目录数:data.directories,文件数:data.files,跳过数:data.skipped,当前目录:data.current_directory,扫描说明:data.message,原始模型:all,服务:data.services?.services||[]},null,2);
 }
 async function pollLocalModelScan(generation){
  if(generation!==localModelScanGeneration||$('stage3-mode').value!=='local_model')return;
- try{const {response,data}=await boundedAgentRead('/api/local-models/scan');if(!response.ok)throw Error(data.error?.message||'读取扫描进度失败');if(generation!==localModelScanGeneration||$('stage3-mode').value!=='local_model')return;renderLocalModelScan(data);if(data.running)localModelScanTimer=setTimeout(()=>pollLocalModelScan(generation),1500);}
- catch(error){if(generation===localModelScanGeneration)$('stage3-local-scan-status').textContent=error.message||'读取扫描进度失败，已发现结果保留。';}
+ try{const {response,data}=await boundedAgentRead('/api/local-models/scan');if(!response.ok)throw Error(data.error?.message||'读取扫描进度失败');if(generation!==localModelScanGeneration||$('stage3-mode').value!=='local_model')return;localModelPollFailures=0;renderLocalModelScan(data);if(data.running&&Date.now()<localModelPollDeadline)localModelScanTimer=setTimeout(()=>pollLocalModelScan(generation),1500);}
+ catch(error){if(generation===localModelScanGeneration&&$('stage3-mode').value==='local_model'){
+  $('stage3-local-scan-status').textContent=error.message||'读取扫描进度失败，已发现结果保留。';
+  if(++localModelPollFailures<=4&&Date.now()<localModelPollDeadline)localModelScanTimer=setTimeout(()=>pollLocalModelScan(generation),Math.min(5000,1500*localModelPollFailures));
+ }}
 }
 async function startLocalModelScan(restart=false){
- if($('stage3-mode').value!=='local_model')return;clearTimeout(localModelScanTimer);const generation=++localModelScanGeneration;
+ if($('stage3-mode').value!=='local_model'||localModelCancelPending)return;clearTimeout(localModelScanTimer);const generation=++localModelScanGeneration;
+ localModelPollDeadline=Date.now()+210000;localModelPollFailures=0;localModelAutoSelectIdentity=localModelEmptyDefault()?localModelConnectionIdentity():null;
+ $('stage3-local-status').textContent='正在后台读取本机模型服务，发现后立即显示；不会启动分析。';
  try{const {response,data}=await boundedAgentRead('/api/local-models/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'start',restart})});if(generation!==localModelScanGeneration||$('stage3-mode').value!=='local_model')return;if(!response.ok)throw Error(data.error?.message||'启动扫描失败');renderLocalModelScan(data);if(data.running)localModelScanTimer=setTimeout(()=>pollLocalModelScan(generation),1500);}
- catch(error){if(generation===localModelScanGeneration)$('stage3-local-scan-status').textContent=error.message||'启动扫描失败';}
+ catch(error){if(generation===localModelScanGeneration&&$('stage3-mode').value==='local_model'){
+  $('stage3-local-scan-status').textContent=(error.message||'启动请求结果未知')+' 正在读取已有扫描进度，未重复启动。';
+  localModelScanTimer=setTimeout(()=>pollLocalModelScan(generation),0);
+ }}
 }
 async function stopLocalModelScan(){
- try{const {response,data}=await boundedAgentRead('/api/local-models/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'cancel'})});if(!response.ok)throw Error(data.error?.message||'停止扫描失败');renderLocalModelScan(data);}
- catch(error){$('stage3-local-scan-status').textContent=error.message||'停止扫描失败';}
+ clearTimeout(localModelScanTimer);const generation=++localModelScanGeneration;localModelCancelPending=true;localModelAutoSelectIdentity=null;
+ try{const {response,data}=await boundedAgentRead('/api/local-models/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'cancel'})});if(generation!==localModelScanGeneration||$('stage3-mode').value!=='local_model')return;if(!response.ok)throw Error(data.error?.message||'停止扫描失败');renderLocalModelScan(data);if(data.running)localModelScanTimer=setTimeout(()=>pollLocalModelScan(generation),150);}
+ catch(error){if(generation===localModelScanGeneration){$('stage3-local-scan-status').textContent=error.message||'停止扫描失败';localModelScanTimer=setTimeout(()=>pollLocalModelScan(generation),1500);}}
+ finally{localModelCancelPending=false;}
 }
 async function repairLocalModelConnection(){
  if($('stage3-mode').value!=='local_model')return;
@@ -243,7 +260,8 @@ async function repairLocalModelConnection(){
   if(!response.ok)throw Error(data.error?.message||'本地服务检测失败');
   renderLocalModelOptions(data.models);const select=$('stage3-local-model');
   if(data.provider){for(const [id,key] of [['stage3-base-url','base_url'],['stage3-model','model'],['stage3-protocol','protocol']])$(id).value=data.provider[key];renderLocalModelOptions(data.models);stage3SettingsDirty=true;refreshConcurrencyDefault();}
-  status.textContent=data.provider?'已连接本机看图模型。':localModelOptions.length?'请选择一个已连接的看图模型。':'还没有连接到看图模型，请先启动本机的模型程序，再点“重新连接”。';stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);
+  if(data.scan){clearTimeout(localModelScanTimer);const scanGeneration=++localModelScanGeneration;localModelPollDeadline=Date.now()+210000;localModelPollFailures=0;localModelAutoSelectIdentity=localModelEmptyDefault()?localModelConnectionIdentity():null;renderLocalModelScan(data.scan);if(data.scan.running)localModelScanTimer=setTimeout(()=>pollLocalModelScan(scanGeneration),1500);}
+  status.textContent=data.provider?(data.message||'已连接本机看图模型。'):localModelOptions.length?'请选择一个已连接的看图模型。':data.pending?'正在后台读取本机模型服务，发现后立即显示。':'还没有连接到看图模型，请先启动本机的模型程序，再点“重新连接”。';stage3ProviderFields();if(lastStatus)stage3Button(lastStatus);
  }catch(error){if(generation===localModelReadGeneration&&$('stage3-mode').value==='local_model'){status.textContent='暂时没有连接成功，请确认本机模型程序已启动后重试。';$('stage3-local-technical').textContent=error.message||'连接失败';}}
 }
 function chooseLocalModel(){const option=localModelOptions[Number($('stage3-local-model').value)];if($('stage3-local-model').value===''||!option)return;for(const [id,key] of [['stage3-base-url','base_url'],['stage3-model','id'],['stage3-protocol','protocol']])$(id).value=option[key];stage3SettingsDirty=true;refreshConcurrencyDefault();if(lastStatus)stage3Button(lastStatus);}
@@ -264,7 +282,7 @@ function renderStage3Settings(data){
  }
  stage3ProviderFields();const locked=Boolean(data.stage3_runtime?.switch_pending);
  for(const id of ['stage3-local-repair','stage3-local-model'])if($(id))$(id).disabled=locked;
- if(p?.mode==='local_model'&&$('stage3-mode').value==='local_model'&&localModelLoadedFor!==(data.category_key||'')){localModelLoadedFor=data.category_key||'';repairLocalModelConnection();startLocalModelScan();}
+ if(p?.mode==='local_model'&&$('stage3-mode').value==='local_model'&&localModelLoadedFor!==(data.category_key||'')){localModelLoadedFor=data.category_key||'';startLocalModelScan();}
  for(const id of ['stage3-mode','stage3-base-url','stage3-model','stage3-protocol','stage3-workers','stage3-confidence','stage3-api-key','stage3-auto'])if($(id))$(id).disabled=locked||(id==='stage3-workers'&&Boolean($('stage3-auto')?.checked));
  for(const select of document.querySelectorAll('[data-agent-select]'))select.disabled=locked;
  for(const select of document.querySelectorAll('[data-agent-model]'))select.disabled=locked||select.dataset.available!=='true';

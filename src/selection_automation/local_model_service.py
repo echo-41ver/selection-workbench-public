@@ -1,5 +1,5 @@
 """Discover and recover installed local vision services without running inference."""
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED, TimeoutError as FuturesTimeout
 import json
 import hashlib
 from http.client import HTTPException
@@ -122,9 +122,6 @@ def _probe(base):
             return {'base_url':base,'source':'需授权的本地服务','rows':[],'authentication_required':True}
     except (OSError,ValueError):
         pass
-    from .local_d1 import discover,SOURCE
-    if model := discover(base,_json):
-        return {'base_url':base,'source':SOURCE,'rows':[model]}
     for path, source, key in (('/api/v1/models', 'LM Studio', 'models'),
                               ('/api/v0/models', 'LM Studio', 'data'),
                               ('/v1/models', 'OpenAI 兼容本地服务', 'data')):
@@ -137,6 +134,13 @@ def _probe(base):
                 return {'base_url': base, 'source': '需授权的本地服务', 'rows': [], 'authentication_required': True}
         except (OSError, ValueError):
             pass
+    return None
+
+
+def _probe_native(base):
+    from .local_d1 import discover,SOURCE
+    if model:=discover(base,_json):
+        return {'base_url':base,'source':SOURCE,'rows':[model]}
     return None
 
 
@@ -179,31 +183,94 @@ def _api_models(service):
     return result, candidates
 
 
-def catalog(root, start=False, *, full=False, cancel=None, preferred=None):
+def _completed(pending, seconds, cancel=None):
+    """Yield metadata completions while keeping cancellation independently live."""
+    deadline=time.monotonic()+seconds
+    pending=set(pending)
+    while pending:
+        if cancel is not None and cancel.is_set() or time.monotonic()>=deadline:
+            raise FuturesTimeout()
+        done,pending=wait(pending,timeout=min(.1,max(0,deadline-time.monotonic())),return_when=FIRST_COMPLETED)
+        yield from done
+
+
+def _catalog_result(models, unconfirmed, services, started, partial, phase='done', checked=0, total=0):
+    models = list({(row['base_url'], row['id']): row for row in models}.values())
+    models.sort(key=lambda m: (m['id'].startswith('llamacpp:'), urlsplit(m['base_url']).port != 11434,
+                              m['size'] if isinstance(m['size'], int) else 0, m['id']))
+    grouped = {}
+    for model in models:
+        identity = model.get('identity') or (model['base_url'], model['id'])
+        if identity not in grouped:
+            grouped[identity] = {**model, 'connections': []}
+        grouped[identity]['connections'].append(dict(model))
+    models = list(grouped.values())
+    connected = any(not service.get('authentication_required') for service in services)
+    from .local_d1 import SOURCE
+    native_d1=any(model['source']==SOURCE for model in models)
+    message = ('D1 原生图片决策接口已连接；检测未发送推理请求，实际图片推理尚待验证。' if native_d1 else
+               '已读取本机实际安装的看图模型；检测不会发送分析请求。' if models else
+               '正在读取本机模型服务，已发现结果会立即显示。' if phase!='done' else
+               '本机模型服务已连接，但没有检测到已安装的看图模型；其他模型及授权状态见扫描结果。' if connected else
+               '本机服务暂未就绪，请检查服务启动日志；其他分析方案不受影响。' if _installed() else
+               '未安装可自动启动的 Ollama 服务；可填写自定义本地服务，或选择 API / Agent 分析。')
+    return {'models':models,'service_connected':connected,'started':started,'partial':partial,
+            'phase':phase,'checked_endpoints':checked,'total_endpoints':total,'message':message,
+            'candidates':[dict(row) for row in unconfirmed],
+            'services':[{key:value for key,value in item.items() if key!='rows'} for item in services]}
+
+
+def catalog(root, start=False, *, full=False, cancel=None, preferred=None, on_progress=None):
+    deadline=time.monotonic()+(24 if full else 16)
+    def stopped():return (cancel is not None and cancel.is_set()) or time.monotonic()>=deadline
+    if stopped():return _catalog_result([],[],[],False,True)
     endpoints = _endpoints()
     if preferred:
         address=urlsplit(preferred)
         base=address._replace(path='',query='',fragment='').geturl().rstrip('/')
         if address.hostname in {'localhost','127.0.0.1','::1'}:
             endpoints=[base]+[item for item in endpoints if item!=base]
-    services, partial = [], False
+    services, partial, models, unconfirmed, checked, started = [], False, [], [], 0, False
+    from .local_d1 import SOURCE
+    def publish(phase):
+        if on_progress is not None:
+            on_progress(_catalog_result(models,unconfirmed,services,started,True,phase,checked,len(endpoints)))
+    publish('services')
+    native_bases=set()
+    # Probe each listener's native health once before lengthy compatibility
+    # probes can occupy all workers. Ports still come from this machine.
+    pool=ThreadPoolExecutor(max_workers=min(32,max(1,len(endpoints))))
+    pending=[pool.submit(_probe_native,base) for base in endpoints] if not stopped() else []
+    try:
+        for future in _completed(pending,min(8,max(0,deadline-time.monotonic())),cancel):
+            checked+=1
+            if service:=future.result():
+                services.append(service);models.extend(service['rows']);native_bases.add(service['base_url'])
+                publish('native_services')
+    except FuturesTimeout:
+        partial=True
+    finally:
+        pool.shutdown(wait=False,cancel_futures=True)
+    checked=len(native_bases)
     # Listening ports include silent/non-HTTP services. Bound each first HTTP
     # probe once, and keep a late model listener from sitting behind 80 ports.
     pool = ThreadPoolExecutor(max_workers=min(32,max(1,len(endpoints))))
-    pending = [pool.submit(_probe, base) for base in endpoints]
+    pending = [pool.submit(_probe, base) for base in endpoints if base not in native_bases] if not stopped() else []
     try:
-        for future in as_completed(pending, timeout=None if full else 8):
+        for future in _completed(pending,min(8,max(0,deadline-time.monotonic())),cancel):
             if cancel is not None and cancel.is_set():
                 partial = True
                 break
+            checked+=1
             if service := future.result():
                 services.append(service)
+                if service['source']==SOURCE:models.extend(service['rows'])
+            publish('services')
     except FuturesTimeout:
         partial = True
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
-    started = False
-    if not any(not service.get('authentication_required') for service in services) and start:
+    if not any(not service.get('authentication_required') for service in services) and start and not (cancel and cancel.is_set()):
         listening = False
         default_base = 'http://127.0.0.1:11434'
         try:
@@ -213,8 +280,8 @@ def catalog(root, start=False, *, full=False, cancel=None, preferred=None):
             pass
         if not listening:
             started = _start(root)
-            deadline = time.monotonic() + (5 if _installed() else 0)
-            while time.monotonic() < deadline:
+            start_deadline = min(deadline,time.monotonic()+(5 if _installed() else 0))
+            while time.monotonic() < start_deadline and not (cancel and cancel.is_set()):
                 rows = _tags(default_base)
                 if rows is not None:
                     services.append({'base_url': default_base, 'source': 'Ollama', 'rows': rows})
@@ -226,6 +293,7 @@ def catalog(root, start=False, *, full=False, cancel=None, preferred=None):
         base, rows = service['base_url'], service['rows']
         if not rows or service.get('authentication_required'):
             continue
+        if service['source']==SOURCE:continue
         if service['source'] != 'Ollama':
             api_services.append(service)
             continue
@@ -233,61 +301,41 @@ def catalog(root, start=False, *, full=False, cancel=None, preferred=None):
             name = (row.get('name') or row.get('model')) if isinstance(row, dict) else None
             if isinstance(name, str):
                 candidates.setdefault((urlsplit(base).port, name), (base, row))
-    models = []
-    unconfirmed = []
-    if candidates:
+    if candidates and not stopped():
         pool = ThreadPoolExecutor(max_workers=4)
         pending = [pool.submit(_describe, base, row) for base, row in candidates.values()]
         try:
-            for future in as_completed(pending, timeout=None if full else 4):
+            for future in _completed(pending,min(4,max(0,deadline-time.monotonic())),cancel):
                 if cancel is not None and cancel.is_set():
                     partial = True
                     break
                 if model := future.result():
                     (models if model['vision'] else unconfirmed).append(model)
+                    publish('model_capabilities')
         except FuturesTimeout:
             partial = True
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
-    if api_services:
+    if api_services and not stopped():
         pool = ThreadPoolExecutor(max_workers=8)
         pending = [pool.submit(_api_models, service) for service in api_services]
         try:
-            for future in as_completed(pending, timeout=None if full else 4):
+            for future in _completed(pending,min(4,max(0,deadline-time.monotonic())),cancel):
                 if cancel is not None and cancel.is_set():
                     partial = True
                     break
                 ready, unknown = future.result()
                 models.extend(ready)
                 unconfirmed.extend(unknown)
+                publish('model_capabilities')
         except FuturesTimeout:
             partial = True
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
-    models = list({(row['base_url'], row['id']): row for row in models}.values())
-    models.sort(key=lambda m: (m['id'].startswith('llamacpp:'), urlsplit(m['base_url']).port != 11434,
-                              m['size'] if isinstance(m['size'], int) else 0, m['id']))
-    grouped = {}
-    for model in models:
-        identity = model.get('identity') or (model['base_url'], model['id'])
-        if identity not in grouped:
-            grouped[identity] = {**model, 'connections': []}
-        grouped[identity]['connections'].append(model)
-    models = list(grouped.values())
-    connected = any(not service.get('authentication_required') for service in services)
-    from .local_d1 import SOURCE
-    native_d1=any(model['source']==SOURCE for model in models)
-    message = ('D1 原生图片决策接口已连接；检测未发送推理请求，实际图片推理尚待验证。' if native_d1 else
-               '已读取本机实际安装的看图模型；检测不会发送分析请求。' if models else
-               '本机模型服务已连接，但没有检测到已安装的看图模型；其他模型及授权状态见扫描结果。' if connected else
-               '本机服务暂未就绪，请检查服务启动日志；其他分析方案不受影响。' if _installed() else
-               '未安装可自动启动的 Ollama 服务；可填写自定义本地服务，或选择 API / Agent 分析。')
-    return {'models': models, 'service_connected': connected, 'started': started,
-            'partial': partial, 'message': message, 'candidates': unconfirmed,
-            'services': [{key: value for key, value in service.items() if key != 'rows'} for service in services]}
+    return _catalog_result(models,unconfirmed,services,started,partial or stopped(),checked=checked,total=len(endpoints))
 
 
-def repair_provider(root, provider, allow_default=False):
+def repair_provider(root, provider, allow_default=False, *, background=False):
     address = urlsplit(provider['base_url'])
     from .local_d1 import discover,native_endpoint,SOURCE
     if native_endpoint({'mode':'local_model',**provider}):
@@ -304,7 +352,12 @@ def repair_provider(root, provider, allow_default=False):
     legacy_default = (address.port == 18181 and address.path.rstrip('/') == '/v1/systemone'
                       and provider['model'] == 'd1-3b' and provider['protocol'] == 'decisions')
     eligible = legacy_default or address.port == 11434 or allow_default
-    data = catalog(root, start=eligible,preferred=provider['base_url'])
+    if background:
+        from .local_model_inventory import start_scan
+        scan=start_scan(root,restart=True)
+        data=dict(scan.get('services') or _catalog_result([],[],[],False,True,'services'))
+        data.update(pending=scan['running'],scan=scan)
+    else:data = catalog(root, start=eligible,preferred=provider['base_url'])
     connections = [connection for model in data['models'] for connection in model.get('connections', [model])]
     matching = sorted([model for model in connections if model['id'] == provider['model']],
                       key=lambda model: model['base_url'].rstrip('/') != provider['base_url'].rstrip('/'))

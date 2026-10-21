@@ -3,9 +3,15 @@ from pathlib import Path
 import threading
 import time
 from types import SimpleNamespace
+import pytest
 
 from selection_automation import local_model_inventory as inventory
 from selection_automation import local_model_service as service
+
+
+@pytest.fixture(autouse=True)
+def no_native_service_unless_explicitly_tested(monkeypatch):
+    monkeypatch.setattr(service,'_probe_native',lambda base:None)
 
 
 def test_model_labels_are_readable_and_identify_auxiliary_and_test_files():

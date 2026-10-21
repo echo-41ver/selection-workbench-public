@@ -8,6 +8,11 @@ from selection_automation import local_model_service as service
 from selection_automation.stage3_provider import settings
 
 
+@pytest.fixture(autouse=True)
+def no_native_service_unless_explicitly_tested(monkeypatch):
+    monkeypatch.setattr(service,'_probe_native',lambda base:None)
+
+
 @pytest.fixture
 def local_server(monkeypatch):
     calls = []

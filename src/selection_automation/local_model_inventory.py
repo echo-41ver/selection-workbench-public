@@ -1,6 +1,7 @@
 """Read-only local model inventory. Never load weights or execute model files."""
 import ctypes
 from collections import deque
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import psutil
 _LOCK = threading.RLock()
 _SCANS = {}
 _LIMIT = 2000
+_SCAN_SECONDS = 180
 _SKIP = {'$recycle.bin', 'system volume information'}
 
 
@@ -201,8 +203,7 @@ def inspect_directory(path, files, cancel=None):
 
 
 def _snapshot(state):
-    return {key: value for key, value in state.items() if key != '_cancel'} | {
-        'models': [dict(row) for row in state['models']],
+    return deepcopy({key: value for key, value in state.items() if not key.startswith('_')}) | {
         'elapsed_seconds': round(time.time() - state['started_at'], 1) if state['running'] else state.get('elapsed_seconds', 0)}
 
 
@@ -221,7 +222,9 @@ def start_scan(root, restart=False):
         state = {'scan_id': uuid.uuid4().hex, 'running': True, 'status': 'scanning',
                  'started_at': time.time(), 'directories': 0, 'files': 0, 'skipped': 0,
                  'truncated': False, 'roots': [], 'models': [], 'services': {}, 'current_directory': '',
-                 'message': '正在读取本机服务，并扫描本地固定磁盘上的模型文件。', '_cancel': threading.Event()}
+                 'phase':'services','partial':False,'budget_seconds':_SCAN_SECONDS,
+                 'message': '正在读取本机服务，发现可调用模型后立即显示；随后继续查找模型文件。',
+                 '_deadline':time.monotonic()+_SCAN_SECONDS,'_cancel': threading.Event()}
         _SCANS[key] = state
         threading.Thread(target=_run_scan, args=(root, state), name='local-model-inventory', daemon=True).start()
         return _snapshot(state)
@@ -239,17 +242,28 @@ def cancel_scan(root):
 def _run_scan(root, state):
     try:
         from .local_model_service import catalog
-        services = catalog(root, full=True, cancel=state['_cancel'])
-        roots = scan_roots()
+        class Stop:
+            def is_set(self):
+                return state['_cancel'].is_set() or time.monotonic()>=state['_deadline']
+        stop=Stop()
+        def progress(data):
+            with _LOCK:
+                state['services']=deepcopy(data)
+                state['message']=data.get('message','正在读取本机模型服务。')
+        services = catalog(root, start=True, full=True, cancel=stop, on_progress=progress)
+        roots = [] if stop.is_set() else scan_roots()
         with _LOCK:
-            state['services'] = services
+            state['services'] = deepcopy(services)
             state['roots'] = [str(path) for path in roots]
+            state['phase']='files'
+            state['partial']=bool(services.get('partial'))
+            state['message']='服务发现结果已显示，正在继续查找本机模型文件；可随时停止查找。'
         covered, found = set(), set()
         root_keys = {_path_key(path) for path in roots}
         # Breadth-first traversal visits every disk early; a large C: directory
         # tree must not postpone D: model discovery until C: is exhausted.
         pending = deque(roots)
-        while pending and not state['_cancel'].is_set():
+        while pending and not stop.is_set():
             path = pending.popleft()
             key = _path_key(path)
             if key in root_keys:
@@ -262,7 +276,7 @@ def _run_scan(root, state):
                 with os.scandir(path) as entries:
                     files, folders = [], []
                     for entry in entries:
-                        if state['_cancel'].is_set():
+                        if stop.is_set():
                             break
                         try:
                             if entry.is_dir(follow_symlinks=False):
@@ -278,7 +292,7 @@ def _run_scan(root, state):
                         except OSError:
                             with _LOCK:
                                 state['skipped'] += 1
-                records = inspect_directory(path, files, state['_cancel'])
+                records = inspect_directory(path, files, stop)
                 with _LOCK:
                     state['directories'] += 1
                     state['files'] += len(files)
@@ -297,12 +311,17 @@ def _run_scan(root, state):
                 with _LOCK:
                     state['skipped'] += 1
         with _LOCK:
-            state['status'] = 'cancelled' if state['_cancel'].is_set() else 'complete'
+            state['partial']=state['partial'] or stop.is_set()
+            state['phase']='done'
+            state['status'] = 'cancelled' if state['_cancel'].is_set() else 'partial' if state['partial'] else 'complete'
             state['message'] = ('扫描已停止，保留已发现结果。' if state['_cancel'].is_set() else
+                                '本轮查找达到时间预算或部分服务未完成，已发现结果保留；需要时可重新查找。' if state['partial'] else
                                 '已扫描可访问的本地固定磁盘；权限受限目录、回收站、系统卷目录和链接目录已跳过。')
     except Exception as error:
         with _LOCK:
             state['status'] = 'failed'
+            state['partial']=True
+            state['phase']='done'
             state['message'] = f'扫描未完成（{type(error).__name__}），已发现结果保留。'
     finally:
         with _LOCK:

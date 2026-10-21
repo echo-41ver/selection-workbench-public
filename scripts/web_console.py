@@ -2324,6 +2324,10 @@ class Handler(BaseHTTPRequestHandler):
         except ConsoleError as exc: self.send_json({'ok':False,'error':{'code':exc.code,'message':exc.message}},exc.status)
         except Exception: self.send_json({'ok':False,'error':{'code':'READ_FAILED','message':'页面或状态读取失败'}},500)
     def do_POST(self):
+        # Model metadata discovery does not mutate task/provider state. Never
+        # queue a scan/cancel behind a synchronous repair or block task Stop.
+        if self.path in ('/api/local-models/repair','/api/local-models/scan'):
+            return self._do_POST()
         with getattr(self.server,'release_lock',nullcontext()):self._do_POST()
 
     def _do_POST(self):
@@ -2374,7 +2378,7 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
                 if provider['mode']!='local_model':raise ConsoleError('INVALID_INPUT','请选择本地模型服务')
                 result=repair_provider(self.server.console.root,provider,
-                    allow_default=not bool(body['provider'].get('model','').strip()))
+                    allow_default=not bool(body['provider'].get('model','').strip()),background=True)
                 return self.send_json({'ok':True,**result})
             if self.path=='/api/local-agents/models':
                 from selection_automation.agent_models import catalogs

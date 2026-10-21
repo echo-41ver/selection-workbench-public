@@ -104,6 +104,7 @@ def test_selected_local_endpoint_is_first_without_assuming_its_port(tmp_path, mo
     seen = []; base = 'http://127.0.0.1:23456'
     model = d1.discover(base, lambda _,path: metadata()['health' if path == '/health' else 'document'])
     monkeypatch.setattr(service, '_endpoints', lambda: [f'http://127.0.0.1:{20000+i}' for i in range(80)])
+    monkeypatch.setattr(service, '_probe_native', lambda base:None)
     def probe(address):
         seen.append(address)
         return {'base_url': address, 'source': d1.SOURCE, 'rows': [model]} if address == base else None

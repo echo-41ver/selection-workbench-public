@@ -81,3 +81,68 @@ test('whole-machine scanning is background-only and does not alter the selected 
  assert.equal(get('stage3-model').value,'manual-choice');assert.equal(get('stage3-base-url').value,'http://127.0.0.1:11434/v1');
  assert.equal(calls.length,1);
 });
+
+function fakeTimers(context){
+ let next=0;const pending=new Map();
+ context.setTimeout=(fn,delay)=>{const id=++next;pending.set(id,{fn,delay});return id;};
+ context.clearTimeout=id=>pending.delete(id);
+ return {async tick(){const row=[...pending].sort((a,b)=>a[1].delay-b[1].delay)[0];assert.ok(row,'a bounded progress poll is scheduled');pending.delete(row[0]);await row[1].fn();},pending};
+}
+const nativeModel={id:'LiquidAI/d1-3B',name:'LiquidAI/d1-3B',display_name:'本机 D1 原生图片决策接口',source:'D1 原生图片决策接口',vision:true,base_url:'http://127.0.0.1:7863/v1/decide',protocol:'decisions',inference_verified:false};
+const earlyNative={ok:true,status:'scanning',running:true,phase:'files',partial:false,models:[],services:{models:[nativeModel],message:'D1 原生图片决策接口已连接；检测未发送推理请求。'}};
+
+test('first local mode uses one background scan and never queues synchronous repair',async()=>{
+ const calls=[],{context}=setup(async(path,options)=>{calls.push({path,body:JSON.parse(options.body)});return {ok:true,json:async()=>({ok:true,status:'scanning',running:true,services:{models:[]}})};});
+ fakeTimers(context);vm.runInContext('chooseStage3Mode()',context);await new Promise(setImmediate);
+ assert.deepEqual(calls.map(x=>x.path),['/api/local-models/scan']);
+ assert.equal(calls[0].body.action,'start');
+});
+
+test('unknown start outcome is followed by GET, not a second start, and exposes early D1',async()=>{
+ const calls=[],{context,get}=setup(async(path,options)=>{
+  calls.push({path,method:options?.method||'GET'});
+  if(options?.method==='POST'){const error=Error('aborted');error.name='AbortError';throw error;}
+  return {ok:true,json:async()=>earlyNative};
+ });const timers=fakeTimers(context);
+ await vm.runInContext('startLocalModelScan()',context);await timers.tick();
+ assert.deepEqual(calls.map(x=>x.method),['POST','GET']);
+ assert.equal(get('stage3-model').value,nativeModel.id);assert.equal(get('stage3-base-url').value,nativeModel.base_url);
+ assert.equal(get('stage3-protocol').value,'decisions');assert.equal(get('stage3-workers').value,'77');
+ assert.match(get('stage3-local-scan-status').textContent,/现在可用/);
+ assert.ok(calls.every(x=>x.path==='/api/local-models/scan'));
+});
+
+test('one failed progress GET can recover without restarting or losing models',async()=>{
+ let reads=0;const calls=[],{context,get}=setup(async(path,options)=>{
+  calls.push(options?.method||'GET');
+  if(options?.method==='POST')return {ok:true,json:async()=>({running:true,services:{models:[]}})};
+  if(++reads===1)throw Error('temporary local HTTP read failure');
+  return {ok:true,json:async()=>earlyNative};
+ });const timers=fakeTimers(context);
+ await vm.runInContext('startLocalModelScan()',context);await timers.tick();await timers.tick();
+ assert.deepEqual(calls,['POST','GET','GET']);assert.equal(get('stage3-model').value,nativeModel.id);
+});
+
+test('early discovered model cannot overwrite manual settings entered during scan start',async()=>{
+ let finish;const {context,get}=setup(()=>new Promise(resolve=>{finish=resolve;}));fakeTimers(context);
+ const pending=vm.runInContext('startLocalModelScan()',context);get('stage3-model').value='explicit-custom';get('stage3-base-url').value='http://127.0.0.1:15555/v1';
+ finish({ok:true,json:async()=>earlyNative});await pending;
+ assert.equal(get('stage3-model').value,'explicit-custom');assert.equal(get('stage3-base-url').value,'http://127.0.0.1:15555/v1');
+ assert.equal(get('stage3-workers').value,'77');
+});
+
+test('scan partial budget is visible and never labelled fully complete',()=>{
+ const {context,get}=setup(()=>assert.fail('render only'));context.partial={...earlyNative,running:false,status:'partial',partial:true};
+ vm.runInContext('renderLocalModelScan(partial)',context);
+ assert.match(get('stage3-local-scan-status').textContent,/部分完成/);
+ assert.doesNotMatch(get('stage3-local-scan-status').textContent,/^查找完成/);
+ assert.equal(get('stage3-local-model').children.length,2);
+});
+
+test('cancel in flight prevents a restart and stale cancel cannot replace later mode',async()=>{
+ let finish;const calls=[],{context,get}=setup((path,options)=>{calls.push(JSON.parse(options.body));return new Promise(resolve=>{finish=resolve;});});fakeTimers(context);
+ const pending=vm.runInContext('stopLocalModelScan()',context);await vm.runInContext('startLocalModelScan(true)',context);
+ assert.equal(calls.length,1);assert.equal(calls[0].action,'cancel');
+ get('stage3-mode').value='multimodal_api';finish({ok:true,json:async()=>({running:false,status:'cancelled',models:[]})});await pending;
+ assert.equal(get('stage3-mode').value,'multimodal_api');assert.equal(get('stage3-model').value,'');
+});

@@ -795,15 +795,28 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                 return
             from company_setup import ensure_company
             ensure_company(start=False)
-            if not provision_company_process(base,cat,paid,children=children,state=state,preserve_prepared=preserve_prepared):
-                save(base/'status.json',{'状态':'已停止','阶段':state,'结果目录':str(base/'excel')})
-                return
-            manifest=read(ROOT/'config'/'sessions.json', {})
-            if manifest.get('machine_id')!=identity():
-                raise RuntimeError('浏览器清单不属于本机；不能操作其他电脑的环境')
-            manifest['used']=True
-            save(ROOT/'config'/'sessions.json',manifest)
-            sessions=manifest['workers']
+            from selection_automation.completed_collection import completed_checkpoint, unchanged
+            analysis_resume=completed_checkpoint(ROOT,base,cat) if preserve_prepared else None
+            if analysis_resume:
+                # Successful collection cleanup may have removed its manifest.
+                # Keep retired browsers retired; only real downstream work resumes.
+                sessions=[];finished.update(('amazon','cleanup'))
+                state['bootstrap']={'状态':'采集已完成，仅续接汇总、分析和导出',
+                                    '续接依据':analysis_resume['mode'],
+                                    'Amazon商品数':analysis_resume['amazon_count'],
+                                    '已完成关键词数':analysis_resume['keyword_count']}
+                state['amazon']={'状态':'完整前端快照已核验，沿用采集断点'}
+                state['cleanup']={'状态':'原采集环境已清理，不重新创建或绑定浏览器'}
+            else:
+                if not provision_company_process(base,cat,paid,children=children,state=state,preserve_prepared=preserve_prepared):
+                    save(base/'status.json',{'状态':'已停止','阶段':state,'结果目录':str(base/'excel')})
+                    return
+                manifest=read(ROOT/'config'/'sessions.json', {})
+                if manifest.get('machine_id')!=identity():
+                    raise RuntimeError('浏览器清单不属于本机；不能操作其他电脑的环境')
+                manifest['used']=True
+                save(ROOT/'config'/'sessions.json',manifest)
+                sessions=manifest['workers']
             # Start only the primary query while Amazon loads. Its completed
             # titles then add evidenced searches without moving existing work.
             plan_path=base/'temu'/'keyword_plan.json'
@@ -819,10 +832,13 @@ def supervise(category_path, paid,*,preserve_prepared=False):
             amazon=base/'amazon'/'amazon_frontend_latest.json'
             last_amazon=None; last_plan=None; last_export=0; last_completion=0; rotation_jobs={}
             while not (base/'STOP').exists():
-                service('binding_recovery',py('resume_worker_binding.py','--monitor','--category',category_path))
+                if analysis_resume and not unchanged(analysis_resume):
+                    raise RuntimeError('已完成采集的续接依据发生变化；已保留断点，请重新检查后继续')
+                if not analysis_resume:
+                    service('binding_recovery',py('resume_worker_binding.py','--monitor','--category',category_path))
+                    service('amazon',py('collect_amazon_until_complete.py','--category',category_path))
                 service('market',py('collect_market_evidence.py','--category',category_path))
-                service('amazon',py('collect_amazon_until_complete.py','--category',category_path))
-                if amazon.exists():
+                if not analysis_resume and amazon.exists():
                     stamp=(amazon.stat().st_mtime_ns,amazon.stat().st_size)
                     if stamp!=last_amazon:
                         payload=read(amazon)
@@ -845,14 +861,16 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                 if 'amazon' in finished and attempts.get('amazon',0)==0 and not plan.get('finalized'):
                     plan['finalized']=True; save(plan_path,plan)
                 from selection_automation import work_dispatch
-                dispatch=work_dispatch.sync(base,plan['keywords'],[s['name'] for s in sessions])
+                dispatch=work_dispatch.read(base) if analysis_resume else work_dispatch.sync(base,plan['keywords'],[s['name'] for s in sessions])
                 plan_key=revision(plan)
                 if plan_key!=last_plan:
                     for session in sessions: finished.discard(session['name'])
                     last_plan=plan_key
-                sessions,rotating=rotation_step(base,category_path,sessions,read(active),jobs=rotation_jobs,
-                    children=children,state=state,finished=finished,attempts=attempts,next_at=next_at,
-                    manual_leases=manual_leases,launch=launch,py=py)
+                rotating=set()
+                if not analysis_resume:
+                    sessions,rotating=rotation_step(base,category_path,sessions,read(active),jobs=rotation_jobs,
+                        children=children,state=state,finished=finished,attempts=attempts,next_at=next_at,
+                        manual_leases=manual_leases,launch=launch,py=py)
                 for session in sessions:
                     if sessions.index(session)+1 in rotating: continue
                     if not work_dispatch.available(dispatch,session['name']) and session['name'] not in children:
@@ -923,7 +941,7 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                 pending_commands=any(r['status'] in rotation_queue.PENDING for r in rotation_queue.read_requests(base))
                 # Each idle lane can retire once the keyword plan is final.
                 # A different lane's CAPTCHA must not retain completed browsers.
-                if plan.get('finalized') and not pending_commands:
+                if not analysis_resume and plan.get('finalized') and not pending_commands:
                     service('cleanup',py('cleanup_completed_worker.py','--run',base))
                     cleanup=read(base/'cleanup_status.json',{})
                     state['cleanup']={**state.get('cleanup',{}),'状态':'环境清理完成' if cleanup.get('status')=='COMPLETE' else ('环境清理重试中' if cleanup.get('status')=='RETRY_REQUIRED' else '环境清理中'),
