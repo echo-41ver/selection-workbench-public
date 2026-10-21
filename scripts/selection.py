@@ -342,8 +342,11 @@ def doctor():
             'API请求数':0}
 
 
-def ready_after_verification(session, query=None, *, allow_empty_search=False):
+def ready_after_verification(session, query=None, *, allow_empty_search=False, diagnostic=None):
+    import urllib.error
     import urllib.request
+    checked_at=time.time(); started=time.monotonic(); stage='SESSION'
+    result={'checked_at':checked_at,'ready':False,'check_ok':False}
     try:
         sid=(ROOT/session['session_id_file']).read_text(encoding='utf-8').strip()
         body={'script':r"""
@@ -360,9 +363,51 @@ def ready_after_verification(session, query=None, *, allow_empty_search=False):
             if (emptySearch) return ['interactive','complete'].includes(document.readyState) && [...document.querySelectorAll('input[type="search"]')].some(e => visible(e) && !e.disabled && !e.readOnly);
             return [...document.querySelectorAll('[data-goods-id],a[href*="-g-"]')].some(visible);
         """,'args':[query,allow_empty_search]}
+        stage='REQUEST'
         request=urllib.request.Request(session['webdriver_url']+'/session/'+sid+'/execute/sync',data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})
-        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=5) as r: return json.load(r).get('value') is True
-    except Exception: return False
+        stage='DRIVER'
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=5) as r:
+            stage='RESPONSE'; value=json.load(r).get('value')
+        ready=value is True
+        if isinstance(value,bool):
+            result.update(ready=ready,check_ok=True,code='PAGE_READY' if ready else 'PAGE_NOT_READY')
+        else:
+            result['code']='DRIVER_PROTOCOL_ERROR' if isinstance(value,dict) and 'error' in value else 'DRIVER_RESPONSE_FORMAT_ERROR'
+    except Exception as exc:
+        ready=False
+        # Never persist exception text, URLs, query terms, or session identifiers.
+        if stage=='SESSION': code='SESSION_FILE_ERROR'
+        elif isinstance(exc,urllib.error.HTTPError): code='DRIVER_HTTP_ERROR'
+        elif isinstance(exc,(TimeoutError,socket.timeout)) or (isinstance(exc,urllib.error.URLError) and isinstance(exc.reason,(TimeoutError,socket.timeout))): code='DRIVER_TIMEOUT'
+        elif isinstance(exc,(urllib.error.URLError,ConnectionError)): code='DRIVER_CONNECTION_ERROR'
+        elif isinstance(exc,json.JSONDecodeError): code='DRIVER_RESPONSE_JSON_ERROR'
+        elif stage=='RESPONSE': code='DRIVER_RESPONSE_FORMAT_ERROR'
+        elif stage=='REQUEST': code='DRIVER_REQUEST_ERROR'
+        else: code='DRIVER_CHECK_ERROR'
+        safe_types={'FileNotFoundError','PermissionError','UnicodeDecodeError','KeyError','ValueError','TypeError',
+                    'TimeoutError','ConnectionRefusedError','ConnectionResetError','URLError','HTTPError',
+                    'JSONDecodeError','AttributeError','OSError','RuntimeError'}
+        result.update(code=code,error_type=type(exc).__name__ if type(exc).__name__ in safe_types else 'Exception')
+        if isinstance(exc,urllib.error.HTTPError) and isinstance(exc.code,int) and 100<=exc.code<=599:
+            result['http_status']=exc.code
+    result['elapsed_seconds']=round(max(0,time.monotonic()-started),3)
+    if diagnostic is not None: diagnostic.update(result)
+    return ready
+
+
+def verification_probe_view(probe, recovery=None):
+    """Show a failed control check separately from a still-blocked page."""
+    view={'恢复检查':probe}
+    if recovery: view.update(状态=recovery['reason'],建议动作=recovery['action'])
+    if probe.get('check_ok') is False:
+        labels={'SESSION_FILE_ERROR':'无法读取当前浏览器连接记录','DRIVER_HTTP_ERROR':'浏览器控制请求未成功',
+                'DRIVER_TIMEOUT':'浏览器控制检查超时','DRIVER_CONNECTION_ERROR':'浏览器控制连接未成功',
+                'DRIVER_RESPONSE_JSON_ERROR':'浏览器控制返回格式异常','DRIVER_RESPONSE_FORMAT_ERROR':'浏览器控制返回格式异常',
+                'DRIVER_PROTOCOL_ERROR':'浏览器控制返回错误','DRIVER_REQUEST_ERROR':'浏览器控制请求未能构造',
+                'DRIVER_CHECK_ERROR':'浏览器恢复检查失败'}
+        label=labels.get(probe.get('code'),'浏览器恢复检查失败')
+        view.update(状态=label+'，未确认验证状态',建议动作=label+'；当前浏览器和断点已保留，程序会继续检查。')
+    return view
 
 
 def worker_snapshot(base, name):
@@ -458,6 +503,8 @@ def worker_snapshot(base, name):
     if progress.get('max_products'):
         view['当前排序目标']=progress['max_products']
     if recovery: view['建议动作']=recovery['action']; view['浏览器保留']=True
+    if recovery and worker.get('status')=='HUMAN_ACTION_REQUIRED' and isinstance(worker.get('verification_probe'),dict):
+        view.update(verification_probe_view(worker['verification_probe'],recovery))
     return worker,view,recovery
 
 
@@ -551,8 +598,13 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
         from selection_automation.browser_control_recovery import recovery_page_ready
         ready=recovery_page_ready(ROOT,session,worker.get('current_query')) if verify is ready_after_verification else verify(session,worker.get('current_query'))
     else:
-        ready=recovery['verify_to_resume'] and (verify(session,worker.get('current_query'),allow_empty_search=verification_wait)
+        probe={}
+        ready=recovery['verify_to_resume'] and (verify(session,worker.get('current_query'),allow_empty_search=verification_wait,diagnostic=probe)
             if verify is ready_after_verification else verify(session,worker.get('current_query')))
+        if probe:
+            worker={**worker,'verification_probe':probe}
+            save_progress(worker_path,worker)
+            state[name].update(verification_probe_view(probe,recovery))
     if not ready:
         return True
     attempts[name]=0; next_at[name]=0
