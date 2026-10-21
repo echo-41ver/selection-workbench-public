@@ -45,7 +45,9 @@ class RuleModelEvidenceTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix='mock-rule-evidence-only-'))
-        self.root = Path(directory)
+        # Windows CI may expose TEMP through an 8.3 alias (RUNNER~1). The
+        # production recorder resolves its existing root before publishing.
+        self.root = Path(directory).resolve()
         self.stack.enter_context(patch.dict(os.environ, {}, clear=True))
         for target in ('socket.create_connection', 'socket.socket', 'urllib.request.urlopen'):
             self.stack.enter_context(patch(target, side_effect=AssertionError('NETWORK_FORBIDDEN_IN_EVIDENCE_TEST')))
@@ -124,6 +126,34 @@ class RuleModelEvidenceTests(unittest.TestCase):
         return value, error, record
 
     def test_two_logical_calls_publish_distinct_complete_records_atomically(self):
+        self.assert_two_calls_published_atomically(self.root)
+
+    def test_windows_short_root_publishes_into_the_same_resolved_fixture(self):
+        if os.name != 'nt':
+            self.skipTest('Windows GetShortPathNameW requires Windows')
+        import ctypes
+        from ctypes import wintypes
+
+        get_short_path = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+        get_short_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+        get_short_path.restype = wintypes.DWORD
+        size = get_short_path(str(self.root), None, 0)
+        if not size:
+            self.skipTest(f'GetShortPathNameW unavailable for fixture: Windows error {ctypes.get_last_error()}')
+        buffer = ctypes.create_unicode_buffer(size)
+        written = get_short_path(str(self.root), buffer, size)
+        self.assertGreater(written, 0)
+        self.assertLess(written, size)
+        short_root = Path(buffer.value)
+        if str(short_root).casefold() == str(self.root).casefold():
+            self.skipTest('Fixture volume does not provide a distinct Windows 8.3 alias')
+        self.assertTrue(short_root.samefile(self.root))
+        self.assertEqual(short_root.resolve(), self.root)
+        # Exercise the actual recorder with the short spelling, while fixture
+        # enumeration keeps the resolved spelling and all atomic assertions.
+        self.assert_two_calls_published_atomically(short_root)
+
+    def assert_two_calls_published_atomically(self, input_root):
         publications = []
         real_replace, real_rename = os.replace, os.rename
 
@@ -141,7 +171,7 @@ class RuleModelEvidenceTests(unittest.TestCase):
         with patch('os.replace', side_effect=replacing(real_replace)), \
                 patch('os.rename', side_effect=replacing(real_rename)):
             for number in range(2):
-                with self.module.RuleModelEvidence(self.root) as evidence:
+                with self.module.RuleModelEvidence(input_root) as evidence:
                     evidence.observe(response_id='chatcmpl-test-' + str(number),
                                      model_usage={'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5})
 

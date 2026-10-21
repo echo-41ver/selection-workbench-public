@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ctypes
 import os
 import shutil
 import subprocess
@@ -14,9 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PS = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
 
 
-def fixture(tmp_path: Path, *, install_exit: int = 0, web_exit: int = 0, delay: int = 0) -> Path:
+def fixture(tmp_path: Path, *, install_exit: int = 0, web_exit: int = 0, delay: int = 0, wait_for_release: bool = False) -> Path:
     root = tmp_path / "工具夹具 中文 空格"
     (root / "scripts").mkdir(parents=True)
+    # Windows may supply an 8.3 TEMP alias, while PowerShell reports the same
+    # existing directory by its long name. Keep the exact argument assertions.
+    root = root.resolve()
     shutil.copy2(ROOT / "scripts/deployment_entry.ps1", root / "scripts/deployment_entry.ps1")
     for name in ("deployment_support.ps1", "export_deployment_diagnostics.ps1"):
         shutil.copy2(ROOT / "scripts" / name, root / "scripts" / name)
@@ -29,7 +33,14 @@ def fixture(tmp_path: Path, *, install_exit: int = 0, web_exit: int = 0, delay: 
         "[Console]::Out.WriteLine('fixture stdout 中文')\n"
         "[Console]::Error.WriteLine('fixture stderr 中文 password=fixture-only-secret')\n"
         "[Console]::Out.Write(('尾部中文无换行'))\n"
-        f"Start-Sleep -Seconds {delay}\nexit {install_exit}\n",
+        + ("$entered=[ordered]@{fixture_only=$true;pid=$PID;start_time_utc=[Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().ToString('o')}\n"
+         "[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'fixture-worker-entered.json'),($entered|ConvertTo-Json),(New-Object Text.UTF8Encoding($true)))\n"
+         "$release=Join-Path $PSScriptRoot 'fixture-worker-release.txt'\n"
+         "$deadline=[DateTime]::UtcNow.AddSeconds(45)\n"
+         "while(-not [IO.File]::Exists($release)){\n"
+         " if([DateTime]::UtcNow -ge $deadline){[Console]::Error.WriteLine('Fixture release barrier timed out');exit 86}\n"
+         " Start-Sleep -Milliseconds 100\n}\n" if wait_for_release else f"Start-Sleep -Seconds {delay}\n")
+        + f"exit {install_exit}\n",
         encoding="utf-8-sig",
     )
     (root / "start-web.ps1").write_text(
@@ -69,6 +80,31 @@ def wait_finished(folder: Path, timeout: float = 15):
             return read(folder / "result.json")
         time.sleep(0.2)
     raise AssertionError(f"fixture worker did not finish: {folder}")
+
+
+def wait_fixture_entered(root: Path, folder: Path, timeout: float = 10):
+    started = time.monotonic()
+    entered_path = root / "fixture-worker-entered.json"
+    phase_path = folder / "phase.json"
+    while True:
+        entered = phase = None
+        if entered_path.exists() and phase_path.exists():
+            try:
+                entered, phase = read(entered_path), read(phase_path)
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass  # The small marker write may still be completing.
+        ready = entered is not None and phase is not None
+        finished = (folder / "result.json").exists()
+        expired = time.monotonic() - started >= timeout
+        if ready or finished or expired:
+            observation = {"fixture_only": True, "timeout_seconds": timeout,
+                           "elapsed_seconds": time.monotonic() - started,
+                           "entered_exists": entered_path.exists(), "phase_exists": phase_path.exists(),
+                           "ready": ready, "worker_result_exists": finished}
+            (root / "fixture-entry-wait.json").write_text(json.dumps(observation, indent=2), encoding="utf-8")
+            assert ready, f"fixture worker did not enter the release barrier: {observation}; evidence: {folder}"
+            return entered, phase
+        time.sleep(0.1)
 
 
 def cleanup_finished_task(folder: Path):
@@ -137,23 +173,71 @@ def check_native_failures_are_preserved_and_install_gates_web(tmp_path, install_
 
 
 def check_parent_timeout_keeps_worker_and_rejects_duplicate(tmp_path):
-    root = fixture(tmp_path, delay=10)
-    p = invoke(root, wait_seconds=4)
-    assert p.returncode == 124, p.stdout + p.stderr
-    folder = attempt(root)
+    root = fixture(tmp_path, wait_for_release=True)
+    release = root / "fixture-worker-release.txt"
+    folder = None
     try:
+        p = invoke(root, wait_seconds=4)
+        assert p.returncode == 124, p.stdout + p.stderr
+        folder = attempt(root)
         timeout = read(folder / "parent-timeout.json")
         assert timeout["processes_killed"] is False
+        entered, phase = wait_fixture_entered(root, folder)
+        assert entered["fixture_only"] is True
+        assert entered["pid"] == phase["process"]["pid"]
+        assert entered["start_time_utc"] == phase["process"]["start_time_utc"]
         assert not (folder / "result.json").exists()
         assert "fixture stdout 中文" in (folder / "stdout.log").read_text("utf-8")
         again = invoke(root)
         assert again.returncode != 0 and "No duplicate" in again.stderr
         assert attempt(root) == folder
+        assert not (folder / "result.json").exists()
+        release.write_text("release this marked fixture only", encoding="utf-8")
         result = wait_finished(folder)
         assert result["native_exit_code"] == 0
         assert (root / "web-started.txt").exists()
     finally:
-        wait_finished(folder)
+        # Release even after an assertion fails; the fixture also has its own
+        # bounded failure exit, and no worker or scheduled task is killed here.
+        release.write_text("release this marked fixture only", encoding="utf-8")
+        if folder is None and (root / "runtime/deployment-entry").is_dir():
+            folder = attempt(root)
+        if folder is not None:
+            wait_finished(folder)
+            cleanup_finished_task(folder)
+
+
+def check_short_path_alias_preflight(tmp_path):
+    root = fixture(tmp_path)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_short = kernel.GetShortPathNameW
+    get_short.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint)
+    get_short.restype = ctypes.c_uint
+    needed = get_short(str(root), None, 0)
+    assert needed, f"GetShortPathNameW failed: {ctypes.get_last_error()}"
+    buffer = ctypes.create_unicode_buffer(needed)
+    length = get_short(str(root), buffer, needed)
+    assert 0 < length < needed, f"GetShortPathNameW failed: {ctypes.get_last_error()}"
+    alias = Path(buffer.value)
+    distinct = str(alias).casefold() != str(root).casefold()
+    (root / "short-path-availability.json").write_text(json.dumps({
+        "fixture_only": True, "api": "GetShortPathNameW", "canonical_root": str(root),
+        "short_alias": str(alias), "distinct_alias_available": distinct,
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not distinct:
+        raise unittest.SkipTest("8.3 alias unavailable: GetShortPathNameW returned the existing long path unchanged")
+    assert alias.resolve() == root
+    config = "配置 & 同事's 短路径.json"
+    p = invoke(alias, "-CompanyConfig", config, "-PreflightOnly")
+    assert p.returncode == 0, p.stdout + p.stderr
+    folder = attempt(root)
+    try:
+        received = read(root / "received.json")
+        assert received["CompanyConfig"] == str(root / config)
+        assert received["PreflightOnly"] is True or received["PreflightOnly"] == {"IsPresent": True}
+        assert read(folder / "result.json")["native_exit_code"] == 0
+        assert not (root / "web-started.txt").exists()
+    finally:
         cleanup_finished_task(folder)
 
 
@@ -260,6 +344,9 @@ class DeploymentContextTests(unittest.TestCase):
 
     def test_normal_desktop_deploy_cmd_preflight(self):
         check_normal_desktop_deploy_cmd_preflight(self.directory)
+
+    def test_short_path_alias_preflight(self):
+        check_short_path_alias_preflight(self.directory)
 
 
 if __name__ == "__main__":
