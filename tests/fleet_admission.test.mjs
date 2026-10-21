@@ -88,3 +88,54 @@ test('load more still honors server cooldown and can be stopped',async()=>{
  let ran=false;const rejected=assert.rejects(g.run('load_more',()=>{ran=true;}),/FLEET_STOP_REQUESTED/);
  await delay(30);await fs.writeFile(stopFile,'stop');await rejected;assert.equal(ran,false);
 });
+
+
+test('uncommitted atomic snapshots are not admission records',async t=>{
+ for(const kind of ['ticket','cooldown'])await t.test(kind,async()=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'fleet-publication-'));
+  const finalName=kind==='ticket'?'ticket-0000000000000000-in-progress.json':'cooldown-2147483647.json';
+  const snapshotUrl=pathToFileURL(path.resolve('scripts/snapshot_atomic.mjs')).href;
+  const source=`import fs from 'node:fs/promises';import path from 'node:path';import {atomicSnapshot} from ${JSON.stringify(snapshotUrl)};
+   let release;const released=new Promise(resolve=>release=resolve);process.stdin.once('data',()=>release());
+   const timer=setTimeout(()=>{throw Error('snapshot fixture was not released');},10000);
+   await atomicSnapshot(path.join(${JSON.stringify(directory)},${JSON.stringify(finalName)}),JSON.stringify({pid:process.pid,until:0,observedAt:0}),{filesystem:{...fs,writeFile:async(file,text,encoding)=>{
+    await fs.writeFile(file,'',encoding);console.log(JSON.stringify({temporary:file}));await released;await fs.writeFile(file,text,encoding);
+   }}});clearTimeout(timer);process.stdin.destroy();`;
+  const child=spawn(process.execPath,['--input-type=module','-e',source]);let out='',err='';
+  let staged;const ready=new Promise(resolve=>staged=resolve);
+  child.stdout.on('data',data=>{out+=data;const end=out.indexOf('\n');if(end!==-1)staged(JSON.parse(out.slice(0,end)));});
+  child.stderr.on('data',data=>err+=data);
+  const completed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',code=>code===0?resolve():reject(Error(`snapshot writer exited ${code}: ${err}`)));});
+  // Observe rejection now, while still awaiting the publication barrier.
+  completed.catch(()=>{});
+  try{
+   const row=await Promise.race([ready,completed.then(()=>{throw Error('snapshot writer exited before its barrier');})]);
+   assert.ok(path.basename(row.temporary).startsWith(finalName+'.'));
+   assert.ok(row.temporary.endsWith('.tmp'));
+   assert.equal(await fs.readFile(row.temporary,'utf8'),'');
+   await assert.rejects(fs.access(path.join(directory,finalName)),{code:'ENOENT'});
+   const gate=createFleetAdmission({directory,spacingMs:0,pollMs:5,memory:()=>[50,100]});
+   assert.equal(await gate.run('startup',()=>42),42);
+   if(kind==='cooldown')assert.equal(await gate.run('load_more',()=>43),43);
+   assert.equal(await fs.readFile(row.temporary,'utf8'),'');
+  }finally{
+   child.stdin.end('release\n');await completed;
+   assert.ok(JSON.parse(await fs.readFile(path.join(directory,finalName),'utf8')).pid>0);
+   await fs.rm(directory,{recursive:true,force:true});
+  }
+ });
+});
+
+test('malformed committed admission records fail closed',async t=>{
+ for(const kind of ['ticket','cooldown'])await t.test(kind,async()=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'fleet-invalid-'));
+  try{
+   const name=kind==='ticket'?'ticket-0000000000000000-invalid.json':'cooldown-2147483647.json';
+   await fs.writeFile(path.join(directory,name),'{');
+   const gate=createFleetAdmission({directory,spacingMs:0,pollMs:5,memory:()=>[50,100]});let ran=false;
+   await assert.rejects(gate.run('startup',()=>{ran=true;}),SyntaxError);assert.equal(ran,false);
+   if(kind==='cooldown')await assert.rejects(gate.run('load_more',()=>{ran=true;}),SyntaxError);
+   assert.equal(ran,false);
+  }finally{await fs.rm(directory,{recursive:true,force:true});}
+ });
+});

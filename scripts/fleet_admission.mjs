@@ -28,7 +28,8 @@ export function createFleetAdmission({directory,stopFile,onWait=async()=>{},onAd
  async function penalties(){
   let until=0,slow=false;
   for(const name of await fs.readdir(directory)){
-   if(!name.startsWith('cooldown-'))continue;
+   // atomicSnapshot's .tmp files are not published admission records.
+   if(!name.startsWith('cooldown-')||!name.endsWith('.json'))continue;
    try{const p=JSON.parse(await readShared(path.join(directory,name),'utf8'));until=Math.max(until,Number(p.until)||0);slow ||= Number(p.observedAt)>Date.now()-900000;}catch(e){if(e.code!=='ENOENT')throw e;}
   }
   return {until,slow};
@@ -59,7 +60,7 @@ export function createFleetAdmission({directory,stopFile,onWait=async()=>{},onAd
   try { while(true){
    await checkStop();const penalty=await penalties();const capacity=admissionCapacity(...memory());let slot=null;
    const queued=[];
-   for(const name of (await fs.readdir(directory)).filter(n=>n.startsWith('ticket-')).sort()){
+   for(const name of (await fs.readdir(directory)).filter(n=>n.startsWith('ticket-')&&n.endsWith('.json')).sort()){
     try{const row=JSON.parse(await readShared(path.join(directory,name),'utf8'));
      if(alive(row.pid))queued.push(name);else await removeShared(path.join(directory,name)).catch(()=>{});
     }catch(e){if(e.code!=='ENOENT')throw e;}
