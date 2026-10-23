@@ -226,14 +226,20 @@ def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,pre
         if not os.environ.get('DEEPSEEK_API_KEY'):apply_model_settings(saved,os.environ)
     if not start: return
     if new_task and resume_task: raise ValueError('新任务与续接任务不能同时指定')
+    rebuilding=False
     if preserve_task:
         if new_task or resume_task:raise ValueError('维护续接不能同时创建新环境')
-        resume_task=preserve_task
+        if not (ROOT/'config/sessions.json').exists():
+            from selection_automation.retired_collection import retired_task_receipt
+            rebuilding=bool(retired_task_receipt(ROOT,preserve_task,identity(),worker_count))
+            if not rebuilding:raise RuntimeError('维护续接必须属于本任务与本安装')
+            new_task=preserve_task
+        else:resume_task=preserve_task
     network_task=resume_task or new_task
     if resume_task and not preserve_task:
         new_task, resume_task = resume_task, None
     if new_task:
-        reject_retired_task_profiles(ROOT,new_task)
+        if not rebuilding:reject_retired_task_profiles(ROOT,new_task)
         from selection import identity,live_owner,read as task_read
         manifest=task_read(ROOT/'config'/'sessions.json',{})
         previous=manifest.get('task_key') if manifest.get('machine_id')==identity() else None
@@ -272,7 +278,7 @@ def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,pre
         clear_stale_stop_requests(ROOT/'runtime'/'worker-leases',
                                   [f'worker-{number:02d}-new' for number in range(1,worker_count+1)])
     manifest=read(ROOT/'config'/'sessions.json',{})
-    if preserve_task:
+    if preserve_task and not rebuilding:
         resumed_workers=restore_closed_task_workers(preserve_task,resumed_workers)
         manifest=read(ROOT/'config/sessions.json',{})
     if resume_task:

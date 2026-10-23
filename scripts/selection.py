@@ -869,10 +869,12 @@ def provision_company_process(base, cat, paid, *, children, state,preserve_prepa
         return False
     log=base/'logs'/'bootstrap.log'
     manifest=read(ROOT/'config'/'sessions.json',{})
-    resuming=preserve_prepared
+    from selection_automation.retired_collection import retired_task_receipt
+    rebuilding=bool(preserve_prepared and retired_task_receipt(ROOT,cat['category_key'],identity(),category_worker_count(cat)))
+    resuming=preserve_prepared and not rebuilding
     if resuming and (manifest.get('task_key')!=cat['category_key'] or manifest.get('machine_id')!=identity()):
         raise RuntimeError('维护续接必须属于本任务与本安装')
-    task_option='--preserve-task' if resuming else '--new-task'
+    task_option='--preserve-task' if preserve_prepared else '--new-task'
     child=spawn([sys.executable,str(ROOT/'scripts'/'company_setup.py'),'--start',task_option,cat['category_key'],'--worker-count',str(category_worker_count(cat))],log)
     children['bootstrap']=child
     started=time.monotonic()
@@ -888,7 +890,9 @@ def provision_company_process(base, cat, paid, *, children, state,preserve_prepa
         bound=sum(worker.get('bootstrap_status')=='BOUND' for worker in workers)
         if code==0 and registered:
             created=bound=len(registered)
-        phase=('原环境续接完成' if resuming and registered and code==0 else
+        phase=('原任务新环境准备完成，沿用采集断点' if rebuilding and registered and code==0 else
+               '为原任务创建新环境，沿用采集断点' if rebuilding else
+               '原环境续接完成' if resuming and registered and code==0 else
                '续接未完成采集路的原环境' if resuming else
                '新环境准备完成' if registered and code==0 else
                '归档并清理旧环境' if registered else
