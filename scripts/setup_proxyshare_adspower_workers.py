@@ -85,6 +85,42 @@ def retire_for_task(task_key):
             delete_profile_after_release(base,identifier)
             snapshot['deleted'].append(identifier)
         atomic_json(archive.with_suffix('.json'),snapshot)
+    from selection_automation.driver_retirement import release_retired_driver, DriverCleanupRequired
+    snapshot['driver_cleanup'] = []
+    by_worker = {}
+    for _, value in stale:
+        for worker in value.get('workers', []):
+            identifier = str(worker.get('profile_id') or '')
+            if not identifier:
+                continue
+            by_worker.setdefault(str(worker.get('name') or ''), []).append(worker)
+    for name, versions in by_worker.items():
+        identifier = None
+        try:
+            if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', name):
+                raise DriverCleanupRequired('缺少有效的采集路身份')
+            # A deferred completed bootstrap may predate a later replacement.
+            # Both profiles are now retired, but one lane has only one current
+            # driver record. Select its exact owned profile once, not each old
+            # manifest version. The helper still verifies the complete binding.
+            driver_path = ROOT/'runtime'/name/'driver.json'
+            current = read(driver_path, {}) if driver_path.exists() else None
+            if current is not None and not isinstance(current, dict):
+                raise DriverCleanupRequired('当前驱动身份记录格式不完整')
+            worker = versions[0] if current is None else next((item for item in versions
+                if str(item.get('profile_id')) == str(current.get('profile_id') or '')), None)
+            if worker is None:
+                raise DriverCleanupRequired('当前驱动环境不在该采集路的本次退休清单中')
+            identifier = str(worker['profile_id'])
+            result = release_retired_driver(ROOT, worker, identifier)
+            snapshot['driver_cleanup'].append({'worker': name, 'profile_id': identifier, **result})
+        except DriverCleanupRequired as error:
+            snapshot['driver_cleanup'].append({'worker': name, 'profile_id': identifier,
+                                              'status': 'RETRY_REQUIRED', 'reason': str(error)})
+            snapshot['environment_cleanup'] = 'RETRY_REQUIRED'
+            snapshot['environment_cleanup_reason'] = str(error)
+            atomic_json(archive.with_suffix('.json'), snapshot)
+            raise
     for file,_ in stale:
         deadline = time.monotonic() + 5
         while True:
@@ -93,8 +129,13 @@ def retire_for_task(task_key):
                 break
             except PermissionError:
                 if time.monotonic() >= deadline:
+                    snapshot['environment_cleanup'] = 'RETRY_REQUIRED'
+                    snapshot['environment_cleanup_reason'] = '旧环境和驱动已清理，但环境清单暂被占用；请重试清理，采集断点已保留'
+                    atomic_json(archive.with_suffix('.json'), snapshot)
                     raise RuntimeError('旧环境已清理，但环境清单暂被占用；点击重试准备环境即可继续')
                 time.sleep(.05)
+    snapshot['environment_cleanup'] = 'COMPLETE'
+    atomic_json(archive.with_suffix('.json'), snapshot)
 
 
 def _main() -> None:

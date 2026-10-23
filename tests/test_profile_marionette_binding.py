@@ -148,7 +148,13 @@ function Invoke-LocalDriverRest { param($Uri,$Method,$Body,$TimeoutSeconds)
     harness=tmp_path/'binding-harness.ps1'
     harness.write_text(mocks+'\n& {\n'+source+'\n} -WorkerName fixture -ProfileId abc123 -WebDriverPort 9222 -GeckoDriverPath "'+str(driver)+'"',encoding='utf-8-sig')
     result=subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(harness)],capture_output=True)
-    assert result.returncode==0,result.stderr
+    assert result.returncode==0 and not result.stderr,result.stderr
+    assert (tmp_path/'runtime/fixture/flower_session_id.txt').exists(), (result.stdout, result.stderr)
     assert (tmp_path/'runtime/fixture/flower_session_id.txt').read_text()=='offline-session'
     assert (tmp_path/'runtime/fixture/flower_bidi_url.txt').read_text()=='ws://127.0.0.1:9222/offline'
     assert json.loads((tmp_path/'runtime/fixture/binding.json').read_text('utf-8-sig'))['foreground']['activated'] is True
+    import hashlib
+    identity = json.loads((tmp_path/'runtime/fixture/driver.json').read_text('utf-8-sig'))
+    assert Path(identity['exe_path']).resolve() == driver.resolve()
+    assert identity['exe_sha256'] == hashlib.sha256(driver.read_bytes()).hexdigest()
+    assert Path(identity['installation_root']).resolve() == tmp_path.resolve()

@@ -49,23 +49,33 @@ def cleanup_completed_worker(root, run, worker):
                                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             from selection_automation.proxy_activity import revoke_worker_activity
             revoke_worker_activity(root,lane_number)
-            if state.get('deleted_profile_id') == profile:
-                return True
-            profiles = api_call(base, '/api/v1/user/list?' + urllib.parse.urlencode(
-                {'user_id': profile, 'page': 1, 'page_size': 100})).get('data', {}).get('list')
-            if not isinstance(profiles, list):
-                raise RuntimeError('Profile lookup returned invalid data')
-            if any(str(p.get('user_id') or p.get('profile_id')) == profile for p in profiles):
-                try:
-                    api_call(base, '/api/v1/browser/stop?' + urllib.parse.urlencode({'user_id': profile}), timeout=12)
-                except RuntimeError as error:
-                    if 'not open' not in str(error).lower():
-                        raise
-                delete_profile_after_release(base, profile)
-            atomic_json(state_path, {**state, 'environment_cleanup': 'COMPLETE',
-                'deleted_profile_id': profile, 'environment_deleted_at': time.time()})
+            if state.get('deleted_profile_id') != profile:
+                profiles = api_call(base, '/api/v1/user/list?' + urllib.parse.urlencode(
+                    {'user_id': profile, 'page': 1, 'page_size': 100})).get('data', {}).get('list')
+                if not isinstance(profiles, list):
+                    raise RuntimeError('Profile lookup returned invalid data')
+                if any(str(p.get('user_id') or p.get('profile_id')) == profile for p in profiles):
+                    try:
+                        api_call(base, '/api/v1/browser/stop?' + urllib.parse.urlencode({'user_id': profile}), timeout=12)
+                    except RuntimeError as error:
+                        if 'not open' not in str(error).lower():
+                            raise
+                    delete_profile_after_release(base, profile)
+                state = {**state, 'environment_cleanup': 'RETRY_REQUIRED',
+                         'deleted_profile_id': profile, 'environment_deleted_at': time.time()}
+                atomic_json(state_path, state)
+            from selection_automation.driver_retirement import release_retired_driver
+            state['driver_cleanup'] = release_retired_driver(root, session, profile)
+            state['environment_cleanup'] = 'COMPLETE'
+            state.pop('environment_cleanup_reason', None)
+            atomic_json(state_path, state)
             return True
-        except (RuntimeError,OSError,subprocess.SubprocessError):
+        except (RuntimeError,OSError,subprocess.SubprocessError) as error:
+            from selection_automation.driver_retirement import DriverCleanupRequired
+            state['environment_cleanup_reason'] = (str(error) if isinstance(error, DriverCleanupRequired)
+                else '环境清理尚未完成，请稍后重试；采集断点已保留')
+            if isinstance(error, DriverCleanupRequired):
+                state['driver_cleanup'] = {'status': 'RETRY_REQUIRED', 'reason': str(error)}
             if attempt < 2:
                 time.sleep(2 * (attempt + 1))
     atomic_json(state_path, {**state, 'environment_cleanup': 'RETRY_REQUIRED'})

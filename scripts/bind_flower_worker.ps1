@@ -263,10 +263,15 @@ if ($listener -or $owned) {
 Write-BindingTiming 'existing_driver_ownership_and_recovery'
 
 New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+$driverExePath = (Resolve-Path -LiteralPath $GeckoDriverPath).ProviderPath
+$driverHasher = [Security.Cryptography.SHA256]::Create()
+try { $driverExeSha256 = [BitConverter]::ToString($driverHasher.ComputeHash([IO.File]::ReadAllBytes($driverExePath))).Replace('-', '').ToLowerInvariant() }
+finally { $driverHasher.Dispose() }
 $process = Start-Process -FilePath $GeckoDriverPath `
     -ArgumentList @('--connect-existing', '--marionette-port', $MarionettePort, '--port', $WebDriverPort, '--log', 'warn') `
     -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtime 'geckodriver.stdout.log') -RedirectStandardError (Join-Path $runtime 'geckodriver.stderr.log')
-@{ pid = $process.Id; started_ticks = $process.StartTime.ToUniversalTime().Ticks; marionette_port = $MarionettePort; port = $WebDriverPort; profile_id = $ProfileId; browser_pid = $script:expectedProfileBrowserPid; browser_started_ticks = $script:expectedProfileBrowserTicks } |
+@{ pid = $process.Id; started_ticks = $process.StartTime.ToUniversalTime().Ticks; marionette_port = $MarionettePort; port = $WebDriverPort; profile_id = $ProfileId; browser_pid = $script:expectedProfileBrowserPid; browser_started_ticks = $script:expectedProfileBrowserTicks;
+    installation_root = (Resolve-Path -LiteralPath $root).ProviderPath; exe_path = $driverExePath; exe_sha256 = $driverExeSha256 } |
     ConvertTo-Json | Set-Content -LiteralPath $driverState -Encoding utf8
 
 try {

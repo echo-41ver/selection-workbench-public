@@ -29,6 +29,7 @@ def test_shared_native_reader_releases_lease_even_when_close_fails():
 
 
 def test_shared_reader_releases_between_polls_without_resending(tmp_path,monkeypatch):
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'local-app-data'))
     job=tmp_path/'job';job.mkdir();events=[];clock=[0]
     state={'agent':'doubao','model':'expert','state':'send_intended','url':'chrome://doubao-chat/chat/123',
            'marker':'ORIGINAL_MARKER','result_job':str(job),'target_id':'REGISTERED','registered_observer':True}

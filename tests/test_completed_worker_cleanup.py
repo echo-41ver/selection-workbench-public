@@ -6,6 +6,46 @@ import cleanup_completed_worker as cleanup
 import replace_proxyshare_worker_environment as api
 import pytest
 
+
+def test_deleted_profile_driver_failure_is_retryable_without_deleting_again(tmp_path, monkeypatch):
+    import selection
+    from types import SimpleNamespace
+    monkeypatch.setattr(selection, 'identity', lambda: 'machine')
+    run = tmp_path / 'task'
+    state = run / 'temu/supervisors/w.json'
+    state.parent.mkdir(parents=True)
+    state.write_text('{"status":"WORKER_COMPLETE"}')
+    (run / 'temu/keyword_plan.json').write_text('{"finalized":true}')
+    (state.parent / 'assignments.json').write_text('{"jobs":[]}')
+    config = tmp_path / 'config/sessions.json'
+    config.parent.mkdir()
+    config.write_text(json.dumps({'task_key': 'task', 'machine_id': 'machine',
+                                 'workers': [{'name': 'w', 'profile_id': 'p'}]}))
+    events = []
+    monkeypatch.setattr(api, 'api_base', lambda: 'fixture')
+    monkeypatch.setattr(api, 'api_call', lambda *a, **k: (events.append('lookup') if '/user/list?' in a[1] else None) or {'data': {'list': [{'user_id': 'p'}]}})
+    monkeypatch.setattr(api, 'delete_profile_after_release', lambda *a: events.append('delete'))
+    monkeypatch.setattr(cleanup.time, 'sleep', lambda _: None)
+    def blocked(*args):
+        assert events[:2] == ['lookup', 'delete']
+        assert json.loads(state.read_text('utf-8'))['deleted_profile_id'] == 'p'
+        raise RuntimeError('驱动身份不能核验，请维护后重试清理')
+    helper = SimpleNamespace(release_retired_driver=blocked, DriverCleanupRequired=RuntimeError)
+    monkeypatch.setitem(sys.modules, 'selection_automation.driver_retirement', helper)
+    assert cleanup.cleanup_completed_worker(tmp_path, run, 'w') is False
+    pending = json.loads(state.read_text('utf-8'))
+    assert pending['environment_cleanup'] == 'RETRY_REQUIRED'
+    assert pending['deleted_profile_id'] == 'p'
+    assert '驱动' in pending['environment_cleanup_reason']
+    assert events == ['lookup', 'delete']
+    helper.release_retired_driver = lambda *a: {'status': 'RELEASED'}
+    assert cleanup.cleanup_completed_worker(tmp_path, run, 'w') is True
+    assert events == ['lookup', 'delete']
+    completed = json.loads(state.read_text('utf-8'))
+    assert completed['environment_cleanup'] == 'COMPLETE'
+    assert completed['driver_cleanup']['status'] == 'RELEASED'
+    assert 'environment_cleanup_reason' not in completed
+
 @pytest.mark.parametrize('status', ['RUNNING','HUMAN_ACTION_REQUIRED','WORKER_COMPLETE'])
 def test_only_completed_lane_is_deleted(tmp_path,monkeypatch,status):
     root=tmp_path; run=root/'run'; state=run/'temu/supervisors/w.json'
@@ -52,7 +92,7 @@ def test_failed_delete_stays_retryable_and_wrong_task_never_deletes(tmp_path,mon
     monkeypatch.setattr(api,'delete_profile_after_release',fail)
     monkeypatch.setattr(cleanup.time,'sleep',lambda _:None)
     assert not cleanup.cleanup_completed_worker(root,run,'w')
-    assert len(calls)==3 and json.loads(state.read_text())['environment_cleanup']=='RETRY_REQUIRED'
+    assert len(calls)==3 and json.loads(state.read_text('utf-8'))['environment_cleanup']=='RETRY_REQUIRED'
     manifest['task_key']='someone-else';config.write_text(json.dumps(manifest))
     with pytest.raises(RuntimeError,match='another task'):cleanup.cleanup_completed_worker(root,run,'w')
     assert len(calls)==3
