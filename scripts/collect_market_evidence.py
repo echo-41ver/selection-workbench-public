@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from selection import ROOT, read, save
 from selection_automation.market_provider import Provider, collect
+from selection_automation.commercial import instant
 from selection_automation.process_lock import ProcessLock
 
 
@@ -37,12 +38,29 @@ def choose_categories(category, candidates):
         max_tokens=600,retry_truncated=False)
 
 
+def reusable_snapshot(category, cached, state):
+    """Keep successful same-task inputs; pending refresh/auth failures must recover."""
+    if not isinstance(cached,dict) or not isinstance(state,dict): return False
+    if cached.get('status') not in ('COMPLETE','PARTIAL'): return False
+    if state.get('status') not in (None,'COMPLETE','PARTIAL') or state.get('error') or state.get('error_code'): return False
+    if (cached.get('source')!='GEEKBI' or cached.get('category_key')!=category['category_key']
+            or cached.get('site_id')!=48 or cached.get('currency')!='USD' or instant(cached.get('queried_at')) is None): return False
+    records=cached.get('records')
+    return isinstance(records,list) and (bool(records) or cached['status']=='COMPLETE') and all(
+        isinstance(row,dict) and type(row.get('goodsId')) in (str,int)
+        and bool(row['goodsId']) and bool(str(row['goodsId']).strip()) for row in records)
+
+
 def run(category_path, force=False):
     category=read(category_path);base=ROOT/'runs'/category['category_key']/'market'
     state_path=base/'status.json';snapshot_path=base/'geekbi.json'
     with ProcessLock(base/'provider.lock'):
         cached=read(snapshot_path,{})
-        if not force and cached.get('status')=='COMPLETE': return cached
+        state=read(state_path,{})
+        if not force and reusable_snapshot(category,cached,state):
+            summary={k:v for k,v in cached.items() if k not in ('records','pages')}
+            if state!=summary: save(state_path,summary)
+            return cached
         save(state_path,{'status':'RUNNING','message':'正在读取极鲸云上架与销量数据'})
         try:
             # Keep the provider's normal Windows/proxy route for saved account

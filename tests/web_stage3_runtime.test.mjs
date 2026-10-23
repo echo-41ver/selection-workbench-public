@@ -52,4 +52,38 @@ test('running concurrency remains editable when models or candidate counts are u
 test('human verification is visible instead of a generic running phase',()=>{const {get,context}=view();context.data={category_key:'task',stage3_provider:{mode:'local_agent',agent_ids:['doubao']},stage3_control:{running:false,can_start:false,phase:'已暂停',progress:{total:24,pending:12}},stage3_runtime:{agent_blocks:{doubao:{code:'HUMAN_VERIFICATION_REQUIRED',message:'豆包出现验证码，请本人完成验证后继续'}}}};vm.runInContext('stage3Button(data)',context);assert.match(get('stage3-phase').textContent,/验证码/);assert.match(get('start-stage3').textContent,/等待处理/);assert.match(get('stage3-speed').textContent,/新组派发已暂停/);assert.doesNotMatch(get('stage3-speed').textContent,/正在进行/);});
 test('paused running analysis exposes resume while ordinary running disables duplicate start',()=>{const {get,context}=view();context.data={category_key:'task',stage3_control:{running:true,can_start:true,progress:{total:24,pending:12}},stage3_runtime:{paused:true}};vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,false);assert.match(get('start-stage3').textContent,/继续/);context.data.stage3_runtime.paused=false;vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,true);});
 
-test('selected verification gate exposes Continue even after global pause was cleared',()=>{const {get,context}=view();context.data={category_key:'task',stage3_provider:{mode:'local_agent',agent_ids:['doubao']},stage3_control:{running:false,progress:{total:24,pending:12}},stage3_runtime:{paused:false,agent_blocks:{doubao:{code:'HUMAN_VERIFICATION_REQUIRED'}}}};vm.runInContext('stage3Button(data)',context);assert.equal(get('pause-stage3').disabled,false);assert.equal(get('pause-stage3').textContent,'继续第三层');assert.equal(vm.runInContext('stage3ResumeRequired(data)',context),true);context.data.stage3_provider.agent_ids=['codex'];assert.equal(vm.runInContext('stage3ResumeRequired(data)',context),false);});
+for(const running of [false,true])test(`paused ${running?'active':'stopped'} analysis distinguishes applying a changed draft from resuming the saved provider`,()=>{
+ const nodes=new Map(),requests=[];
+ const node=()=>({value:'',checked:false,dataset:{},style:{},replaceChildren(){},setAttribute(){},
+  before(child){nodes.set(child.id,child);},addEventListener(event,callback){this[event]=callback;}});
+ const get=id=>{if(id==='pause-stage3'&&!nodes.has(id))return undefined;if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
+ const context=vm.createContext({$:get,document:{createElement:node},statusFresh:true,busy:false,
+  codexReviewPanel(){},renderStage3Settings(){},reasoningSettingsSupported:()=>false,apiReasoningReady:()=>true,
+  stage3AgentSelection:[],stage3AgentModels:{},stage3AgentEfforts:{},stage3SettingsDirty:true,
+  action:(path,body)=>requests.push(JSON.parse(JSON.stringify({path,body})))});
+ vm.runInContext(html.slice(html.indexOf('function stage3ActivityText('),html.indexOf('function runtimeStage3('))+code,context);
+ vm.runInContext(html.slice(html.indexOf('function stage3ProviderSettings(){'),html.indexOf('function stage3ProviderFields(){')),context);
+ vm.runInContext(html.split('\n').find(line=>line.startsWith("$('start-stage3').addEventListener")),context);
+ for(const [id,value] of Object.entries({'stage3-mode':'multimodal_api','stage3-base-url':'https://api.example.invalid',
+  'stage3-model':'saved-api-model','stage3-protocol':'responses','stage3-workers':'1','stage3-confidence':'90'}))get(id).value=value;
+ const saved=vm.runInContext('stage3ProviderSettings()',context);
+ context.data=context.lastStatus={category_key:'task',stage3_provider:saved,
+  stage3_control:{running,can_start:true,can_stop:running,progress:{total:10,pending:10}},stage3_runtime:{paused:true}};
+ vm.runInContext('stage3Button(data)',context);
+ assert.match(get('start-stage3').textContent,/所选方案/);assert.equal(get('pause-stage3').textContent,'恢复当前方案');
+ assert.notEqual(get('start-stage3').textContent,get('pause-stage3').textContent);
+ // Changing the controls is only a draft. Both actual click routes must remain distinct.
+ get('stage3-mode').value='local_model';get('stage3-base-url').value='http://127.0.0.1:11434/v1';
+ get('stage3-model').value='LiquidAI/d1-3B';get('stage3-protocol').value='decisions';
+ vm.runInContext('stage3Button(data)',context);
+ assert.equal(requests.length,0);
+ assert.equal(get('start-stage3').disabled,false);assert.equal(get('pause-stage3').disabled,false);
+ assert.match(get('start-stage3').textContent,/所选方案/);assert.equal(get('pause-stage3').textContent,'恢复当前方案');
+ assert.notEqual(get('start-stage3').textContent,get('pause-stage3').textContent);
+ assert.match(get('stage3-current').textContent,/saved-api-model/);assert.doesNotMatch(get('stage3-current').textContent,/LiquidAI/);
+ get('start-stage3').click();assert.equal(requests[0].path,'/api/start-stage3');
+ assert.equal(requests[0].body.provider.mode,'local_model');assert.equal(requests[0].body.provider.model,'LiquidAI/d1-3B');
+ get('pause-stage3').click();assert.deepEqual(requests[1],{path:'/api/control-stage3',body:{action:'resume'}});
+});
+
+test('selected verification gate can restore the saved provider even after global pause was cleared',()=>{const {get,context}=view();context.data={category_key:'task',stage3_provider:{mode:'local_agent',agent_ids:['doubao']},stage3_control:{running:false,progress:{total:24,pending:12}},stage3_runtime:{paused:false,agent_blocks:{doubao:{code:'HUMAN_VERIFICATION_REQUIRED'}}}};vm.runInContext('stage3Button(data)',context);assert.equal(get('pause-stage3').disabled,false);assert.equal(get('pause-stage3').textContent,'恢复当前方案');assert.equal(vm.runInContext('stage3ResumeRequired(data)',context),true);context.data.stage3_provider.agent_ids=['codex'];assert.equal(vm.runInContext('stage3ResumeRequired(data)',context),false);});

@@ -28,6 +28,7 @@ from selection_automation.local_visual_wire import LocalVisualFormatError
 from selection_automation.stage3_billing import billing_hold, retry_authorizations, authorized_retry_attempt
 from selection_workflow.bath_towel_deepseek import _data_url
 from selection_automation.visual_batch import data_url, grid_data_url, amazon_key
+from selection_automation.stage3_current_input import CurrentInputGuard, CurrentInputUnavailable
 
 
 def cached_image_url(path):
@@ -181,6 +182,9 @@ def main():
 
 def run(args, candidate_path):
     cat = load_category(args.category)
+    args._current_input_guard = CurrentInputGuard(args.results.parent.parent,
+        getattr(args, 'candidates', candidate_path), root=ROOT,
+        required=args.results.parent.name.casefold() == 'stage123')
     from selection_automation.codex_visual_review import load_reviews
     codex_reviews = load_reviews(args.results.parent.parent, by_revision=True)
     cached = result_index(args.results)
@@ -226,6 +230,8 @@ def run(args, candidate_path):
     pending = pending_rows()
     try:
         consume(args, cat, fatal_file, key_identity, pending)
+    except CurrentInputUnavailable as exc:
+        raise SystemExit(str(exc)) from None
     finally:
         pending.close()
 
@@ -310,6 +316,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
         if stop.is_set() or not authorized():
             stop.set()
             return
+        input_guard = getattr(args, '_current_input_guard', None)
+        if input_guard is not None and not input_guard.allows(batch):
+            return
         ids = [f'C{i:02}' for i in range(len(batch))]
         started = time.monotonic()
         completed = 0
@@ -364,6 +373,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
             if client_setup_error is not None:raise client_setup_error
             prepared_data=(client.prepare(content,prompt,candidate_ids=ids) if provider['protocol']=='decisions' and len(batch)>1
                            else client.prepare(content,prompt))
+            if input_guard is not None and not input_guard.allows(batch):
+                return
             if schema_retry:
                 from selection_automation.schema_billing_retry import claim
                 claim(args.results.parent,schema_retry['authorization_id'],request_id,
@@ -434,6 +445,10 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     **({'automatic_original_recheck':{'source_response_id':row['_evidence_recheck_of'],'attempt':1}} if row.get('_evidence_recheck_of') else {}),
                     **({'response_format_compatibility': {'version': 'lossless-envelope-v2-syntax-only', 'repairs': format_repairs}} if format_repairs else {})})
                 completed += 1
+        except CurrentInputUnavailable:
+            # No intent/transport occurred; do not turn an input race into a
+            # failed model result or consume the candidate's retry budget.
+            raise
         except Exception as exc:
             from selection_workflow.api_image_input import ImageInputError
             if isinstance(exc,IncompleteVisualResponse):
@@ -471,6 +486,11 @@ def consume(args, cat, fatal_file, key_identity, pending):
             billing_uncertain = sent and not received and provider['mode']!='local_model'
             if provider['mode']=='local_model' and not received:
                 local_service_stop.set();stop.set()
+                from selection_automation.local_d1 import LocalD1InputError, IMAGE_BASE64_LIMIT_CODE, IMAGE_BASE64_LIMIT_REASON
+                if isinstance(exc,LocalD1InputError) and str(exc)==IMAGE_BASE64_LIMIT_REASON:
+                    atomic_write(args.results.with_name('local_model_error.json'),json.dumps(
+                        {'code':IMAGE_BASE64_LIMIT_CODE,'time':time.time(),
+                         'request_id':request_id,'model':provider['model']},ensure_ascii=False))
             billing_state = 'UNKNOWN' if billing_uncertain else 'KNOWN' if received else 'NO_CHARGE'
             if billing_uncertain:
                 reason += ('；请求被拒绝，但费用待核对，已阻止自动重发' if status in (401, 402, 403, 429)

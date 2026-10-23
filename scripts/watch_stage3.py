@@ -25,6 +25,11 @@ def failure_state(folder, launched_at, provider):
         if (row.get('code')==ERROR_CODE and row.get('model')==provider.get('model')
                 and type(row.get('time')) in (int,float) and row['time']>=launched_at):
             return {'phase':ERROR_MESSAGE,'error':True,'error_code':ERROR_CODE}
+        from selection_automation.local_d1 import native_endpoint, IMAGE_BASE64_LIMIT_CODE, IMAGE_BASE64_LIMIT_MESSAGE
+        if (native_endpoint(provider) and row.get('code')==IMAGE_BASE64_LIMIT_CODE
+                and row.get('model')==provider.get('model')
+                and type(row.get('time')) in (int,float) and row['time']>=launched_at):
+            return {'phase':IMAGE_BASE64_LIMIT_MESSAGE,'error':True,'error_code':IMAGE_BASE64_LIMIT_CODE}
     except (OSError,ValueError,AttributeError):pass
     return result
 

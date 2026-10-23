@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 from selection_automation import stage3_progress as progress
 
@@ -80,7 +81,7 @@ def test_observed_speed_merges_concurrent_requests_and_estimates_remaining(tmp_p
     write(base/'stage123/requests.jsonl',[
         {'request_id':'a','response_id':'ra'}, {'request_id':'b','response_id':'rb'}])
     write(base/'stage123/results.jsonl',[
-        {'asin':'A','goods_id':str(i),'response_id':'ra' if i<10 else 'rb','api_status':'success'}
+        {'asin':'A','goods_id':str(i),'response_id':'ra' if i<10 else 'rb','api_status':'success','model':'d1'}
         for i in range(20)])
     s=progress.snapshot(base,{},history=False)
     assert s['rate_per_hour']==7200 and s['eta_seconds'] is None
@@ -110,8 +111,98 @@ def test_settled_but_failed_visual_requests_are_not_measured_completed_speed(tmp
         {'request_id':'r','status':'started','time':100,'pairs':12},
         {'request_id':'r','status':'settled','time':110,'billing_state':'KNOWN'}])
     write(base/'stage123/requests.jsonl',[{'request_id':'r','response_id':'failed'}])
-    write(base/'stage123/results.jsonl',[{'response_id':'failed','api_status':'failed'}])
-    assert progress.observed_rate(base) is None
+    write(base/'stage123/results.jsonl',[{'response_id':'failed','api_status':'failed','model':'fixture'}])
+    assert progress.observed_rate(base,'fixture') is None
+
+
+def native_rate_records(base):
+    model='LiquidAI/d1-3B'
+    results=[{'asin':'A','goods_id':str(i),'vision_revision_key':f'v{i}',
+              'api_status':'success','model':model,'response_id':None,'elapsed_seconds':15}
+             for i in range(2)]
+    requests=[{'request_id':f'n{i}','response_id':None,'status':'received','pairs':1}
+              for i in range(2)]
+    intents=[row for i in range(2) for row in (
+        {'request_id':f'n{i}','status':'started','time':100+i*15,'pairs':1,'vision_revision_keys':[f'v{i}']},
+        {'request_id':f'n{i}','status':'settled','time':115+i*15,'billing_state':'KNOWN'})]
+    return model,results,requests,intents
+
+
+def test_current_native_rate_uses_received_settled_revision_links_not_old_remote_speed(tmp_path,monkeypatch):
+    base=tmp_path/'task';base.mkdir()
+    model,results,requests,intents=native_rate_records(base)
+    results.append({'asin':'A','goods_id':'old','vision_revision_key':'old','api_status':'success',
+                    'model':'old-remote','response_id':'remote'})
+    requests.append({'request_id':'old','response_id':'remote','status':'received','pairs':1})
+    intents.extend([{'request_id':'old','status':'started','time':1,'pairs':1},
+                    {'request_id':'old','status':'settled','time':2,'billing_state':'KNOWN'}])
+    write(base/'stage123/results.jsonl',results);write(base/'stage123/requests.jsonl',requests)
+    write(base/'stage123/request_intents.jsonl',intents)
+    write(progress.candidate_path(base),[{'asin':'A','goods_id':str(i),'pair_revision':f'v{i}'} for i in range(4)])
+    monkeypatch.setattr(progress,'compatible_vision_keys',lambda _,r,**kwargs:(r['pair_revision'],))
+    cat={'stage3':{'model':'old-remote','batch_size':1,'provider':{
+        'mode':'local_model','model':model,'base_url':'http://127.0.0.1:7863/v1/decide',
+        'protocol':'decisions','workers':1}}}
+    paths=[base/'stage123'/n for n in ('results.jsonl','requests.jsonl','request_intents.jsonl')]
+    before=[p.read_bytes() for p in paths]
+    result=progress.snapshot(base,cat,history=False)
+    assert result['rate_source']=='current' and result['rate_per_hour']==240
+    assert result['completed']==2 and result['pending']==2 and result['eta_seconds']==30
+    assert [p.read_bytes() for p in paths]==before
+
+
+@pytest.mark.parametrize('change', ['retry_key','duplicate_result','missing_key','missing_received',
+    'failed_request','unsettled','unknown','no_charge','wrong_model','missing_model','bad_span','incomplete',
+    'failed_result','duplicate_received','duplicate_started','duplicate_settled'])
+def test_native_rate_rejects_ambiguous_failed_or_unsettled_links(tmp_path,change):
+    base=tmp_path/'task';base.mkdir()
+    model,results,requests,intents=native_rate_records(base)
+    results=results[:1];requests=requests[:1];intents=intents[:2]
+    if change=='retry_key':
+        intents.extend([{'request_id':'earlier','status':'started','time':80,'pairs':1,'vision_revision_keys':['v0']},
+                        {'request_id':'earlier','status':'settled','time':81,'billing_state':'NO_CHARGE'}])
+    if change=='duplicate_result':results.append(dict(results[0]))
+    if change=='missing_key':intents[0].pop('vision_revision_keys')
+    if change=='missing_received':requests=[]
+    if change=='failed_request':requests[0]['status']='failed'
+    if change=='unsettled':intents=intents[:1]
+    if change=='unknown':intents[1]['billing_state']='UNKNOWN'
+    if change=='no_charge':intents[1]['billing_state']='NO_CHARGE'
+    if change=='wrong_model':results[0]['model']='old-remote'
+    if change=='missing_model':results[0].pop('model')
+    if change=='bad_span':intents[1]['time']=99
+    if change=='incomplete':requests[0]['response_status']='incomplete'
+    if change=='failed_result':results[0]['api_status']='failed'
+    if change=='duplicate_received':requests.append(dict(requests[0]))
+    if change=='duplicate_started':intents.append(dict(intents[0]))
+    if change=='duplicate_settled':intents.append(dict(intents[1]))
+    write(base/'stage123/results.jsonl',results);write(base/'stage123/requests.jsonl',requests)
+    write(base/'stage123/request_intents.jsonl',intents)
+    assert progress.observed_rate(base,model) is None
+
+
+def test_native_rate_merges_real_overlapping_request_spans(tmp_path):
+    base=tmp_path/'task';base.mkdir()
+    model,results,requests,intents=native_rate_records(base)
+    intents[2]['time']=100;intents[3]['time']=115
+    write(base/'stage123/results.jsonl',results);write(base/'stage123/requests.jsonl',requests)
+    write(base/'stage123/request_intents.jsonl',intents)
+    assert progress.observed_rate(base,model)==2/15
+
+
+def test_missing_current_model_evidence_never_falls_back_to_other_model_history(tmp_path):
+    old=tmp_path/'old';old.mkdir()
+    write(old/'stage123/results.jsonl',[{'asin':'A','goods_id':str(i),'response_id':'remote',
+        'api_status':'success','model':'old-remote','elapsed_seconds':1} for i in range(12)])
+    write(old/'stage123/requests.jsonl',[{'response_id':'remote','pairs':12}])
+    base=tmp_path/'task';base.mkdir()
+    write(progress.candidate_path(base),[{'asin':'A','goods_id':'pending'}])
+    cat={'stage3':{'model':'old-remote','batch_size':1,'provider':{
+        'mode':'local_model','model':'LiquidAI/d1-3B','base_url':'http://127.0.0.1:7863/v1/decide',
+        'protocol':'decisions','workers':1}}}
+    result=progress.snapshot(base,cat)
+    assert result['rate_per_hour'] is None and result['eta_seconds'] is None
+    assert result['rate_source'] is None and result['historical_sample_groups']==0
 
 
 def test_stopped_authorization_never_constructs_paid_client(tmp_path,monkeypatch):

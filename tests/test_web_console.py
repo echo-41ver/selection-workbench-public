@@ -61,11 +61,20 @@ def test_live_state_overrides_cached_captcha_without_rescanning_results(tmp_path
     assert old['stage3_runtime']['paused']
 
 
-@pytest.mark.parametrize('visual_count,configured,expected', [(0,12,10),(1,12,5),(1,2,2),(9,12,1)])
-def test_native_batch_capacity_is_read_only_and_matches_dispatch_in_full_and_live_status(tmp_path,monkeypatch,visual_count,configured,expected):
+@pytest.mark.parametrize('protocol,path,native', [
+    ('decisions','/v1/decide',True),
+    ('decisions','/v1/systemone',False),
+    ('responses','/v1',False),
+    ('chat_completions','/v1',False),
+])
+@pytest.mark.parametrize('visual_count,configured', [(0,12),(1,12),(1,2),(9,12),(0,1)])
+def test_native_batch_capacity_is_read_only_and_matches_dispatch_in_full_and_live_status(tmp_path,monkeypatch,visual_count,configured,protocol,path,native):
     from selection_automation.stage3_provider import request_batch_size,settings
-    provider=settings({'mode':'local_model','base_url':'http://127.0.0.1:7863/v1/decide',
-                       'model':'LiquidAI/d1-3B','protocol':'decisions','workers':1})
+    provider=settings({'mode':'local_model','base_url':'http://127.0.0.1:7863'+path,
+                       'model':'LiquidAI/d1-3B','protocol':protocol,'workers':1})
+    # Native D1 keeps each complete two-image input in one request. Other
+    # endpoints and protocols retain the saved batch size without mutation.
+    expected=1 if native else configured
     category={'category_name_zh':'测试','category_key':'fixture',
               'stage3':{'provider':provider,'batch_size':configured},
               'match_criteria':{'schema_version':'amazon-match-criteria-v1','enabled':True,

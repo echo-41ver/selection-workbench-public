@@ -150,10 +150,154 @@ def test_two_images_are_full_resolution_in_labelled_png_and_recoverable():
 @pytest.mark.parametrize('count,limit', [(0, 10), (1, 5), (2, 3), (4, 2), (9, 1)])
 def test_batch_limit_counts_whole_selected_visual_rules(count, limit):
     category = {'stage3': {'batch_size': 12}, 'match_criteria': criteria(count)}
-    assert request_batch_size(provider(), category) == limit
+    assert d1.question_batch_limit(category) == limit
+    assert request_batch_size(provider(), category) == 1
     systemone = settings({'mode': 'local_model'})
     assert request_batch_size(systemone, category) == 12
     assert request_batch_size(settings({'mode': 'liquid_d1'}), category) == 1
+    apply(category, provider())
+    assert category['stage3']['batch_size'] == 1
+
+
+def test_native_consumer_keeps_original_pairs_and_reuses_paid_checkpoint(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from pathlib import Path
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+    import run_category_layer3 as runner
+    from selection_automation import stage3_provider, stage3_transport, visual_examples, analysis_concurrency
+    from selection_automation.vision import compatible_vision_keys
+
+    amazon, temu = tmp_path / 'amazon.png', tmp_path / 'temu.png'
+    amazon.write_bytes(base64.b64decode(content()[1]['image_url'].split(',', 1)[1]))
+    temu.write_bytes(base64.b64decode(content()[2]['image_url'].split(',', 1)[1]))
+    category = {'category_name_zh': '测试品类', 'stage3': {'modules': {'shape': 100}}, 'match_criteria': criteria(1)}
+    category['match_criteria']['revision'] = 'fixture-complete-rule-revision'
+    apply(category, settings({'mode': 'multimodal_api'}))
+    pairs = [{'asin': 'A', 'goods_id': f'T{i:02}', 'pair_revision': f'p{i}',
+              'amazon_title': 'Complete Amazon reference', 'temu_title': f'Complete TEMU candidate T{i:02}',
+              'amazon_image_path': str(amazon), 'temu_image_path': str(temu)} for i in range(15)]
+    prior = [{'asin': row['asin'], 'goods_id': row['goods_id'], 'pair_revision': row['pair_revision'],
+              'vision_revision_key': compatible_vision_keys(category, row)[0], 'api_status': 'success',
+              'attempt': 1, 'response_id': 'paid-api-response', 'usage': {'total_tokens': 100}}
+             for row in pairs[:5]]
+    results = tmp_path / 'results.jsonl'
+    original = ''.join(json.dumps(row) + '\n' for row in prior).encode()
+    results.write_bytes(original)
+    ledger = tmp_path / 'requests.jsonl'
+    paid_requests = ''.join(json.dumps({'request_id': f'paid-{i}', 'status': 'received', 'pairs': n}) + '\n'
+                            for i, n in enumerate((3, 2))).encode()
+    ledger.write_bytes(paid_requests)
+    apply(category, provider())
+    # An already saved native task can still have the old ten-pair batch value.
+    category['stage3']['batch_size'] = 10
+    failed = [{'asin': row['asin'], 'goods_id': row['goods_id'], 'pair_revision': row['pair_revision'],
+               'vision_revision_key': compatible_vision_keys(category, row)[0], 'api_status': 'failed',
+               'attempt': 1, 'failure_cause_types': ['LocalD1InputError'],
+               'failure_reason': '双图 PNG 超过本机 D1 的 image_base64 长度限制；未发送请求',
+               'billing_state': 'NO_CHARGE', 'response_id': None, 'usage': {}}
+              for row in pairs[5:]]
+    original += ''.join(json.dumps(row) + '\n' for row in failed).encode()
+    results.write_bytes(original)
+    paid_requests += (json.dumps({'request_id': 'local-input-error', 'status': 'local_error', 'pairs': 10,
+                                 'billing_state': 'NO_CHARGE'}) + '\n').encode()
+    ledger.write_bytes(paid_requests)
+    candidate_file = tmp_path / 'candidates.jsonl'
+    candidate_file.write_text(''.join(json.dumps(row) + '\n' for row in pairs), encoding='utf-8')
+    calls = []
+    class Transport:
+        def post(self, address, **request):
+            payload = json.loads(request['content'])
+            assert address == provider()['base_url']
+            assert set(payload) == {'state', 'questions', 'image_base64'}
+            assert set(payload['questions']) == {'same_product', 'same_product__condition__condition_0'}
+            assert '完整身份规则不得删除' in payload['questions']['same_product']['instructions']
+            assert '完整视觉规则0不得删除' in payload['questions']['same_product__condition__condition_0']['instructions']
+            assert len(payload['image_base64']) <= d1.MAX_IMAGE_BASE64
+            with Image.open(io.BytesIO(base64.b64decode(payload['image_base64']))) as image:
+                assert image.size == (836, 348) and image.format == 'PNG'
+                assert image.crop((0, 48, 400, 288)).getextrema() == ((255, 255), (0, 0), (0, 0))
+                assert image.crop((416, 48, 836, 348)).getextrema() == ((0, 0), (0, 0), (255, 255))
+            records = payload['state']['records']
+            record = json.loads(records[-1].split('\n', 1)[1])
+            calls.append(record['product_id'])
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {
+                'answers': {key: {'choice': 'same', 'confidence': .95,
+                                 'probabilities': {'same': .95, ('unknown' if '__condition__' in key else 'similar'): .03,
+                                                   'different': .02}}
+                            for key in payload['questions']}, 'usage': {'input_tokens': 50, 'output_tokens': 0}})
+    monkeypatch.setattr(stage3_transport, 'create_transport', lambda *a, **k: nullcontext(Transport()))
+    monkeypatch.setattr(stage3_provider, 'request_key', lambda *a: '')
+    monkeypatch.setattr(analysis_concurrency, 'record_sample', lambda *a, **k: None)
+    monkeypatch.setattr(visual_examples, 'example_content', lambda *a: [])
+    monkeypatch.setattr(runner, 'load_category', lambda *a: category)
+    monkeypatch.setattr(runner, 'protocol', lambda *a: ('完整身份规则不得删除', {}))
+    monkeypatch.setattr(runner, 'score', decision_score)
+    monkeypatch.setattr(runner, 'cached_image_url', lambda path:
+                        'data:image/png;base64,' + base64.b64encode(Path(path).read_bytes()).decode())
+    monkeypatch.setattr(runner, 'grid_data_url', lambda *a: pytest.fail('Native D1 must retain original single pairs'))
+    args = SimpleNamespace(category=tmp_path / 'category.json', results=results,
+                           validate_only=False, max_requests=0, max_pairs=0)
+    runner.run(args, candidate_file)
+    assert calls == [row['goods_id'] for row in pairs[5:]]
+    saved = list(runner.rows(results))
+    assert len(saved) == 25 and sum(row['api_status'] == 'success' for row in saved) == 15
+    assert {row['api_status'] for row in saved[-10:]} == {'success'}
+    assert {row['attempt'] for row in saved[-10:]} == {2}
+    assert {row['goods_id'] for row in saved} == {row['goods_id'] for row in pairs}
+    assert results.read_bytes().startswith(original) and ledger.read_bytes().startswith(paid_requests)
+    assert category['stage3']['provider']['confidence'] == .9
+    assert len(list(runner.rows(ledger))) == 13
+    from selection_automation.stage3_billing import billing_hold
+    hold = billing_hold(tmp_path / 'request_intents.jsonl', results)
+    assert not hold['pairs'] and not hold['fail_closed']
+    before = results.read_bytes(), ledger.read_bytes()
+    runner.run(args, candidate_file)
+    assert len(calls) == 10 and (results.read_bytes(), ledger.read_bytes()) == before
+
+
+def test_native_image_limit_is_visible_without_showing_raw_errors_or_replaying(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from pathlib import Path
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+    import run_category_layer3 as runner
+    from watch_stage3 import failure_state
+    from selection_automation import stage3_provider, stage3_transport, visual_examples, analysis_concurrency
+    class Transport:
+        def post(self, *a, **k):
+            pytest.fail('Oversize image must not be sent')
+    monkeypatch.setattr(stage3_transport, 'create_transport', lambda *a, **k: nullcontext(Transport()))
+    monkeypatch.setattr(stage3_provider, 'request_key', lambda *a: '')
+    monkeypatch.setattr(analysis_concurrency, 'record_sample', lambda *a, **k: None)
+    monkeypatch.setattr(visual_examples, 'example_content', lambda *a: [])
+    monkeypatch.setattr(runner, 'protocol', lambda *a: ('完整规则', {}))
+    monkeypatch.setattr(runner, 'cached_image_url', lambda path: image_url('red' if path == 'amazon' else 'blue'))
+    monkeypatch.setattr(d1, 'MAX_IMAGE_BASE64', 20)
+    category = {'stage3': {'modules': {'shape': 100}}}
+    apply(category, provider())
+    pair = {'asin': 'A', 'goods_id': 'T', 'pair_revision': 'p', 'vision_revision_key': 'v', 'attempt': 1,
+            'amazon_image_path': 'amazon', 'temu_image_path': 'temu'}
+    args = SimpleNamespace(results=tmp_path / 'results.jsonl', validate_only=False, max_requests=0)
+    with pytest.raises(SystemExit, match='没有远程费用'):
+        runner.consume(args, category, tmp_path / 'blocked.json', 'fixture', iter([pair]))
+    error_path = tmp_path / 'local_model_error.json'
+    assert error_path.is_file()
+    row = json.loads(error_path.read_text('utf-8'))
+    assert row['code'] == d1.IMAGE_BASE64_LIMIT_CODE and row['model'] == d1.MODEL
+    assert set(row) == {'code', 'time', 'request_id', 'model'}
+    row['message'] = 'Bearer private-key arbitrary API body must never be displayed'
+    error_path.write_text(json.dumps(row), encoding='utf-8')
+    shown = failure_state(tmp_path, 0, provider())
+    assert shown['error'] and shown['error_code'] == d1.IMAGE_BASE64_LIMIT_CODE
+    assert '图片过大' in shown['phase'] and '未发送请求' in shown['phase'] and '分析方案后继续' in shown['phase']
+    assert 'private-key' not in shown['phase'] and 'API body' not in shown['phase']
+    for launched, target in [(row['time'] + 1, provider()), (0, {**provider(), 'model': 'another-model'}),
+                             (0, settings({'mode': 'multimodal_api'}))]:
+        assert 'error_code' not in failure_state(tmp_path, launched, target)
+    request = list(runner.rows(tmp_path / 'requests.jsonl'))
+    assert len(request) == 1 and request[0]['billing_state'] == 'NO_CHARGE'
+    assert not (tmp_path / 'request_intents.jsonl').exists()
 
 
 def test_single_pair_over_question_limit_is_clear_and_does_not_mutate_config_or_post():

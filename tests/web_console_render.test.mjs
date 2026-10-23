@@ -12,6 +12,8 @@ function sandbox(value){
  const diagnostics=helperHtml.slice(helperHtml.indexOf('function runtimeDiagnosticSnapshot('),helperHtml.indexOf('function text(value)'));
  assert.ok(sourceCounts&&secretKey&&diagnostics,'current render dependencies must be present');
  vm.runInContext(helperHtml.slice(helperHtml.indexOf('function stage3Heartbeat('),helperHtml.indexOf('function runtimeStage3('))+'\n'+secretKey+'\n'+diagnostics+'\n'+sourceCounts,context);
+ const marketStart=helperHtml.indexOf('let marketRefreshView=');
+ if(marketStart>=0)vm.runInContext(helperHtml.slice(marketStart,helperHtml.indexOf('let marketLoginRetry=')),context);
  return context;
 }
 
@@ -50,14 +52,16 @@ test('history downloads show their actual publication time and filename',()=>{
 
 test('final controls keep market retry enabled while collection is active',()=>{
   const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
-  const line=html.split('\n').find(s=>s.trim().startsWith("$('refresh-market').disabled=busy||!statusFresh"));
-  assert.ok(line);
+  const start=html.indexOf(' stage3Button(data);excelButtons(data);rotationButtons();');
+  const controls=html.slice(start+' stage3Button(data);excelButtons(data);rotationButtons();'.length,html.indexOf(" if(typeof criteriaDirty",start));
+  assert.match(controls,/refresh-market/);
   const button={disabled:true};
   const context=sandbox({$:()=>button,busy:false,statusFresh:true,active:true,data:{active:true,category_key:'fixture',market_busy:false,market_status:{status:'ACTION_REQUIRED'}}});
-  vm.runInContext(line,context);assert.equal(button.disabled,false);
-  context.data.release_update={pending:true};vm.runInContext(line,context);assert.equal(button.disabled,false);
-  context.data.market_busy=true;vm.runInContext(line,context);assert.equal(button.disabled,true);
-  context.data.market_busy=false;context.statusFresh=false;vm.runInContext(line,context);assert.equal(button.disabled,true);
+  const update=()=>vm.runInContext('(()=>{'+controls+'})()',context);
+  update();assert.equal(button.disabled,false);
+  context.data.release_update={pending:true};update();assert.equal(button.disabled,false);
+  context.data.market_busy=true;update();assert.equal(button.disabled,true);
+  context.data.market_busy=false;context.statusFresh=false;update();assert.equal(button.disabled,true);
 });
 
 test('saved market authorization is retried automatically, with cooldown and expiry bounds',async()=>{
@@ -75,6 +79,94 @@ test('saved market authorization is retried automatically, with cooldown and exp
  now+=15000;data.market_status.status='COMPLETE';await vm.runInContext('continueMarketLogin(true)',context);assert.equal(calls,3);
  data.market_status.status='ACTION_REQUIRED';data.market_status.action='PAYMENT_REQUIRED';await vm.runInContext('continueMarketLogin(true)',context);assert.equal(calls,3);
  data.market_status.action='AUTH_REQUIRED';data.market_busy=true;await vm.runInContext('continueMarketLogin(true)',context);assert.equal(calls,3);
+});
+
+function marketFixture(now=10000){
+ const createElement=tag=>({tag,children:[],append(...children){this.children.push(...children);}});
+ const box={children:[],append(...children){this.children.push(...children);}};
+ Object.defineProperty(box,'textContent',{get(){return this.value||'';},set(value){this.value=value;this.children=[];}});
+ const data={category_key:'fixture',market_busy:false,status_sample:{sampled_at:1},
+  market_status:{status:'ACTION_REQUIRED',action:'AUTH_REQUIRED',message:'等待用户完成网页登录',
+   jumpUrl:'https://openapi.geekbi.com/agent/auth/login?loginCode=fixture',updated_at:new Date(0).toISOString(),expiresIn:60}};
+ const context=sandbox({$:()=>box,document:{createElement},URL,Date:{now:()=>now,parse:Date.parse},
+  busy:false,statusFresh:true,lastStatus:data});
+ vm.runInContext(helperHtml.slice(helperHtml.indexOf('function statusTone('),helperHtml.indexOf('function runtimeUnion('))+'\n'+
+  helperHtml.split('\n').find(line=>line.startsWith('function first('))+'\n'+
+  helperHtml.split('\n').find(line=>line.startsWith('function noticeClass(')),context);
+ return {context,box,data,links:()=>box.children.filter(node=>node.tag==='a')};
+}
+
+test('expired market authorization is labelled and never remains a clickable link',()=>{
+ const {context,box,data,links}=marketFixture(70000);
+ vm.runInContext('renderMarketStatus(lastStatus.market_status,false)',context);
+ assert.equal(links().length,0);
+ assert.match(box.textContent,/已过期/);
+ assert.match(box.textContent,/重试极鲸云/);
+ data.market_status.expiresIn=0;
+ vm.runInContext('renderMarketStatus(lastStatus.market_status,false)',context);
+ assert.equal(links().length,0);
+});
+
+test('market authorization shows remaining time and keeps unknown expiry explicit',()=>{
+ const {context,box,data,links}=marketFixture();
+ vm.runInContext('renderMarketStatus(lastStatus.market_status,false)',context);
+ assert.equal(links().length,1);
+ assert.match(box.textContent,/剩余.*50 秒/);
+ delete data.market_status.expiresIn;
+ vm.runInContext('renderMarketStatus(lastStatus.market_status,false)',context);
+ assert.equal(links().length,1);
+ assert.match(box.textContent,/有效期未提供/);
+ assert.doesNotMatch(box.textContent,/600|10 分/);
+ data.market_status.jumpUrl='https://unrelated.invalid/login';
+ vm.runInContext('renderMarketStatus(lastStatus.market_status,false)',context);
+ assert.equal(links().length,0);
+});
+
+test('accepted market refresh hides the previous href until a fresh result arrives',async()=>{
+ const {context,box,data,links}=marketFixture();
+ let resolveResponse;const response=new Promise(resolve=>{resolveResponse=resolve;});const endpoints=[];
+ Object.assign(context,{AbortController,setTimeout:()=>1,clearTimeout(){},updateControls(){},feedback(){},
+  poll:async()=>{},fetch:async endpoint=>{endpoints.push(endpoint);return response;}});
+ const action=helperHtml.split('\n').find(line=>line.startsWith('async function action('));
+ vm.runInContext(action,context);
+ vm.runInContext('renderMarketStatus(lastStatus.market_status,false)',context);assert.equal(links().length,1);
+ const pending=vm.runInContext("action('/api/refresh-market',{})",context);
+ assert.equal(links().length,0);assert.match(box.textContent,/正在刷新/);
+ // A cached sample taken during POST transit is newer than the click, but predates acceptance.
+ context.lastStatus={...data,status_sample:{sampled_at:10.25}};context.Date.now=()=>11000;
+ resolveResponse({ok:true,json:async()=>({ok:true})});await pending;
+ assert.equal(links().length,0);assert.match(box.textContent,/正在刷新/);
+ assert.deepEqual(endpoints,['/api/refresh-market']);
+ context.lastStatus={...data,status_sample:{sampled_at:12},
+  market_status:{...data.market_status,updated_at:new Date(10000).toISOString(),expiresIn:60}};
+ vm.runInContext('renderMarketStatus(lastStatus.market_status,marketRefreshInProgress(lastStatus))',context);
+ assert.equal(links().length,1);assert.match(box.textContent,/剩余/);
+});
+
+test('accepted refresh keeps its button disabled through cached status and restores it after a fresh terminal sample',()=>{
+ const {context,box,data,links}=marketFixture();const button={disabled:false,textContent:''};
+ context.$=id=>id==='market-status'?box:button;context.data=data;
+ const renderStart=helperHtml.indexOf('const ms=data.market_status||{}',helperHtml.indexOf('function render(data)'));
+ const marketRender=helperHtml.slice(renderStart,helperHtml.indexOf('renderFrontendMarket(',renderStart));
+ const controlsStart=helperHtml.indexOf(' stage3Button(data);excelButtons(data);rotationButtons();');
+ const controls=helperHtml.slice(controlsStart+' stage3Button(data);excelButtons(data);rotationButtons();'.length,helperHtml.indexOf(" if(typeof criteriaDirty",controlsStart));
+ vm.runInContext('beginMarketRefresh();marketRefreshView.acceptedAt=11000',context);
+ context.data={...data,status_sample:{sampled_at:10.25}};
+ const render=()=>vm.runInContext('(()=>{'+marketRender+'})()',context);
+ const update=()=>vm.runInContext('(()=>{'+controls+'})()',context);
+ render();assert.equal(links().length,0);assert.equal(button.disabled,true);assert.match(button.textContent,/正在读取/);
+ update();assert.equal(button.disabled,true);assert.match(button.textContent,/正在读取/);
+ context.data={...data,status_sample:{sampled_at:12}};
+ render();update();assert.equal(links().length,1);assert.equal(button.disabled,false);assert.match(button.textContent,/重试极鲸云/);
+});
+
+test('a rejected market refresh restores its prior expiry-aware state',async()=>{
+ const {context,box,links}=marketFixture(70000);
+ Object.assign(context,{AbortController,setTimeout:()=>1,clearTimeout(){},updateControls(){},feedback(){},poll:async()=>{},
+  fetch:async()=>({ok:false,json:async()=>({error:{message:'fixture failure'}})})});
+ vm.runInContext(helperHtml.split('\n').find(line=>line.startsWith('async function action(')),context);
+ await vm.runInContext("action('/api/refresh-market',{})",context);
+ assert.equal(links().length,0);assert.match(box.textContent,/已过期/);assert.doesNotMatch(box.textContent,/正在刷新/);
 });
 
 test('overall progress shows weighted count, hours and minutes, and paused lanes',()=>{

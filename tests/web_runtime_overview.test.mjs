@@ -24,6 +24,66 @@ function setup(){
  vm.runInContext(helpers,context);return {nodes,context};
 }
 
+test('recorded unfinished layer counts state the remaining work without claiming activity',()=>{
+ const {nodes,context}=setup();context.data={active:false,details:{阶段:{
+  amazon:{completed:3,total:4,remaining:1},
+  stage1:{completed:2176,total:23272,remaining:21096},
+  stage2:{completed:1176,total:2176,remaining:1000}}}};
+ const original=JSON.stringify(context.data);
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ const cards=nodes.get('run-overview').children;
+ assert.equal(cards[0].children[2].textContent,'等待读取状态');
+ assert.equal(cards[3].children[1].textContent,'2,176 / 23,272');
+ assert.equal(cards[3].children[2].textContent,'尚有 21,096 对未处理；进度按批次更新');
+ assert.equal(cards[4].children[2].textContent,'尚有 1,000 对未处理；进度按批次更新');
+ for(const card of cards.slice(3,5)){
+  assert.doesNotMatch(card.children[2].textContent,/正在|运行中|已完成|等待读取状态/);
+  assert.doesNotMatch(card.className,/success/);
+ }
+ assert.equal(JSON.stringify(context.data),original);
+ context.data.details.阶段.stage1={completed:0,total:12,remaining:12};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ assert.equal(nodes.get('run-overview').children[3].children[2].textContent,'尚有 12 对未处理；进度按批次更新');
+});
+
+test('missing, empty or inconsistent layer counts cannot imply completion or remaining work',()=>{
+ const {nodes,context}=setup();
+ const cases=[{}, {completed:0,total:0,remaining:0}, {completed:7,total:7},
+  {completed:7,total:7,remaining:1}, {completed:8,total:7,remaining:0},
+  {completed:-1,total:7,remaining:8}, {completed:1.5,total:7,remaining:5.5},
+  {completed:7,total:'7',remaining:0}, {completed:NaN,total:7,remaining:0},
+  {completed:Infinity,total:7,remaining:0}, {completed:0,total:7,remaining:0},
+  {completed:0,total:Number.MAX_SAFE_INTEGER+1,remaining:Number.MAX_SAFE_INTEGER+1}];
+ for(const row of cases){
+  context.data={details:{阶段:{stage1:row,stage2:row}}};
+  vm.runInContext('renderRuntimeOverview(data)',context);
+  for(const card of nodes.get('run-overview').children.slice(3,5)){
+   assert.equal(card.children[2].textContent,'等待读取状态',JSON.stringify(row));
+   assert.doesNotMatch(card.className,/success/);
+  }
+ }
+});
+
+test('explicit layer status and errors take priority, while a confirmed nonempty completion stays complete',()=>{
+ const {nodes,context}=setup();
+ for(const row of [
+  {状态:'数据库读取失败',status:'RUNNING'}, {status:'OFFLINE'},
+  {状态:'已暂停'}, {error:'数据库读取失败'}, {错误:'第一层统计错误'},
+  {error:{message:'数据库查询失败'}}]){
+  context.data={details:{阶段:{stage1:{completed:7,total:7,remaining:0,...row}}}};
+  vm.runInContext('renderRuntimeOverview(data)',context);
+  const card=nodes.get('run-overview').children[3],expected=row.状态||row.status||row.错误||(typeof row.error==='string'?row.error:row.error.message);
+  assert.equal(card.children[2].textContent,expected);
+  if(/失败|错误/.test(expected))assert.match(card.className,/danger/);
+  if(expected==='OFFLINE')assert.doesNotMatch(card.className,/success/);
+ }
+ context.data={details:{阶段:{stage1:{completed:7,total:7,remaining:0}}}};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ const card=nodes.get('run-overview').children[3];
+ assert.equal(card.children[2].textContent,'当前入库范围已完成');
+ assert.match(card.className,/success/);
+});
+
 test('confirmed user stop removes actionable alerts and restart restores unresolved failures',()=>{
  const {context,nodes}=setup();context.data={stage3_provider:{mode:'local_model'},
   stage3_control:{error:true,phase:'分析暂停，请查看错误记录',running:false},
@@ -139,8 +199,9 @@ test('a failed local controller is red instead of idle; a resumed controller cle
 });
 
 test('local activity shows real characters and uses its own heartbeat instead of an old Agent',()=>{
- const {context}=setup();context.data={stage3_provider:{mode:'local_model'},stage3_control:{running:true,phase:'分析中',codex_review:{pool:{updated_at:1}}},stage3_activity:{status:'receiving',received_chars:1234,updated_at:100}};
+ const {context}=setup();context.data={stage3_provider:{mode:'local_model'},live_sample:{sampled_at:500},stage3_control:{running:true,phase:'分析中',codex_review:{pool:{updated_at:1}}},stage3_activity:{status:'receiving',received_chars:1234,updated_at:100}};
  assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),100);
+ assert.equal(vm.runInContext('stage3Heartbeat(data).label',context),'本地模型响应更新');
  assert.match(vm.runInContext('runtimeStage3(data)["状态"]',context),/1,234.*整组/);
  context.data.stage3_activity={status:'waiting',updated_at:110};
  assert.equal(vm.runInContext('stage3Heartbeat(data).label',context),'模型请求开始');
@@ -152,6 +213,40 @@ test('local activity shows real characters and uses its own heartbeat instead of
  context.data.stage3_provider.mode='liquid_d1';context.data.live_sample={sampled_at:77};
  assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),77);
  assert.match(vm.runInContext('stage3Heartbeat(data).label',context),/采样/);
+});
+
+test('non-streaming local D1 labels the actual live sample without claiming a response heartbeat',()=>{
+ const {context}=setup();context.data={stage3_provider:{mode:'local_model'},live_sample:{sampled_at:177},
+  stage3_activity:{},stage3_control:{running:true,progress:{completed:39,total:142},codex_review:{pool:{updated_at:1}}}};
+ const before=JSON.stringify(context.data);
+ assert.equal(vm.runInContext('stage3Heartbeat(data).label',context),'本地模型状态采样');
+ assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),177);
+ assert.equal(vm.runInContext('stage3ActivityText(data)',context),'');
+ assert.doesNotMatch(vm.runInContext('stage3Heartbeat(data).label',context),/响应|请求开始|心跳/);
+ assert.equal(JSON.stringify(context.data),before);
+ delete context.data.stage3_activity;
+ assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),177);
+});
+
+test('local sample timestamps require real finite evidence and never use another Agent heartbeat',()=>{
+ const {context}=setup();context.data={stage3_provider:{mode:'local_model'},
+  stage3_control:{codex_review:{pool:{updated_at:999}}}};
+ for(const sampled_at of [undefined,null,0,-1,NaN,Infinity,'177',true]){
+  context.data.live_sample={sampled_at};
+  assert.equal(vm.runInContext('stage3Heartbeat(data).label',context),'本地模型状态采样');
+  assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),undefined);
+ }
+ context.data.live_sample={sampled_at:177};
+ for(const updated_at of [undefined,null,0,-1,NaN,Infinity,'100']){
+  context.data.stage3_activity={status:'receiving',updated_at};
+  assert.equal(vm.runInContext('stage3Heartbeat(data).label',context),'本地模型状态采样');
+  assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),177);
+ }
+ for(const status of ['completed','incomplete']){
+  context.data.stage3_activity={status,updated_at:100};
+  assert.equal(vm.runInContext('stage3Heartbeat(data).label',context),'本地模型响应更新');
+  assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),100);
+ }
 });
 
 

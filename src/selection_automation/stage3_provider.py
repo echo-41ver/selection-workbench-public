@@ -118,7 +118,10 @@ def from_category(category):
 def apply(category, value):
     provider = settings(value)
     from .local_d1 import native_endpoint,question_batch_limit
-    batch_size=question_batch_limit(category) if native_endpoint(provider) else 12
+    batch_size=12
+    if native_endpoint(provider):
+        question_batch_limit(category)  # Every selected condition must still fit.
+        batch_size=1
     stage = category['stage3']
     if provider != from_category(category):
         from copy import deepcopy
@@ -132,11 +135,16 @@ def apply(category, value):
 
 
 def request_batch_size(provider, category):
-    """Honor native service question limits without removing selected rules."""
+    """Keep native D1's complete two-image PNG within a single-pair boundary."""
     if provider['mode']=='liquid_d1':return 1
     configured=max(1,min(12,category.get('stage3',{}).get('batch_size',12)))
     from .local_d1 import native_endpoint,question_batch_limit
-    return min(configured,question_batch_limit(category)) if native_endpoint(provider) else configured
+    if native_endpoint(provider):
+        question_batch_limit(category)
+        # A numbered contact sheet can exceed the native PNG byte limit even
+        # when all questions and pixels fit. Retain both complete source images.
+        return 1
+    return configured
 
 
 def request_key(provider):

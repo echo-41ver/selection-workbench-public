@@ -167,24 +167,61 @@ def snapshot_signature(base, category):
     return (json.dumps(category,ensure_ascii=False,sort_keys=True),tuple(versions),controller_alive(base))
 
 
-def observed_rate(base):
+def observed_rate(base, model=None):
+    if not model:return None
     successes = {}
+    native_successes = {}
     for row in records(Path(base)/'stage123/results.jsonl'):
-        if row.get('api_status') == 'success' and row.get('response_id'):
+        if row.get('api_status') != 'success' or row.get('model') != model:continue
+        if row.get('response_id'):
             successes.setdefault(row['response_id'],set()).add((row.get('asin'),row.get('goods_id')))
+        elif (isinstance(row.get('vision_revision_key'),str) and row['vision_revision_key']
+                and row.get('asin') and row.get('goods_id')):
+            native_successes.setdefault(row['vision_revision_key'],[]).append(row)
+    requests = list(records(Path(base)/'stage123/requests.jsonl'))
     completed_requests = {row.get('request_id'):len(successes.get(row.get('response_id'),set()))
-                          for row in records(Path(base)/'stage123/requests.jsonl')}
+                          for row in requests}
+    requests_by_id = {}
+    for row in requests:requests_by_id.setdefault(row.get('request_id'),[]).append(row)
+    intent_rows = list(records(Path(base)/'stage123/request_intents.jsonl'))
+    starts = {}; revision_requests = {}; settlements = {}
+    for row in intent_rows:
+        if row.get('status') == 'settled':
+            identity = row.get('request_id');settlements[identity] = settlements.get(identity,0)+1
+        if row.get('status') != 'started':continue
+        identity = row.get('request_id')
+        starts.setdefault(identity,[]).append(row)
+        keys = row.get('vision_revision_keys')
+        if isinstance(keys,list):
+            for key in keys:
+                if isinstance(key,str) and key:revision_requests.setdefault(key,set()).add(identity)
     intents = {}
     spans = []
     pairs = 0
-    for row in records(Path(base)/'stage123/request_intents.jsonl'):
+    for row in intent_rows:
         identity = row.get('request_id')
         if row.get('status') == 'started': intents[identity] = row
         elif row.get('status') == 'settled' and identity in intents:
             start = intents.pop(identity)
             a, b = start.get('time', 0), row.get('time', 0)
-            if b > a and row.get('billing_state') == 'KNOWN':
+            if (type(a) in (int,float) and type(b) in (int,float)
+                    and math.isfinite(a) and math.isfinite(b) and b > a > 0
+                    and row.get('billing_state') == 'KNOWN'):
                 completed = completed_requests.get(identity,0)
+                # Native D1 has no response ID. A unique single-pair revision
+                # can link a real received/settled request to its model's
+                # success; retry/duplicate ambiguity must remain unmeasured.
+                keys = start.get('vision_revision_keys')
+                linked = requests_by_id.get(identity,[])
+                if (not completed and isinstance(identity,str) and identity
+                        and len(starts.get(identity,[])) == 1 and settlements.get(identity) == 1 and start.get('pairs') == 1
+                        and isinstance(keys,list) and len(keys) == 1 and isinstance(keys[0],str)
+                        and revision_requests.get(keys[0]) == {identity}
+                        and len(native_successes.get(keys[0],[])) == 1 and len(linked) == 1):
+                    request = linked[0]
+                    if (request.get('status') == 'received' and not request.get('response_id')
+                            and request.get('pairs') == 1 and request.get('response_status') != 'incomplete'):
+                        completed = 1
                 if completed:
                     spans.append((a,b)); pairs += completed
     duration = 0
@@ -307,11 +344,12 @@ def snapshot(base, category, *, history=True, on_phase=None):
     pending = total-completed-failed
     runnable = 0 if held['fail_closed'] else pending-pending_blocked
     phase('核对历史处理速度')
-    rate = observed_rate(base)
+    current_model = from_category(category)['model']
+    rate = observed_rate(base,current_model)
     source = 'current' if rate else None
     group_seconds = None; history_groups = 0
     if not rate and history:
-        group_seconds, history_groups = historical_group_duration(base,stage.get('model'),batch_size)
+        group_seconds, history_groups = historical_group_duration(base,current_model,batch_size)
         if group_seconds:
             rate = batch_size*parallel/group_seconds
             source = 'history_group_normalized'
