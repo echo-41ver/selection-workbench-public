@@ -348,7 +348,7 @@ def check_flower(root):
         binding = run_background_launcher([shutil.which('pwsh') or 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
             '-File', str(root / 'scripts/bind_flower_worker.ps1'), '-WorkerName', worker,
             '-ProfileId', str(profile), '-WebDriverPort', str(port), '-GeckoDriverPath', str(driver), '-WaitSeconds', '120'],
-            cwd=root, timeout=190)
+            cwd=root, timeout=260)
         if binding.returncode:
             raise RuntimeError('FIREFOX_BINDING_FAILED')
         sid = (state_folder / 'flower_session_id.txt').read_text('utf-8').strip()

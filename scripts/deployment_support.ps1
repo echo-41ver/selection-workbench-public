@@ -84,6 +84,17 @@ function Export-DeploymentDiagnostics([string]$Root, [string]$OutputPath) {
                 $files += Get-ChildItem -LiteralPath $attempt.FullName -File | Where-Object { $_.Name -match '^(?:(?:install|start-web|worker)\.)?(?:stdout|stderr)\.log$|^(?:result|parent-error|parent-timeout)\.json$' }
             }
         }
+        # Binding failures retain their actual native stderr here. Include only
+        # three recent exact launcher log pairs, with the same redaction/limits.
+        $launcherRoot = Join-Path $Root 'runtime\launcher-logs'
+        if ([IO.Directory]::Exists($launcherRoot) -and (Test-DeploymentSupportPath $Root $launcherRoot)) {
+            $launcherErrors = @(Get-ChildItem -LiteralPath $launcherRoot -File | Where-Object { $_.Name -match '^[a-f0-9]{32}\.stderr\.log$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 3)
+            foreach ($launcherError in $launcherErrors) {
+                $files += $launcherError
+                $stdout = Join-Path $launcherRoot ($launcherError.Name.Replace('.stderr.log', '.stdout.log'))
+                if ([IO.File]::Exists($stdout)) { $files += Get-Item -LiteralPath $stdout }
+            }
+        }
         $included = @()
         foreach ($file in $files) {
             if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }

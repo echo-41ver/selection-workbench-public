@@ -233,7 +233,7 @@ def _main() -> None:
                     [shell, "-NoProfile", "-File", str(ROOT / "scripts" / "bind_flower_worker.ps1"),
                      "-WorkerName", f"worker-{number:02d}-new", "-ProfileId", str(profile_id), "-MarionettePort", str(marionette),
                      "-WebDriverPort", str(webdriver_port), "-GeckoDriverPath", geckodriver, "-WaitSeconds", "60"],
-                    cwd=ROOT, timeout=75,
+                    cwd=ROOT, timeout=145,
                 )
                 if not bind.returncode: break
                 existing['bind_error']=(bind.stderr or bind.stdout or 'bind failed')[-1000:]

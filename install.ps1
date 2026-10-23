@@ -467,6 +467,6 @@ Write-Output '部署检查通过，可以启动工作台。公司配置已按当
     Write-DeploymentStatus -Root $root -Stage $stage -Succeeded $false -RolledBack $restored
     [IO.File]::WriteAllText((Join-Path $root 'runtime\install-failure.json'), ($failure | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     Write-Warning "失败位置：install.ps1:$($failure.line)，异常类型：$($failure.exception_type)"
-    Write-Error "部署在【$stage】未完成。原数据与断点保留。请双击“导出诊断.cmd”，把诊断包交给维护者；无需查看日志或手工安装依赖。" -ErrorAction Continue
+    Write-Error -Message ('部署在【{0}】未完成。原数据与断点保留。请双击“导出诊断.cmd”，把诊断包交给维护者；无需查看日志或手工安装依赖。' -f $stage) -ErrorAction Continue
     exit 1
 }

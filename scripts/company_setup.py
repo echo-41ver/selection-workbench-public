@@ -29,7 +29,7 @@ def rebind_existing_worker(base, worker, port, api):
             raise RuntimeError('AdsPower 未返回 Firefox WebDriver；检查公司内核权限')
         result = run_background_launcher([powershell(),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(ROOT/'scripts/bind_flower_worker.ps1'),
             '-WorkerName',worker['name'],'-ProfileId',profile,'-MarionettePort',str(started.get('marionette_port') or 0),
-            '-WebDriverPort',str(port),'-GeckoDriverPath',driver], cwd=ROOT, timeout=75)
+            '-WebDriverPort',str(port),'-GeckoDriverPath',driver], cwd=ROOT, timeout=145)
         if not result.returncode: return
         message = (result.stderr or '') + (result.stdout or '')
         raise RuntimeError(f"{worker['name']} 浏览器绑定失败；保留仍打开的环境，禁止关闭后复用；原因：{message[-1000:]}")

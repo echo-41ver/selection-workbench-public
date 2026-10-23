@@ -50,6 +50,26 @@ function Invoke-LocalDriverRest([string]$Uri, [string]$Method = 'GET', [string]$
         return ($text | ConvertFrom-Json)
     } finally { $client.Dispose(); $handler.Dispose() }
 }
+function Request-BrowserDisplayConfirmation {
+    $pythonw = Join-Path $root '.venv\Scripts\pythonw.exe'
+    $promptScript = Join-Path $PSScriptRoot 'confirm_browser_display.py'
+    if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf) -or -not (Test-Path -LiteralPath $promptScript -PathType Leaf)) {
+        throw '无法显示浏览器确认窗口；请双击导出诊断.cmd交给维护者。'
+    }
+    Write-BindingTiming 'waiting_browser_display_confirmation'
+    $confirmationClock = [Diagnostics.Stopwatch]::StartNew()
+    $callerTicks = (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
+    $prompt = Start-Process -FilePath $pythonw -ArgumentList @(('"' + $promptScript + '"'), $PID, $callerTicks) -PassThru -WindowStyle Hidden
+    if (-not $prompt.WaitForExit(65000)) {
+        # Retained process object, never a later PID lookup.
+        if (-not $prompt.HasExited) { $prompt.Kill() }
+        throw '浏览器显示确认已超时；当前浏览器已保留，请回到工作台后继续。'
+    }
+    Write-BindingTiming ('browser_display_confirmation_exit_' + $prompt.ExitCode)
+    if ($prompt.ExitCode -ne 0) { throw '浏览器显示确认未完成；当前浏览器已保留，请回到工作台后继续。' }
+    Write-BindingTiming 'browser_display_confirmation_completed'
+    return $confirmationClock.Elapsed.TotalSeconds
+}
 function Show-VerifiedProfileWindow([int]$RootPid) {
     if (-not ('OwnedFlowerForeground' -as [type])) {
         Add-Type @"
@@ -75,10 +95,17 @@ public static class OwnedFlowerForeground {
     if ($windows.Count -ne 1) { throw 'Selected profile must expose one visible browser window; no other window was activated.' }
     $selected = $windows[0]
     $handle = $selected.MainWindowHandle
+    $selectedStartedTicks = $selected.StartTime.ToUniversalTime().Ticks
+    $confirmationSeconds = 0.0
+    for ($focusPass = 0; $focusPass -lt 2; $focusPass++) {
     for ($attempt = 1; $attempt -le 12; $attempt++) {
         [uint32]$windowProcessId = 0
         $targetThread = [OwnedFlowerForeground]::GetWindowThreadProcessId($handle, [ref]$windowProcessId)
-        if ($windowProcessId -ne $selected.Id -or -not $targetThread) { throw 'Selected profile window ownership changed; activation stopped.' }
+        $live = Get-Process -Id $selected.Id -ErrorAction SilentlyContinue
+        if ($windowProcessId -ne $selected.Id -or -not $targetThread -or -not $live -or
+            $live.StartTime.ToUniversalTime().Ticks -ne $selectedStartedTicks -or $live.MainWindowHandle -ne $handle) {
+            throw 'Selected profile window ownership changed; activation stopped.'
+        }
         $currentThread = [OwnedFlowerForeground]::GetCurrentThreadId()
         [uint32]$foregroundProcessId = 0
         $foregroundThread = [OwnedFlowerForeground]::GetWindowThreadProcessId([OwnedFlowerForeground]::GetForegroundWindow(), [ref]$foregroundProcessId)
@@ -96,9 +123,13 @@ public static class OwnedFlowerForeground {
             foreach ($otherThread in $attached) { $null = [OwnedFlowerForeground]::AttachThreadInput($currentThread, $otherThread, $false) }
         }
         if ([OwnedFlowerForeground]::GetForegroundWindow() -eq $handle) {
-            return @{ window_pid = $selected.Id; window_handle = $handle.ToInt64(); activated = $true; attempts = $attempt }
+            return @{ window_pid = $selected.Id; window_handle = $handle.ToInt64(); activated = $true; attempts = $attempt; confirmation_seconds = $confirmationSeconds }
         }
         Start-Sleep -Milliseconds 150
+    }
+        if ($focusPass -eq 0) {
+            $confirmationSeconds = Request-BrowserDisplayConfirmation
+        }
     }
     throw 'Selected profile window could not be activated after bounded retries; browser retained.'
 
@@ -251,6 +282,9 @@ Write-BindingTiming 'local_driver_ready'
 # First binding must visibly activate ONLY the selected profile's process tree.
 # Port ownership remains the separate authority check above.
 $foreground = if ($ProfileId) { Show-VerifiedProfileWindow $script:expectedProfileBrowserPid } else { $null }
+# User response time is bounded separately and must not consume the existing
+# Marionette/session deadline. Automated focus and driver waits remain bounded.
+if ($foreground -and $foreground.confirmation_seconds) { $bindingDeadline = $bindingDeadline.AddSeconds($foreground.confirmation_seconds) }
 Write-BindingTiming 'activate_selected_profile_window'
 $caps = @{ capabilities = @{ alwaysMatch = @{ webSocketUrl = $true; pageLoadStrategy = 'none' } } } | ConvertTo-Json -Depth 6 -Compress
 $sessionTimeout = [Math]::Max(1, [Math]::Min(60, [Math]::Ceiling(($bindingDeadline - (Get-Date)).TotalSeconds)))

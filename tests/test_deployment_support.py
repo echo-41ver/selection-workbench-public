@@ -31,6 +31,37 @@ def test_real_installer_code_and_chinese_next_step_are_preserved(tmp_path):
     assert '导出诊断' in data['next_step'] and '无需查看日志' in data['next_step']
 
 
+def test_actual_install_failure_handler_keeps_original_error_and_chinese_instruction(tmp_path):
+    # Execute only the real catch block, never any installation or browser step.
+    script = tmp_path/'actual-catch.ps1'
+    script.write_text(r'''[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$ErrorActionPreference='Stop'
+$root=$env:TEST_FAILURE_ROOT
+[void][IO.Directory]::CreateDirectory((Join-Path $root 'runtime'))
+$stage='运行准备检查'
+$transaction=$null
+$script:DeploymentCommandFailure=@{executable='test-only.exe';exit_code=17}
+function Write-DeploymentStatus { param($Root,$Stage,$Succeeded,$RolledBack) }
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALL_SOURCE,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Source parse failed'}
+$outer=@($ast.EndBlock.Statements|Where-Object{$_ -is [Management.Automation.Language.TryStatementAst]})[-1]
+$handler=[scriptblock]::Create($outer.CatchClauses[0].Body.Extent.Text.Trim().Substring(1).TrimEnd().TrimEnd('}'))
+try { throw 'TEST_ONLY_ORIGINAL_INSTALLER_FAILURE' } catch { & $handler }
+''', encoding='utf-8-sig')
+    result=subprocess.run([str(PS),'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(script)],
+        env={**os.environ,'TEST_FAILURE_ROOT':str(tmp_path),'TEST_INSTALL_SOURCE':str(ROOT/'install.ps1')},
+        capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
+    assert result.returncode == 1
+    assert 'PositionalParameterNotFound' not in result.stderr
+    assert 'ParameterBindingException' not in result.stderr
+    assert '运行准备检查' in result.stderr and '导出诊断.cmd' in result.stderr
+    assert '无需查看日志或手工安装依赖' in result.stderr
+    failure=json.loads((tmp_path/'runtime/install-failure.json').read_text('utf-8-sig'))
+    assert failure['stage']=='运行准备检查'
+    assert failure['command']['exit_code']==17
+
+
 def test_diagnostic_zip_excludes_private_state_and_redacts_log_secrets(tmp_path):
     runtime = tmp_path/'runtime'
     attempt = runtime/'deployment-entry'/('a'*32)
@@ -41,6 +72,11 @@ def test_diagnostic_zip_excludes_private_state_and_redacts_log_secrets(tmp_path)
         (attempt/name).write_text('实际部署日志 中文 api_key='+secret+'\n', encoding='utf-8')
     (runtime/'company.dpapi').write_text(secret, encoding='utf-8')
     (runtime/'company.local.json').write_text(secret, encoding='utf-8')
+    launcher = runtime/'launcher-logs'
+    launcher.mkdir()
+    for name in (('b'*32)+'.stderr.log', ('b'*32)+'.stdout.log'):
+        (launcher/name).write_text('Selected profile window could not be activated api_key='+secret, encoding='utf-8')
+    (launcher/'private-company.json').write_text(secret, encoding='utf-8')
     (runtime/'install-status.json').write_text('{"stage":"failed","succeeded":false}', encoding='utf-8')
     result = invoke(tmp_path, '$p=Export-DeploymentDiagnostics -Root $env:SUPPORT_ROOT\nWrite-Output $p\n')
     assert result.returncode == 0, result.stderr
@@ -52,11 +88,14 @@ def test_diagnostic_zip_excludes_private_state_and_redacts_log_secrets(tmp_path)
         for name in ('stdout.log', 'stderr.log', 'worker.stdout.log', 'worker.stderr.log'):
             assert 'runtime/deployment-entry/' + ('a'*32) + '/' + name in names
         assert not any('company' in n.lower() for n in names)
+        assert 'runtime/launcher-logs/'+('b'*32)+'.stderr.log' in names
+        assert 'runtime/launcher-logs/'+('b'*32)+'.stdout.log' in names
         text = '\n'.join(archive.read(n).decode('utf-8') for n in names)
     assert secret not in text
     assert '[REDACTED]' in text
     assert 'succeeded' in text
     assert '实际部署日志 中文' in text
+    assert 'Selected profile window could not be activated' in text
 
 
 def test_unconfirmed_worker_never_tells_user_to_repeat_deployment(tmp_path):

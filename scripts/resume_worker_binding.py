@@ -43,7 +43,7 @@ def resume(worker, allow_rebind=False, expected_task=None, expected_profile=None
                         '-WorkerName',name,'-ProfileId',row['profile_id'],'-WebDriverPort',str(port),
                         '-GeckoDriverPath',driver,'-MarionettePort',str(started.get('marionette_port') or 0),'-WaitSeconds','60']
                     if allow_rebind:command.append('-RecoverOwnedDriver')
-                    result=r.run_background_launcher(command,cwd=r.ROOT,timeout=75)
+                    result=r.run_background_launcher(command,cwd=r.ROOT,timeout=145)
                     if not result.returncode: break
                     error=(result.stderr or result.stdout or 'Driver binding failed')[-1000:]
                     raise RuntimeError(error)

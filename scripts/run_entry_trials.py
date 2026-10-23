@@ -306,7 +306,7 @@ def run_case(args,out,index,query,route,sort,state):
         started=start_profile_with_retry(api_base(),profile)
         binding_name=f'nightly-entry-{index:03d}'
         binding_dir=ROOT/'runtime'/binding_name
-        bind=run_background_launcher(['pwsh','-NoProfile','-File',str(ROOT/'scripts/bind_flower_worker.ps1'),'-WorkerName',binding_name,'-ProfileId',profile,'-WebDriverPort',str(args.driver_port),'-GeckoDriverPath',started['webdriver']],cwd=ROOT,timeout=85)
+        bind=run_background_launcher(['pwsh','-NoProfile','-File',str(ROOT/'scripts/bind_flower_worker.ps1'),'-WorkerName',binding_name,'-ProfileId',profile,'-WebDriverPort',str(args.driver_port),'-GeckoDriverPath',started['webdriver']],cwd=ROOT,timeout=155)
         info['binding_logs']={'stdout':str(bind.stdout_path),'stderr':str(bind.stderr_path)}
         driver=read(binding_dir/'driver.json')
         if bind.returncode:

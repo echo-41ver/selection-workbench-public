@@ -423,7 +423,7 @@ def replace_worker(args) -> dict:
                 [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "scripts" / "bind_flower_worker.ps1"),
                  "-WorkerName", worker_name, "-ProfileId", str(new_profile), "-MarionettePort", str(marionette), "-WebDriverPort", str(port),
                  "-GeckoDriverPath", geckodriver, "-WaitSeconds", "60"],
-                cwd=ROOT, timeout=75,
+                cwd=ROOT, timeout=145,
             )
             if not bind.returncode:
                 break
