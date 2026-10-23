@@ -103,7 +103,25 @@ function Write-Record([string]$Path,$Value){
  [IO.File]::WriteAllText($temp,($Value|ConvertTo-Json -Depth 15),$utf8)
  if([IO.File]::Exists($Path)){[SelectionEntryCapture]::ReplaceRecord($temp,$Path)}else{[IO.File]::Move($temp,$Path)}
 }
-function Read-Record([string]$Path){if([IO.File]::Exists($Path)){return ([IO.File]::ReadAllText($Path,$utf8)|ConvertFrom-Json)};return $null}
+function Read-Record([string]$Path){
+ $deadline=[DateTime]::UtcNow.AddSeconds(3)
+ while($true){
+  if(-not [IO.File]::Exists($Path)){return $null}
+  $stream=$null;$reader=$null
+  try{
+   # Records are atomically published, but Windows readers/scanners may still
+   # hold a write/delete handle. Cooperate without blocking the next publication.
+   $share=[IO.FileShare]([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+   $stream=[IO.FileStream]::new($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)
+   $reader=[IO.StreamReader]::new($stream,$utf8,$true)
+   return ($reader.ReadToEnd()|ConvertFrom-Json)
+  }catch{
+   $errorBase=$_.Exception.GetBaseException();$native=$errorBase.HResult -band 65535
+   if(-not ($errorBase -is [IO.IOException]) -or $native -notin @(32,33) -or [DateTime]::UtcNow -ge $deadline){throw}
+  }finally{if($reader){$reader.Dispose()};if($stream){$stream.Dispose()}}
+  Start-Sleep -Milliseconds 50
+ }
+}
 function File-Sha([string]$Path){$hash=[Security.Cryptography.SHA256]::Create();$hashStream=[IO.File]::OpenRead($Path);try{return ([BitConverter]::ToString($hash.ComputeHash($hashStream))).Replace('-','').ToLowerInvariant()}finally{$hashStream.Dispose();$hash.Dispose()}}
 function Same-Path([string]$A,[string]$B){return [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFullPath($A),[IO.Path]::GetFullPath($B))}
 function Quote-Native([string]$Value){return '"'+($Value -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1')+'"'}
