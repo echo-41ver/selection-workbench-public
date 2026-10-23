@@ -113,3 +113,24 @@ def test_union_watcher_interval_observes_stop_without_waiting_full_interval(tmp_
     monkeypatch.setattr(watcher.time,'sleep',sleep)
     assert not watcher.wait_for_task_interval(stop,30)
     assert len(sleeps)==1 and 0<sleeps[0]<=.25
+
+
+def test_source_raw_count_preserves_known_lower_bound_and_unknown_control_or_legacy(tmp_path):
+    category={'category_key':'curtain'};base=tmp_path/'runs/curtain/temu/workers/w1'
+    for folder in ('sales','recent'):
+        path=base/folder/'progress.json';path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({'raw_collected_count':1,'unique_goods':0}),encoding='utf8')
+    pending=base/'next/progress.json';pending.parent.mkdir()
+    pending.write_text(json.dumps({'status':'RESUMING','collection_phase':'BEFORE_SCROLL','scroll_collection_started':False}),encoding='utf8')
+    before=pending.read_bytes();counts=current_source_summary(tmp_path,category)
+    assert counts['frontend_raw_collected_count'] is None and counts['frontend_raw_count_lower_bound']==2
+    assert counts['frontend_raw_unrecorded_passes']==counts['frontend_raw_pending_passes']==1
+    assert counts['frontend_raw_recorded_passes']==2 and not counts['frontend_raw_count_complete']
+    assert pending.read_bytes()==before
+    pending.write_text(json.dumps({'status':'RUNNING','unique_goods':500}),encoding='utf8')
+    counts=current_source_summary(tmp_path,category)
+    assert counts['frontend_raw_collected_count'] is None and counts['frontend_raw_count_lower_bound']==2
+    assert counts['frontend_raw_pending_passes']==0 and counts['frontend_raw_unrecorded_passes']==1
+    pending.write_text(json.dumps({'status':'RUNNING','raw_collected_count':0}),encoding='utf8')
+    counts=current_source_summary(tmp_path,category)
+    assert counts['frontend_raw_collected_count']==2 and counts['frontend_raw_count_complete']

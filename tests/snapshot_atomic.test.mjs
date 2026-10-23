@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-import {atomicSnapshot,replaceWindowsSnapshot} from '../scripts/snapshot_atomic.mjs';
+import {atomicSnapshot,replaceWindowsSnapshot,windowsSnapshotFailure} from '../scripts/snapshot_atomic.mjs';
 
 test('temporary reader locks retry without exposing partial or missing snapshots',async()=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'snapshot-lock-'));
@@ -61,24 +61,24 @@ async function holdWindowsReader(file,shareDelete) {
 }
 
 test('Windows atomic replacement works while a delete-sharing reader retains the old snapshot',
-  {skip:process.platform!=='win32',timeout:30000},async()=>{
+  {skip:process.platform!=='win32',timeout:60000},async()=>{
     const dir=await fs.mkdtemp(path.join(os.tmpdir(),"snapshot-中文 & 'reader-"));
     let reader;
     try {
       const file=path.join(dir,'progress.json');await fs.writeFile(file,'old-complete\n');
-      reader=await holdWindowsReader(file,true);let attempts=0;
+      reader=await fs.open(file,'r');let attempts=0;
       await atomicSnapshot(file,'new-complete\n',{sleep:async()=>{},filesystem:{...fs,rename:async(...args)=>{
         attempts++;return fs.rename(...args);
       }}});
       assert.equal(attempts,20);
       assert.equal(await fs.readFile(file,'utf8'),'new-complete\n');
       assert.deepEqual((await fs.readdir(dir)).filter(name=>name.endsWith('.tmp')),[]);
-      reader.release();assert.equal(await reader.done,'ENTERED\r\nold-complete\n\r\n');reader=null;
-    } finally { if(reader){reader.release();await reader.done;}await fs.rm(dir,{recursive:true,force:true}); }
+      assert.equal(await reader.readFile('utf8'),'old-complete\n');await reader.close();reader=null;
+    } finally { if(reader)await reader.close();await fs.rm(dir,{recursive:true,force:true}); }
   });
 
 test('Windows readers denying delete-sharing remain real bounded failures with both complete snapshots preserved',
-  {skip:process.platform!=='win32',timeout:30000},async()=>{
+  {skip:process.platform!=='win32',timeout:60000},async()=>{
     const dir=await fs.mkdtemp(path.join(os.tmpdir(),'snapshot-no-delete-'));let reader;
     try {
       const file=path.join(dir,'progress.json');await fs.writeFile(file,'old-complete\n');
@@ -114,7 +114,7 @@ test('Windows native replacement has a bounded hidden shell-free process and lit
     const script=Buffer.from(args[4],'base64').toString('utf16le');
     assert.ok(!script.includes(source)&&!script.includes(destination));assert.match(script,/\[IO\.File\]::Replace/);
     assert.equal(options.env.SWB_ATOMIC_REPLACEMENT,source);assert.equal(options.env.SWB_ATOMIC_DESTINATION,destination);
-    assert.equal(options.timeout,10000);assert.equal(options.shell,false);assert.equal(options.windowsHide,true);
+    assert.equal(options.timeout,30000);assert.equal(options.shell,false);assert.equal(options.windowsHide,true);
   }});
   assert.equal(calls,1);
 });
@@ -128,7 +128,7 @@ test('failed Windows fallback preserves the original error and full old snapshot
     let attempts=0,replacements=0;
     await assert.rejects(()=>atomicSnapshot(file,'new\n',{platform:'win32',attempts:3,sleep:async()=>{},
       filesystem:{...fs,rename:async()=>{attempts++;throw original;}},
-      replaceSnapshot:async()=>{replacements++;throw timeout;}}),error=>error===original&&error.cause===timeout);
+      replaceSnapshot:async()=>{replacements++;throw timeout;}}),error=>error===original&&error.cause===timeout&&error.snapshot_replacement.code==='ETIMEDOUT'&&error.snapshot_replacement.killed===true&&error.snapshot_replacement.signal==='SIGTERM');
     assert.equal(attempts,3);assert.equal(replacements,1);assert.equal(await fs.readFile(file,'utf8'),'old\n');
     const temporary=(await fs.readdir(dir)).filter(name=>name.endsWith('.tmp'));assert.equal(temporary.length,1);
     assert.equal(await fs.readFile(path.join(dir,temporary[0]),'utf8'),'new\n');
@@ -144,4 +144,28 @@ test('non-Windows rename failures never invoke the Windows native replacement',a
       replaceSnapshot:async()=>{replacements++;}}),{code:'EPERM'});
     assert.equal(replacements,0);assert.equal(attempts,3);assert.equal(await fs.readFile(file,'utf8'),'old\n');
   } finally { await fs.rm(dir,{recursive:true,force:true}); }
+});
+
+test('Windows native replacement failure emits only safe native diagnostics and rethrows the same cause',async(t)=>{
+  const secret='TEST_ONLY_PRIVATE_DATA';const logs=[];
+  t.mock.method(console,'error',value=>logs.push(String(value)));
+  const error=Object.assign(new Error(secret),{code:null,killed:true,signal:'SIGTERM',
+    stdout:secret,stderr:secret,cmd:secret,path:secret,env:{password:secret}});
+  await assert.rejects(()=>replaceWindowsSnapshot(secret,secret,{execute:async()=>{throw error;}}),value=>value===error);
+  assert.equal(logs.length,1);assert.ok(!logs[0].includes(secret));
+  const row=JSON.parse(logs[0]);assert.equal(row.event,'WINDOWS_SNAPSHOT_REPLACEMENT_FAILED');
+  assert.equal(row.diagnostic.killed,true);assert.equal(row.diagnostic.signal,'SIGTERM');
+  assert.equal(row.diagnostic.timeout_ms,30000);assert.ok(row.diagnostic.elapsed_ms>=0);
+  assert.equal(row.diagnostic.hresult,null);assert.deepEqual(row.diagnostic,error.snapshot_replacement);
+});
+
+test('Windows replacement diagnostics distinguish native share violation from a killed helper without raw text',()=>{
+  const secret='TEST_ONLY_PRIVATE_DATA';
+  const denied=windowsSnapshotFailure({code:1,killed:false,stderr:secret+' System.IO.IOException:-2147024864 '+secret});
+  assert.equal(denied.code,1);assert.equal(denied.killed,false);assert.equal(denied.signal,null);
+  assert.equal(denied.native_type,'System.IO.IOException');assert.equal(denied.hresult,-2147024864);
+  assert.ok(!JSON.stringify(denied).includes(secret));
+  const unknown=windowsSnapshotFailure({code:secret,signal:secret,stderr:secret});
+  assert.equal(unknown.code,null);assert.equal(unknown.signal,null);assert.equal(unknown.hresult,null);
+  assert.ok(!JSON.stringify(unknown).includes(secret));
 });

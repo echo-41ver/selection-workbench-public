@@ -258,3 +258,35 @@ def test_signature_ignores_heartbeat_and_identical_small_product_rewrites(tmp_pa
     data['sales_sort']={'state':'UI_CONFIRMED','label':'Top sales','observed_at':'now'}
     progress.write_text(json.dumps(data),'utf-8')
     assert report_signature(tmp_path,cat)!=second
+
+
+def test_only_current_successful_unknown_pairs_enter_published_review_evidence(tmp_path,monkeypatch):
+    from selection_automation import commercial
+    cat=category();base=tmp_path/'runs/fixture';frozen=base/'stage123/export_frozen'
+    frozen.mkdir(parents=True);(base/'amazon').mkdir();(base/'temu/union').mkdir(parents=True)
+    (base/'amazon/amazon_frontend_latest.json').write_text(json.dumps({'records':[{'asin':'A1','title':'Amazon fixture','product_url':'https://www.amazon.com/dp/A1'}]}),encoding='utf-8')
+    (base/'temu/union/products.jsonl').write_text(json.dumps({'goods_id':'1','title':'TEMU fixture','product_url':'https://www.temu.com/goods.html?goods_id=1'}),encoding='utf-8')
+    pair={'asin':'A1','goods_id':'1','pair_status':'CANDIDATE'}
+    for name in ('layer3_candidates_fixture.jsonl','layer12_rows_fixture.jsonl'):(frozen/name).write_text(json.dumps(pair)+'\n',encoding='utf-8')
+    from selection_automation import vision,rules
+    monkeypatch.setattr(vision,'compatible_vision_keys',lambda *a,**k:['current-revision'])
+    monkeypatch.setattr(rules,'score',lambda *a,**k:{'state':'无法判断','reason':'未看清侧面','total_score':0})
+    result={'asin':'A1','goods_id':'1','api_status':'success','vision_revision_key':'current-revision','visual_facts':{},'model':'fixture-model'}
+    path=base/'stage123/results.jsonl';path.write_text(json.dumps(result)+'\n',encoding='utf-8')
+    report=build_report(tmp_path,cat,as_of=NOW);row=report['review_pairs'][0]
+    assert (row['asin'],row['goods_id'],row['state'],row['reason'])==('A1','1','无法判断','未看清侧面')
+    assert row['amazon_url']=='https://www.amazon.com/dp/A1' and row['temu_url'].endswith('goods_id=1')
+    assert report['products'][0]['match']['possible']==1 and report['products'][0]['confirmed_pairs']==[]
+    result['vision_revision_key']='stale';path.write_text(json.dumps(result)+'\n',encoding='utf-8')
+    assert build_report(tmp_path,cat,as_of=NOW)['review_pairs']==[]
+
+    # A retained frozen candidate cannot supply a product removed from this input.
+    result['vision_revision_key']='current-revision';path.write_text(json.dumps(result)+'\n',encoding='utf-8')
+    amazon_path=base/'amazon/amazon_frontend_latest.json';temu_path=base/'temu/union/products.jsonl'
+    amazon_before=amazon_path.read_text('utf-8');temu_before=temu_path.read_text('utf-8')
+    for missing in ('amazon','temu'):
+        amazon_path.write_text(json.dumps({'records':[]}) if missing=='amazon' else amazon_before,encoding='utf-8')
+        temu_path.write_text('' if missing=='temu' else temu_before,encoding='utf-8')
+        missing_report=build_report(tmp_path,cat,as_of=NOW)
+        assert missing_report['review_pairs']==[]
+        if missing=='temu':assert missing_report['products'][0]['match']['possible']==1

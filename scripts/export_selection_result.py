@@ -15,7 +15,7 @@ def export(root,category,report):
     name=data['category_name'];base=Path(root)/'runs'/category['category_key']
     destination=base/'excel'/f'{name}_选品结果.xlsx'
     note=(f"{data['collection']['label']}。选品结论仅保留本次采集完成、采样核验完成且同款＋类似款严格小于 {data['limit']} 的 Amazon。"
-          '采集分析进度保留阶段性数据；零计数不表示已核验或零竞争。明细保留已完成的同款和类似款判断。点击图片可打开原图。')
+          '采集分析进度保留阶段性数据；零计数不表示已核验或零竞争。明细保留已完成的同款和类似款判断；待复核依据保留无法判断的实际配对，不计入选品结论。点击图片可打开原图。')
     parameter_headers=['当前价(USD)','最低价(USD)','最高价(USD)','价格带口径','评分','评论数','页面销量','销量口径','真实上架时间','上架时间来源','采集时间','采集来源']
     amazon_raw={i['asin']:i['raw'] for i in data['progress']}
     amazon_raw.update({p['asin']:p['amazon_raw'] for p in data['pairs']})
@@ -86,6 +86,20 @@ def export(root,category,report):
             emit(detail,index,pair_headers,[item['asin'],a['title'],'','',item['same_count'],a['url'],t['url'] if t else None,item['goods_id'],t['title'] if t else None,conclusion_label(item['relation']),short_reason(e.get('reason','已通过当前版本最终关系判断')),model_label(e.get('model'),root),*fields(a),*fields(t),*extra_values('Amazon',item['amazon_raw']),*extra_values('TEMU',item['temu_raw']),e.get('evidence'),e.get('probability'),e.get('score')])
             picture(detail,index,2,'amazon',item['asin']);picture(detail,index,3,'temu',item['goods_id'])
         detail.autofilter(3,0,max(3,len(data['pairs'])+3),len(pair_headers)-1)
+        reviews=(report or {}).get('review_pairs',[])
+        if reviews:
+            review_headers=['Amazon ASIN','TEMU商品ID','最终判断','判断依据','视觉证据','Amazon商品链接','TEMU商品链接','Amazon标题','TEMU标题','分析模型']
+            review_sheet=sheet('待复核依据',review_headers)
+            for index,item in enumerate(reviews,4):
+                values=[item.get(k) for k in ('asin','goods_id','state','reason','evidence','amazon_url','temu_url','amazon_title','temu_title')]+[model_label(item.get('model'),root)]
+                emit(review_sheet,index,review_headers,values)
+                # Cache the original URL as the cell value, so the read-only web view
+                # can use this same published workbook without reading live results.
+                for col in (5,6):
+                    url=values[col]
+                    if isinstance(url,str) and url.startswith('https://'):
+                        review_sheet.write_url(index,col,url,f['link'],string=url)
+            review_sheet.autofilter(3,0,max(3,len(reviews)+3),len(review_headers)-1)
         headers=['平台','商品ID','采集字段','已采集内容','内容分段','商品来源链接'];extra=sheet('商品完整字段',headers);extra.hide();count=0
         for side,records in [('Amazon',amazon_raw),('TEMU',temu_raw)]:
             for identity,raw in records.items():

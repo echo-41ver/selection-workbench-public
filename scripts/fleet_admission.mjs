@@ -57,6 +57,7 @@ export function createFleetAdmission({directory,stopFile,onWait=async()=>{},onAd
   const ticketName=`ticket-${String(Date.now()).padStart(16,'0')}-${crypto.randomUUID()}.json`;
   const ticket=path.join(directory,ticketName);
   await atomicSnapshot(ticket,JSON.stringify({pid:owner}));
+  let ticketFailed=false,ticketFailure;
   try { while(true){
    await checkStop();const penalty=await penalties();const capacity=admissionCapacity(...memory());let slot=null;
    const queued=[];
@@ -74,23 +75,43 @@ export function createFleetAdmission({directory,stopFile,onWait=async()=>{},onAd
     for(let i=0;i<capacity;i++){const candidate=path.join(directory,`slot-${i}.json`);if(await claim(candidate)){slot=candidate;break;}}
    }
    if(slot){
-    let admitted=false;const mutex=path.join(directory,'admission.lock');
+    let admitted=false,claimed=false,pending=null;const failures=[],mutex=path.join(directory,'admission.lock');
     try{
-     if(await claim(mutex)){
-      try{
-       const state=JSON.parse(await readShared(path.join(directory,'schedule.json'),'utf8').catch(()=> '{}'));
-       const latest=await penalties();
-       if(Math.max(Number(state.nextAt)||0,latest.until)<=Date.now()){
-        await atomicSnapshot(path.join(directory,'schedule.json'),JSON.stringify({nextAt:Date.now()+spacingMs*(latest.slow?3:1)}));admitted=true;
-       }
-      }finally{await removeShared(mutex);}
+     claimed=await claim(mutex);
+     if(claimed){
+      const state=JSON.parse(await readShared(path.join(directory,'schedule.json'),'utf8').catch(()=> '{}'));
+      const latest=await penalties();
+      if(Math.max(Number(state.nextAt)||0,latest.until)<=Date.now()){
+       await checkStop();await onAdmit(operation);await checkStop();
+       const interval=spacingMs*(latest.slow?3:1);
+       await atomicSnapshot(path.join(directory,'schedule.json'),JSON.stringify({nextAt:Date.now()+interval}));
+       await removeShared(ticket);await checkStop();
+       const dispatchedAt=Date.now();admitted=true;
+       // Capture the outcome immediately, including a synchronous throw, while
+       // the mutex protects the configured interval after actual dispatch.
+       try{pending=Promise.resolve(action()).then(value=>({value}),error=>({failed:true,error}));}
+       catch(error){pending=Promise.resolve({failed:true,error});}
+       await sleep(Math.max(0,dispatchedAt+interval-Date.now()));
+      }
      }
-     if(admitted){await removeShared(ticket);await checkStop();await onAdmit(operation);return await action();}
-    }finally{await removeShared(slot).catch(e=>{if(e.code!=='ENOENT')throw e;});}
+    }catch(error){failures.push(error);}
+    if(claimed){try{await removeShared(mutex);}catch(error){failures.push(error);}}
+    // The action may outlive the spacing guard. Its slot remains owned even if
+    // releasing the mutex failed; observe the outcome before freeing capacity.
+    const outcome=pending?await pending:null;
+    if(outcome?.failed)failures.push(outcome.error);
+    try{await removeShared(slot);}catch(error){if(error.code!=='ENOENT')failures.push(error);}
+    if(failures.length===1)throw failures[0];
+    if(failures.length>1)throw new AggregateError(failures,'Fleet admission/action cleanup failed');
+    if(admitted)return outcome.value;
    }
    if(Date.now()-lastReport>=5000){lastReport=Date.now();await onWait({operation,capacity,cooldown_until:penalty.until||null,reason:penalty.until>Date.now()?'HTTP_COOLDOWN':'CAPACITY_OR_SPACING'});}
    await sleep(pollMs);
-  }} finally {await removeShared(ticket).catch(e=>{if(e.code!=='ENOENT')throw e;});}
+  }} catch(error){ticketFailed=true;ticketFailure=error;throw error;}
+  finally {
+   try{await removeShared(ticket).catch(e=>{if(e.code!=='ENOENT')throw e;});}
+   catch(error){if(ticketFailed)throw new AggregateError([ticketFailure,error],'Fleet operation/ticket cleanup failed');throw error;}
+  }
  }
  return {run,penalize};
 }

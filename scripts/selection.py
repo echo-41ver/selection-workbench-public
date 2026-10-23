@@ -281,6 +281,69 @@ def union_supervision(base, health, *, children, finished, attempts, state, term
     return health
 
 
+def union_existing_owner(base, health):
+    """Verify the exact independent owner already publishing this task's union."""
+    pid=health.get('owner_pid');created=health.get('owner_created')
+    if pid is None:return False
+    if (type(pid) is not int or pid<=0 or type(created) not in (int,float)
+            or not math.isfinite(created) or created<=0):return None
+    identity=(pid,created)
+    path=base/'temu/union/watch_state.json'
+    def recorded_identity():
+        value=read(path,{})
+        return (value.get('owner_pid'),value.get('owner_created')) if isinstance(value,dict) else None
+    if recorded_identity()!=identity:return None
+    from local_service_recovery import service_alive
+    # service_alive verifies native liveness, creation time, exact script root,
+    # exactly one category argument and this task's resolved category path.
+    live=service_alive(ROOT,base,'temu_union')
+    if recorded_identity()!=identity:return None
+    return live
+
+
+def union_service_step(base, cmd, health, *, children, finished, attempts, next_at,
+                       state, launch, log, terminate, now=None, existing_owner=union_existing_owner):
+    """Use an independently recovered same-task writer without launching duplicates."""
+    now=time.time() if now is None else now
+    health=health if isinstance(health,dict) else {}
+    child=children.get('temu_union')
+    identity_error=None
+    try:live=existing_owner(base,health) if child is None or child.poll() is not None else False
+    except (OSError,ValueError,TypeError,KeyError) as error:
+        live=None;identity_error=type(error).__name__
+    if live is not False:
+        if live is None:
+            return {**health,'状态':'正在核对本任务汇总进程身份，暂不启动重复进程',
+                    '阻断':True,'owner_verification_pending':True,
+                    **({'owner_verification_error_type':identity_error} if identity_error else {})}
+        prior_attempts=attempts.get('temu_union',0)
+        if child is not None:
+            # Preserve its genuine exit record and budget before considering
+            # whether the verified independent owner has actually published.
+            service_step('temu_union',cmd,children=children,finished=finished,
+                attempts=attempts,next_at=next_at,state=state,launch=lambda *args:None,log=log)
+        created=health['owner_created'];success=health.get('last_success_at')
+        success_valid=(type(success) in (int,float) and math.isfinite(success)
+                       and created<=success<=now+2 and health.get('stale') is False)
+        if success_valid:
+            attempts['temu_union']=0;finished.discard('temu_union')
+        else:
+            attempts['temu_union']=max(prior_attempts,attempts.get('temu_union',0))
+        # This row is the verified owner's real health, not the failed duplicate's
+        # retained exit. Failed/stale/missing health remains blocking.
+        adopted={**health,'PID':health['owner_pid'],'owner_created':created,
+                 'external_service':True,'launched_wall_at':created}
+        if not health.get('状态') or health.get('stale'):
+            adopted.update(阻断=True,状态='本任务现有汇总进程的健康状态待恢复',
+                建议动作='保留原快照；停止任务后继续，等待现有汇总进程安全退出。')
+        state['temu_union']=adopted
+        return adopted
+    service_step('temu_union',cmd,children=children,finished=finished,attempts=attempts,
+        next_at=next_at,state=state,launch=launch,log=log,interval=10)
+    return union_supervision(base,health,children=children,finished=finished,
+        attempts=attempts,state=state,terminate=terminate,now=now)
+
+
 def service_step(name, cmd, *, children, finished, attempts, next_at, state, launch, log, repeat=False, interval=10):
     child=children.get(name)
     if child and child.poll() is not None:
@@ -342,6 +405,77 @@ def doctor():
             'API请求数':0}
 
 
+class _VerificationDriverProtocolError(RuntimeError):
+    pass
+
+
+def _verification_tab_kind(value, query):
+    """Classify only a same-query/empty TEMU search document; never log the URL."""
+    from urllib.parse import urlsplit, parse_qs
+    if not isinstance(value,str): return None
+    try:
+        url=urlsplit(value)
+        if (url.scheme!='https' or url.hostname not in {'temu.com','www.temu.com'}
+                or url.username is not None or url.password is not None or url.port not in {None,443}
+                or url.path!='/search_result.html'): return None
+        terms=parse_qs(url.query,keep_blank_values=True).get('search_key',[''])
+        if len(terms)!=1: return None
+        if not str(terms[0]).strip(): return 'EMPTY_SEARCH'
+        if query and terms[0]==query: return 'CURRENT_QUERY'
+    except (ValueError,TypeError): pass
+    return None
+
+
+def _verification_is_temu(value):
+    from urllib.parse import urlsplit
+    if not isinstance(value,str): return False
+    try:
+        url=urlsplit(value)
+        return url.scheme in {'http','https'} and url.hostname in {'temu.com','www.temu.com'}
+    except (ValueError,TypeError): return False
+
+
+def _select_verification_window(request, query, result):
+    """Stopped manual recovery only. Select within this SID; never create/navigate/close."""
+    current_url=request('GET','/url')
+    if not isinstance(current_url,str): raise ValueError('invalid driver URL reply')
+    # A current TEMU gate or wrong query is not permission to choose another tab.
+    if _verification_is_temu(current_url):
+        result['window_selection']='CURRENT_TEMU_NOT_READY'
+        return False
+    original=request('GET','/window')
+    handles=request('GET','/window/handles')
+    if (not isinstance(original,str) or not original or not isinstance(handles,list)
+            or not 1<=len(handles)<=8 or any(not isinstance(h,str) or not 1<=len(h)<=512 for h in handles)
+            or len(set(handles))!=len(handles) or original not in handles):
+        result['window_selection']='WINDOW_SET_REJECTED'
+        return False
+    selected=original; temu=[]; candidates=[]
+    try:
+        for handle in handles:
+            if handle==original: continue
+            request('POST','/window',{'handle':handle}); selected=handle
+            value=request('GET','/url')
+            if not isinstance(value,str): raise ValueError('invalid driver URL reply')
+            if _verification_is_temu(value): temu.append(handle)
+            kind=_verification_tab_kind(value,query)
+            if kind: candidates.append((handle,kind))
+        if len(temu)==1 and len(candidates)==1:
+            target,kind=candidates[0]
+            if selected!=target: request('POST','/window',{'handle':target})
+            result.update(window_selection='SELECTED_SAME_SESSION',window_kind=kind,
+                          selected_handle_sha256=hashlib.sha256(target.encode()).hexdigest())
+            return True
+        if selected!=original: request('POST','/window',{'handle':original})
+        result['window_selection']='AMBIGUOUS_TEMU_WINDOWS' if len(temu)>1 else 'NO_MATCHING_TEMU_WINDOW'
+        return False
+    except Exception:
+        # A timed-out switch may still be queued. Never issue a compensating
+        # switch after an uncertain request; the next read must fence it first.
+        result['window_selection']='WINDOW_CHECK_FAILED'
+        raise
+
+
 def ready_after_verification(session, query=None, *, allow_empty_search=False, diagnostic=None):
     import urllib.error
     import urllib.request
@@ -363,11 +497,29 @@ def ready_after_verification(session, query=None, *, allow_empty_search=False, d
             if (emptySearch) return ['interactive','complete'].includes(document.readyState) && [...document.querySelectorAll('input[type="search"]')].some(e => visible(e) && !e.disabled && !e.readOnly);
             return [...document.querySelectorAll('[data-goods-id],a[href*="-g-"]')].some(visible);
         """,'args':[query,allow_empty_search]}
-        stage='REQUEST'
-        request=urllib.request.Request(session['webdriver_url']+'/session/'+sid+'/execute/sync',data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})
-        stage='DRIVER'
-        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=5) as r:
-            stage='RESPONSE'; value=json.load(r).get('value')
+        deadline=started+15
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        def request(method,suffix,payload=None):
+            nonlocal stage
+            remaining=deadline-time.monotonic()
+            if remaining<=0: raise TimeoutError('verification window budget exhausted')
+            stage='REQUEST'
+            req=urllib.request.Request(session['webdriver_url']+'/session/'+sid+suffix,method=method,
+                data=None if payload is None else json.dumps(payload).encode(),
+                headers={} if payload is None else {'Content-Type':'application/json'})
+            stage='DRIVER'
+            with opener.open(req,timeout=min(5,remaining)) as r:
+                stage='RESPONSE'; reply=json.load(r)
+            value=reply.get('value')
+            if isinstance(value,dict) and 'error' in value and suffix!='/execute/sync':
+                raise _VerificationDriverProtocolError('local driver protocol error')
+            return value
+        value=request('POST','/execute/sync',body)
+        # Preserve every old DOM condition. Window selection is only a fallback
+        # for a stopped manual wait whose current document is outside TEMU.
+        if value is False and allow_empty_search:
+            if _select_verification_window(request,query,result):
+                value=request('POST','/execute/sync',body)
         ready=value is True
         if isinstance(value,bool):
             result.update(ready=ready,check_ok=True,code='PAGE_READY' if ready else 'PAGE_NOT_READY')
@@ -377,6 +529,7 @@ def ready_after_verification(session, query=None, *, allow_empty_search=False, d
         ready=False
         # Never persist exception text, URLs, query terms, or session identifiers.
         if stage=='SESSION': code='SESSION_FILE_ERROR'
+        elif isinstance(exc,_VerificationDriverProtocolError): code='DRIVER_PROTOCOL_ERROR'
         elif isinstance(exc,urllib.error.HTTPError): code='DRIVER_HTTP_ERROR'
         elif isinstance(exc,(TimeoutError,socket.timeout)) or (isinstance(exc,urllib.error.URLError) and isinstance(exc.reason,(TimeoutError,socket.timeout))): code='DRIVER_TIMEOUT'
         elif isinstance(exc,(urllib.error.URLError,ConnectionError)): code='DRIVER_CONNECTION_ERROR'
@@ -954,11 +1107,11 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                             for order,pass_state in (q.get('sort_passes') or {}).items()
                             if pass_state.get('owner')==name and pass_state.get('complete')}
                         if not assigned.issubset(completed): finished.discard(name)
-                service('temu_union',py('watch_temu_union.py','--category',category_path),interval=10)
                 from watch_temu_union import watch_health
                 union_health=watch_health(base)
-                union_health=union_supervision(base,union_health,children=children,finished=finished,
-                    attempts=attempts,state=state,terminate=terminate_owned)
+                union_health=union_service_step(base,py('watch_temu_union.py','--category',category_path),union_health,
+                    children=children,finished=finished,attempts=attempts,next_at=next_at,state=state,
+                    launch=launch,log=log,terminate=terminate_owned)
                 union_age=time.monotonic()-state.get('temu_union',{}).get('started_at',time.monotonic())
                 if not union_health and union_age>90:
                     union_health={'状态':'汇总监督器无心跳，等待自动重启','阻断':True,'stale':True}

@@ -310,6 +310,21 @@ def current_report(root, category):
     return report
 
 
+def unknown_pair_evidence(category,asin,goods_id,*,result=None,scored=None,review=None):
+    """Format an accepted unknown pair; never fetch, score, persist or infer a match."""
+    if result is not None:
+        from .review_evidence import visual_evidence_text,review_explanation
+        facts=result['visual_facts']
+        detail={'state':scored['state'],'reason':review_explanation(category,facts,scored),
+                'evidence':visual_evidence_text(category,facts) or scored['reason'],
+                'model':result.get('model')}
+    else:
+        detail={'state':'无法判断（Agent看图核验）','reason':review['reason'],
+                'evidence':f"Amazon：{review['amazon_evidence']}；TEMU：{review['temu_evidence']}",
+                'model':review.get('model')}
+    return {'asin':asin,'goods_id':str(goods_id),**detail}
+
+
 def build_report(root, category, *, as_of=None):
     evidence_signature = report_signature(root,category)
     from .rules import score
@@ -395,6 +410,7 @@ def build_report(root, category, *, as_of=None):
     confirmed_pairs=defaultdict(dict)
     similar_goods=defaultdict(set)
     similar_pairs=defaultdict(dict)
+    review_pairs={}
     for pair in jsonl(frozen/f'layer12_rows_{key}.jsonl'):
         status = pair.get('pair_status'); asin = pair['asin'];bucket=None
         if status == 'STAGE1_EXCLUDED': counts[asin]['text_excluded'] += 1
@@ -410,6 +426,12 @@ def build_report(root, category, *, as_of=None):
             bucket = {'SAME':'confirmed','SIMILAR':'similar', 'DIFFERENT':'different', 'UNKNOWN':'possible'}[review['review_status']]
             counts[asin][bucket] += 1
         else: counts[asin]['pending'] += 1
+        if bucket == 'possible':
+            gid=str(pair['goods_id'])
+            api=(asin,pair['goods_id']) in results
+            review_pairs[(asin,gid)]=unknown_pair_evidence(category,asin,gid,
+                result=result_row if api else None,scored=scored if api else None,
+                review=None if api else review)
         if bucket in ('confirmed','similar'):
             gid=str(pair['goods_id'])
             target_goods=confirmed_goods if bucket=='confirmed' else similar_goods
@@ -449,6 +471,12 @@ def build_report(root, category, *, as_of=None):
     from .selection_delivery import recommendation,collected_parameters
     amazon_by_id={str(row['asin']):row for row in amazon}
     temu_by_id={str(row['goods_id']):row for row in products}
+    review_pairs={pair:row for pair,row in review_pairs.items()
+                  if str(pair[0]) in amazon_by_id and pair[1] in temu_by_id}
+    for (asin,gid),row in review_pairs.items():
+        a=amazon_by_id.get(str(asin),{});t=temu_by_id.get(gid,{})
+        row.update(amazon_title=a.get('title'),temu_title=t.get('title'),
+                   amazon_url=a.get('product_url'),temu_url=t.get('product_url'))
     for entry in entries:
         card=product_card(amazon_by_id[str(entry['asin'])],'amazon')
         entry['amazon_card']=card
@@ -460,6 +488,6 @@ def build_report(root, category, *, as_of=None):
     return {'schema_version': 1, 'category_key': key, 'category_name': category.get('category_name_zh'),
             'evidence_signature': evidence_signature,
             'as_of': (as_of or datetime.now(timezone.utc)).isoformat(), 'policy': policy,
-            'log_warnings': log_warnings,
+            'log_warnings': log_warnings, 'review_pairs':list(review_pairs.values()),
             'market_key': market_key(category), 'market': market, 'products': entries,
             'scope': '同款来自真实前端采样；上架和增长可采用极鲸云独立来源；不声称全站覆盖，增长条件严格大于阈值'}

@@ -64,12 +64,51 @@ def test_launcher_returns_while_background_descendant_holds_stdout(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows timeout cleanup regression")
-def test_timeout_is_bounded_with_live_background_descendant_and_keeps_logs(tmp_path):
+def test_timeout_is_bounded_with_live_background_descendant_and_keeps_logs(tmp_path, monkeypatch):
     command, pid_file = launcher(tmp_path, keep_parent_alive=True)
-    started = time.monotonic()
+    original_popen = subprocess.Popen
+    ready_at = []
+
+    class ReadyLauncher(original_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            if args[0] != command:
+                return
+            # subprocess.run starts its real 0.5s timeout after Popen returns.
+            # Establish the fixture's inherited live child and flushed logs first.
+            try:
+                stdout_path = Path(kwargs["stdout"].name)
+                stderr_path = Path(kwargs["stderr"].name)
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    if self.poll() is not None:
+                        raise AssertionError("Local launcher fixture exited before readiness")
+                    try:
+                        value = json.loads(stdout_path.read_text("utf-8"))
+                        owned = json.loads(pid_file.read_text("utf-8"))
+                    except (FileNotFoundError, json.JSONDecodeError):
+                        time.sleep(0.01)
+                        continue
+                    assert value["status"] == "REPLACED" and value["worker"] == 1
+                    assert value["child_pid"] == owned["pid"]
+                    if "launcher diagnostics" in stderr_path.read_text("utf-8"):
+                        assert psutil.Process(owned["pid"]).is_running()
+                        ready_at.append(time.monotonic())
+                        return
+                    time.sleep(0.01)
+                raise AssertionError("Local launcher fixture was not ready within 15 seconds")
+            except BaseException:
+                if self.poll() is None:
+                    self.kill()
+                self.wait(timeout=5)
+                raise
+
+    monkeypatch.setattr(subprocess, "Popen", ReadyLauncher)
     try:
         with pytest.raises(subprocess.TimeoutExpired) as failed:
             run_background_launcher(command, cwd=tmp_path, timeout=0.5)
+        assert len(ready_at) == 1
+        started = ready_at[0]
         assert time.monotonic() - started < 3
         value = json.loads(failed.value.stdout)
         assert psutil.Process(value["child_pid"]).is_running()

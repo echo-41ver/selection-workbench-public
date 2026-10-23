@@ -1172,6 +1172,19 @@ class Console:
                 continue
         return max(candidates,key=lambda item:(item[0], '_查看快照_' in item[1].name, item[1].name))[1] if candidates else None
 
+    @staticmethod
+    def review_source_url(value,site):
+        """Expose only public product source links, without credentials or tracking."""
+        from urllib.parse import parse_qsl,urlencode,urlunsplit
+        try:
+            parsed=urlsplit(value)
+            domain='amazon.com' if site=='amazon' else 'temu.com'
+            host=(parsed.hostname or '').lower()
+            if parsed.scheme!='https' or parsed.username or parsed.password or parsed.port not in (None,443) or not (host==domain or host.endswith('.'+domain)):return ''
+            query=urlencode([(k,v) for k,v in parse_qsl(parsed.query) if site=='temu' and k=='goods_id'])
+            return urlunsplit(('https',host,parsed.path,query,''))
+        except ValueError:return ''
+
     def visual_review(self):
         """Read a bounded sample from the latest published workbook on demand."""
         path=self.excel_workbook('layer123')
@@ -1182,19 +1195,22 @@ class Console:
         examples=[];scanned=0
         try:
             for sheet in book.worksheets:
-                if not sheet.title.startswith('全量综合结果'):continue
+                if not (sheet.title.startswith('全量综合结果') or sheet.title=='待复核依据'):continue
                 headers=next(sheet.iter_rows(min_row=4,max_row=4,values_only=True),())
                 fields={name:i for i,name in enumerate(headers)}
                 if '依据' in fields and '判断依据' not in fields:fields['判断依据']=fields['依据']
+                if 'ASIN' in fields and 'Amazon ASIN' not in fields:fields['Amazon ASIN']=fields['ASIN']
                 if not {'最终判断','判断依据','视觉证据'}<=fields.keys():continue
                 for row in sheet.iter_rows(min_row=5,values_only=True):
                     scanned+=1
                     def value(name):
                         i=fields.get(name);return str(row[i] or '') if i is not None and i<len(row) else ''
                     state=value('最终判断')
-                    if '复核' in state or '补充' in state or '失败' in state:
+                    if any(word in state for word in ('复核','补充','失败','无法判断','UNKNOWN')):
                         examples.append({'asin':value('Amazon ASIN'),'goods_id':value('TEMU商品ID'),
                             'state':state,'reason':value('判断依据')[:2000],
+                            'amazon_url':self.review_source_url(value('Amazon商品链接'),'amazon'),
+                            'temu_url':self.review_source_url(value('TEMU商品链接'),'temu'),
                             'evidence':re.sub(r'\b(SAME|DIFFERENT|SIMILAR|UNKNOWN|VARIANT)\b',lambda m:{'SAME':'一致','DIFFERENT':'明确不同','SIMILAR':'相似但未证实','UNKNOWN':'未看清/未取得','VARIANT':'允许变体'}[m[0]],value('视觉证据'))[:6000]})
                     if len(examples)>=5 or scanned>=5000:break
                 if len(examples)>=5 or scanned>=5000:break
@@ -2312,9 +2328,20 @@ class Console:
                 value=selection.read(path,{})
                 try:
                     live=selection.worker_snapshot(base,path.stem)[1]
+                    if value.get('status')=='FAILED_AFTER_3_ATTEMPTS':
+                        # A terminal owner record outranks the collector's last
+                        # saved page state. This display must not change recovery.
+                        previous=live if isinstance(live,dict) else {}
+                        live={**previous,'状态':'采集重试 3 次后失败，已停止','采集状态':value['status'],
+                              '阻断':True,'需人工介入':True,'最近采集状态':previous.get('采集状态'),
+                              '监督状态更新时间':value.get('updated_at'),'监督任务运行中':bool(owner),
+                              '建议动作':('后台监督任务仍在运行，本路已停止；既有结果和断点保留，可点击本路“重启”重试。'
+                                  if owner else '后台监督任务未运行，既有结果和断点保留；请点击“开始 / 继续采集”从断点继续。')}
+                        live.pop('浏览器保留',None)  # No current browser-liveness claim from an old snapshot.
                     value['live_snapshot']=live
                     if isinstance(live,dict):details.setdefault('阶段',{})[path.stem]=live
-                    value['status_updated_at']=live.get('采集更新时间') or path.stat().st_mtime
+                    value['status_updated_at']=((value.get('updated_at') or path.stat().st_mtime)
+                        if value.get('status')=='FAILED_AFTER_3_ATTEMPTS' else live.get('采集更新时间') or path.stat().st_mtime)
                 except Exception: pass
                 name=value.get('worker',path.stem)
                 profile=profiles.get(name,{})

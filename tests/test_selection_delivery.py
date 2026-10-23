@@ -421,3 +421,16 @@ def test_daitu_gpt_uses_task_form_native_stream_and_records_usage(monkeypatch):
     assert calls[0][1]['json']['stream'] is True and calls[0][1]['json']['store'] is False
     assert result.id=='response_fixture' and result.output_text=='{"candidates":[]}'
     assert result.usage.model_dump()['total_tokens']==3
+
+
+def test_unknown_pair_export_has_same_snapshot_evidence_without_selection_admission(tmp_path):
+    cat,report=setup(tmp_path);report['products']=report['products'][:1]
+    report['products'][0].update(confirmed_goods_ids=[],confirmed_pairs=[],match={'confirmed':0,'similar':0,'different':0,'possible':1,'pending':0,'expected':1,'state':'UNKNOWN'})
+    report['review_pairs']=[{'asin':'A1','goods_id':'1','state':'无法判断','reason':'未看清侧面','evidence':'Amazon 正面；TEMU 侧面遮挡','amazon_url':'https://www.amazon.com/dp/A1','temu_url':'https://www.temu.com/goods.html?goods_id=1','amazon_title':'Amazon fixture','temu_title':'TEMU fixture','model':'fixture-model'}]
+    result=export(tmp_path,cat,report);book=load_workbook(result['固定查看副本'],read_only=True,data_only=True)
+    assert book['选品结论'].max_row==4 and book['同款商品明细'].max_row==4
+    sheet=book['待复核依据'];values=list(sheet.values)
+    assert values[4][:5]==('A1','1','无法判断','未看清侧面','Amazon 正面；TEMU 侧面遮挡')
+    assert values[4][5:7]==('https://www.amazon.com/dp/A1','https://www.temu.com/goods.html?goods_id=1')
+    assert book['采集分析进度']['J5'].value==1
+    book.close()

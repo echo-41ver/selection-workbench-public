@@ -73,7 +73,8 @@ def test_codex_pool_requires_process_script_and_category_and_keeps_counts_separa
 
 def test_browser_separates_codex_progress_from_stopped_paid_api():
     html = (ROOT / 'web/index.html').read_text(encoding='utf-8')
-    code = html[html.index('function stage3Button(data)'):html.index('function excelButtons(data)')]
+    request_label = html[html.index('function stage3RequestLabel('):html.index('function runtimeStage3(')]
+    code = request_label + html[html.index('function stage3Button(data)'):html.index('function excelButtons(data)')]
     script = """
 const nodes=new Map();
 const $=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},value:'',replaceChildren(){},setAttribute(k,v){this[k]=v;}});return nodes.get(id);};

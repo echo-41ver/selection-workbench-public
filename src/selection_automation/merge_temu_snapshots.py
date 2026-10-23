@@ -134,6 +134,25 @@ def _file_signature(path: Path) -> tuple:
     return (str(path), value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
+def raw_count_evidence(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep recorded raw counts separate from unknown or legacy observations."""
+    counts = [row.get('raw_collected_count') for row in rows]
+    valid = [type(value) is int and value >= 0 for value in counts]
+    missing = [row for row, known in zip(rows, valid) if not known]
+    pending = sum(row.get('collection_phase') == 'BEFORE_SCROLL'
+                  and row.get('scroll_collection_started') is False
+                  and 'raw_collected_count' not in row and 'unique_goods' not in row
+                  for row in missing)
+    recorded = sum(valid)
+    basis = ('RAW_FRONTEND_CARDS' if not missing else
+             'PARTIAL_RAW_FRONTEND_CARDS' if recorded else
+             'RAW_FRONTEND_PENDING' if pending == len(missing) else
+             'LEGACY_UNIQUE' if any('unique_goods' in row for row in missing) else 'RAW_COUNT_UNKNOWN')
+    return {'raw_count_lower_bound': sum(value for value, known in zip(counts, valid) if known),
+            'raw_recorded_passes': recorded, 'raw_unrecorded_passes': len(missing),
+            'raw_pending_passes': pending, 'raw_count_complete': not missing, 'count_basis': basis}
+
+
 @lru_cache(maxsize=64)
 def _source_counts(kind: str, signatures: tuple[tuple, ...]) -> dict[str, Any]:
     """Cache only stable source files, never a legacy aggregate's labels."""
@@ -155,9 +174,9 @@ def _source_counts(kind: str, signatures: tuple[tuple, ...]) -> dict[str, Any]:
     elif kind == 'snapshots':
         result['source_rows'] = sum(len(read_jsonl(path)) for path in paths)
     elif kind == 'progress':
-        counts = [json.loads(path.read_text('utf-8')).get('raw_collected_count') for path in paths]
-        result['frontend_raw_collected_count'] = (sum(counts) if all(type(value) is int and value >= 0
-                                                                   for value in counts) else None)
+        evidence = raw_count_evidence([json.loads(path.read_text('utf-8')) for path in paths])
+        result['frontend_raw_collected_count'] = evidence['raw_count_lower_bound'] if evidence['raw_count_complete'] else None
+        result.update({'frontend_' + key: value for key, value in evidence.items()})
     elif kind == 'market':
         payload = json.loads(paths[0].read_text('utf-8'))
         result['provider_reference_status'] = payload.get('status') or 'UNKNOWN'

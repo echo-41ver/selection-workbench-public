@@ -103,7 +103,7 @@ const context = vm.createContext({
   writeSnapshot:async (status,details)=>snapshots.push({status,...details}),
   bootstrapPageState:page, scan:page, ensurePageGuards:async()=>{},
   navigateConfirmed:async()=>{reloads++;},
-  submitHomeSearch:async()=>({submitted:true}), bootstrapFromSafeTab:false,
+  submitHomeSearch:async()=>({submitted:true}), bootstrapFromSafeTab:false,recoveredPreviousSearchTab:false,
   TEMU_EMPTY_SEARCH:'https://www.temu.com/search_result.html', TEMU_EMPTY_SEARCH_URL:/^https:\/\/(?:www\.)?temu\.com\/search_result\.html(?:[?#].*)?$/i,
   products:new Map(), IDLE_REQUIRED:10, MAX_PRODUCTS:50, consecutiveNoNewRounds:0,
   clicksSinceRecovery:0, bidiStatus:'ACTIVE', trafficSavingMode:false,

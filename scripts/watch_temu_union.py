@@ -112,7 +112,8 @@ def watch_health(base, now=None):
             '建议动作':state.get('error') if failed else '',
             '连续失败次数':state.get('consecutive_failures',0),'最近成功更新时间':state.get('last_success_at'),
             'heartbeat_age_seconds':round(age,1),'unique_goods':state.get('unique_goods'),
-            'owner_pid':state.get('owner_pid'),'merge_in_progress':merging,'merge_age_seconds':round(merge_age,1),
+            'owner_pid':state.get('owner_pid'),'owner_created':state.get('owner_created'),
+            'merge_in_progress':merging,'merge_age_seconds':round(merge_age,1),
             'last_success_at':state.get('last_success_at')}
 
 

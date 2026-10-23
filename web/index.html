@@ -507,6 +507,13 @@ function stage3ActivityText(data={},now=Date.now()/1000){
  if(a.status==='receiving')return '本地模型已返回 '+Number(a.received_chars||0).toLocaleString()+' 个字符，整组结束后校验入库';
  return '';
 }
+function stage3RequestLabel(data={}){
+ const state=data.stage3_control||{},runtime=data.stage3_runtime||{},p=state.progress||{},agent=data.stage3_provider?.mode==='local_agent';
+ const inflight=agent?state.codex_review?.pool?.running_groups:p.inflight_requests;
+ if(Number.isInteger(inflight)&&inflight>0)return agent?inflight+' 组处理中':inflight+' 个请求处理中';
+ if(runtime.paused)return '已暂停派发'+(inflight===0?' · 无在途请求':' · 在途状态待确认');
+ return Number.isInteger(inflight)?(agent?'未派发新组':'未派发请求'):'在途请求状态待确认';
+}
 function runtimeStage3(data={}){
  const c=data.stage3_control||{},p=c.progress||{},r=data.stage3_runtime||{},review=c.codex_review||{},provider=data.stage3_provider||{},agentMode=(provider.mode||'local_agent')==='local_agent',selected=agentMode?(provider.agent_ids||[]):[];
  const blocks=Object.entries(r.agent_blocks||{}).filter(([id])=>selected.includes(id));
@@ -540,10 +547,11 @@ function renderRuntimeOverview(data){
  const stages=data.details?.['阶段']||data.modules||{},box=$('run-overview'),urgent=$('human-attention');
  const items=attentionItems(data);if(urgent){urgent.replaceChildren();urgent.hidden=!items.length;if(items.length){const title=document.createElement('strong');title.textContent='需要你处理 · '+items.length+' 项';urgent.append(title);for(const item of items){const p=document.createElement('p');p.textContent=item.name+'：'+item.message+'。'+item.action;urgent.append(p);}const link=document.createElement('a');link.href='#monitor';link.textContent='打开运行总览处理';urgent.append(link);}}
  if(box){box.replaceChildren();const overall=stages.temu?.overall||{};
- const collection=overall.count_basis==='LEGACY_UNIQUE'?{状态:'旧任务未记录去重前条数'}:{状态:data.collection_complete?'采集已完成':data.active?'采集中':'等待采集',...overall};
+ const missingRaw=Number.isInteger(overall.raw_unrecorded_passes)&&overall.raw_unrecorded_passes>0;
+ const collection=overall.count_basis==='LEGACY_UNIQUE'?{状态:'旧任务未记录去重前条数'}:missingRaw?{状态:`另 ${overall.raw_unrecorded_passes} 轮尚未记录条数${overall.raw_pending_passes===overall.raw_unrecorded_passes?'（恢复/初始化中）':''}`,count_lower_bound:overall.raw_recorded_passes>0?overall.raw_count_lower_bound:null}:{状态:data.collection_complete?'采集已完成':data.active?'采集中':'等待采集',...overall};
  const rows=[['Amazon 采集',stages.amazon||{}],['TEMU 采集',collection],['前端与市场合并',sourceUnion(stages.temu_union,data)]];
  if(data.scope?.execution_mode!=='collection')rows.push(['第一层 · 文字筛选',stages.stage1||{}],['第二层 · 图片筛选',stages.stage2||{}],['第三层 · 同款分析',runtimeStage3(data)]);
- for(const [name,row] of rows){const card=document.createElement('article');card.className='run-status '+statusTone({...row,状态:row['状态']||(row.remaining===0&&row.total?'当前入库范围已完成':'')});const title=document.createElement('strong');title.textContent=name;const count=document.createElement('div');count.className='run-count';count.textContent=Number.isInteger(row.completed)&&Number.isInteger(row.total)?row.completed.toLocaleString()+' / '+row.total.toLocaleString():Number.isInteger(row.unique_goods)?row.unique_goods.toLocaleString()+' 件':'—';const status=document.createElement('p');status.className='small';status.textContent=row['状态']||row.status||(row.remaining===0&&row.total?'当前入库范围已完成':'等待读取状态');card.append(title,count,status);box.append(card);}}
+ for(const [name,row] of rows){const card=document.createElement('article');card.className='run-status '+statusTone({...row,状态:row['状态']||(row.remaining===0&&row.total?'当前入库范围已完成':'')});const title=document.createElement('strong');title.textContent=name;const count=document.createElement('div');count.className='run-count';count.textContent=Number.isInteger(row.completed)&&Number.isInteger(row.total)?row.completed.toLocaleString()+' / '+row.total.toLocaleString():Number.isInteger(row.count_lower_bound)?'已记录至少 '+row.count_lower_bound.toLocaleString()+' 条':Number.isInteger(row.unique_goods)?row.unique_goods.toLocaleString()+' 件':'—';const status=document.createElement('p');status.className='small';status.textContent=row['状态']||row.status||(row.remaining===0&&row.total?'当前入库范围已完成':'等待读取状态');card.append(title,count,status);box.append(card);}}
  const exportStatus=$('export-status');if(exportStatus){const row=stages.excel||{};exportStatus.className=noticeClass(row);exportStatus.textContent='结果文件：'+(row['状态']||'等待读取')+(Number.isInteger(row.actual_count)?' · '+row.actual_count+' 份文件':'')+(row.updated_at?' · 最近更新 '+new Date(row.updated_at).toLocaleString('zh-CN'):'');}
  return items;
 }
@@ -627,7 +635,7 @@ function renderResumeLaunchFeedback(data){
 }
 $('refresh-market').addEventListener('click',()=>action('/api/refresh-market',{}));
 $('schema-retry-authorize').addEventListener('click',()=>{const panel=$('schema-retry-panel');if(!$('schema-retry-consent').checked){feedback('请先明确确认原费用未知和本次单对复验预算。',true);return;}action('/api/stage3/authorize-schema-retry',{category_key:lastStatus?.category_key,original_request_id:panel.dataset.requestId,accept_unknown_cost:true});});
-function renderSourceCounts(data){const node=$('collection-source-counts'),s=data?.collection_sources||{};node.hidden=!data?.category_key;if(node.hidden)return;const n=value=>Number.isInteger(value)?value.toLocaleString():'未记录';node.textContent=`前端累计采集 ${n(s.frontend_raw_collected_count)} 条 · 前端去重 ${n(s.frontend_unique_goods)} 件 · 本次市场补充 ${n(s.provider_supplement_goods)} 件 · 合并分析输入 ${n(s.analysis_unique_goods)} 件。市场原始参考 ${n(s.provider_reference_goods)} 件（${s.provider_reference_status==='PARTIAL'?'部分取得':s.provider_reference_status==='COMPLETE'?'已完整取得':'状态未记录'}）；来源计数不等于已完成分析数量。`;if(s.source_count_errors?.length)node.textContent+=' 部分来源证据无法读取，相关数量未记录。';}
+function renderSourceCounts(data){const node=$('collection-source-counts'),s=data?.collection_sources||{};node.hidden=!data?.category_key;if(node.hidden)return;const n=value=>Number.isInteger(value)?value.toLocaleString():'未记录';const raw=s.frontend_raw_unrecorded_passes>0&&s.frontend_raw_recorded_passes>0?`已记录至少 ${n(s.frontend_raw_count_lower_bound)} 条，另 ${s.frontend_raw_unrecorded_passes} 轮尚未记录条数${s.frontend_raw_pending_passes===s.frontend_raw_unrecorded_passes?'（恢复/初始化中）':''}`:`${n(s.frontend_raw_collected_count)} 条`;node.textContent=`前端累计采集 ${raw} · 前端去重 ${n(s.frontend_unique_goods)} 件 · 本次市场补充 ${n(s.provider_supplement_goods)} 件 · 合并分析输入 ${n(s.analysis_unique_goods)} 件。市场原始参考 ${n(s.provider_reference_goods)} 件（${s.provider_reference_status==='PARTIAL'?'部分取得':s.provider_reference_status==='COMPLETE'?'已完整取得':'状态未记录'}）；来源计数不等于已完成分析数量。`;if(s.source_count_errors?.length)node.textContent+=' 部分来源证据无法读取，相关数量未记录。';}
 
 let pendingRunNavigation=false;
 let busy=false,draftId=null,keywordReady=false,plainApplied='',plainApplied3='',applyingScope=null,lastStatus=null;
@@ -666,7 +674,7 @@ function stage3Button(data){
  let agentsBox=$('stage3-runtime-agents');if(!agentsBox){agentsBox=document.createElement('div');agentsBox.id='stage3-runtime-agents';$('stage3-phase').after(agentsBox);}agentsBox.replaceChildren();
  for(const agent of state.codex_review?.pool?.agents||[]){const row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button'),paused=(runtime.paused_agents||[]).includes(agent.id);row.className='agent-runtime-row';label.textContent=`${agent.name||agent.id} · ${Number(agent.running||0)} 组处理中${paused?' · 已暂停新组':''}`;button.type='button';button.textContent=paused?'继续此 Agent':'暂停此 Agent';button.disabled=unavailable||runtime.switch_pending;button.addEventListener('click',()=>action('/api/control-stage3',{action:paused?'resume_agent':'pause_agent',agent_id:agent.id}));row.append(label,button);agentsBox.append(row);}
  $('stop-stage3').disabled=unavailable||!state.can_stop;
- if($('stage3-current')){const provider=data?.stage3_provider||{},pool=state.codex_review?.pool||{},names={liquid_d1:'D1 API',multimodal_api:'外部 API',local_model:'本地模型',local_agent:'本机 Agent'};const engine=provider.mode==='local_agent'?(provider.agent_ids||[]).map(id=>{const agent=(pool.agents||[]).find(a=>a.id===id);return (agent?.name||id)+' / '+(provider.agent_models?.[id]||'当前默认模型');}).join('、'):provider.mode==='local_model'?localModelLabel(localModelOptions.find(model=>(model.connections||[model]).some(connection=>connection.id===provider.model))||{name:provider.model}):provider.model||'';$('stage3-current').textContent=data?.category_key?'当前方案：'+(names[provider.mode]||'等待读取')+' · '+engine+' · '+(data?.stage3_concurrency?.workers||pool.workers||provider.workers||'—')+' 路 · '+(!operationalFresh?'运行状态待确认':provider.mode==='local_agent'?(active?Number(pool.running_groups||0)+' 组处理中':'未派发新组'):active?'请求处理中':'未派发请求')+' · '+batchLabel:'';}
+ if($('stage3-current')){const provider=data?.stage3_provider||{},pool=state.codex_review?.pool||{},names={liquid_d1:'D1 API',multimodal_api:'外部 API',local_model:'本地模型',local_agent:'本机 Agent'};const engine=provider.mode==='local_agent'?(provider.agent_ids||[]).map(id=>{const agent=(pool.agents||[]).find(a=>a.id===id);return (agent?.name||id)+' / '+(provider.agent_models?.[id]||'当前默认模型');}).join('、'):provider.mode==='local_model'?localModelLabel(localModelOptions.find(model=>(model.connections||[model]).some(connection=>connection.id===provider.model))||{name:provider.model}):provider.model||'';$('stage3-current').textContent=data?.category_key?'当前方案：'+(names[provider.mode]||'等待读取')+' · '+engine+' · '+(data?.stage3_concurrency?.workers||pool.workers||provider.workers||'—')+' 路 · '+(!operationalFresh?'运行状态待确认':stage3RequestLabel(data))+' · '+batchLabel:'';}
 
  $('stage3-phase').textContent=refreshing?'最近核验快照；新增输入核对中，当前待处理尚未确认':p.counting?(p.message||state.phase||'正在核对已处理候选，请等待进度读取完成'):state.phase||'等待手动启动';
  if(data?.stage3_provider?.mode==='local_agent'&&state.codex_review?.running)$('stage3-phase').textContent=state.codex_review.pool?.phase||state.codex_review.phase||'本机 Agent 正在分析';
@@ -944,7 +952,9 @@ function renderCollectionTotal(data){
  placeCollectionWorkspace(data);
  const box=$('collection-total'),row=data.details?.['阶段']?.temu?.overall;
  if(!box)return;box.hidden=!row;if(!row)return;
+ if(row.count_basis==='LEGACY_UNIQUE'||row.raw_unrecorded_passes>0){const track=$('collection-total-track');track.removeAttribute('aria-valuenow');track.removeAttribute('aria-valuemax');}
  if(row.count_basis==='LEGACY_UNIQUE'){$('collection-total-label').textContent='旧任务未记录去重前采集条数';$('collection-total-fill').style.width='0%';$('collection-total-count').textContent='已有商品和断点保留；旧记录不能用去重数冒充采集条数。新任务按去重前条数统计。';$('collection-total-eta').textContent='';return;}
+ if(row.raw_unrecorded_passes>0){$('collection-total-label').textContent='采集条数尚未完整记录';$('collection-total-fill').style.width='0%';$('collection-total-count').textContent=(row.raw_recorded_passes>0?'已记录至少 '+row.raw_count_lower_bound.toLocaleString()+' 条':'采集条数未记录')+`，另 ${row.raw_unrecorded_passes} 轮尚未记录条数${row.raw_pending_passes===row.raw_unrecorded_passes?'（恢复/初始化中）':''}。已有商品和断点保留。`;$('collection-total-eta').textContent='条数证据尚不完整，不显示完成百分比或预计剩余时间。';return;}
  const percent=Math.max(0,Math.min(100,Number(row.percent)||0));
  $('collection-total-label').textContent=data.collection_complete?'全部采集已完成':row.all_passes_complete?'TEMU采集已完成，等待Amazon收尾':'采集总进度 '+percent.toFixed(1)+'%';
  const track=$('collection-total-track');track.setAttribute('aria-valuenow',row.completed);track.setAttribute('aria-valuemax',row.total);
@@ -1047,7 +1057,8 @@ async function loadVisualReview(){
  const line=value=>{const p=document.createElement('p');p.textContent=value;box.append(p);};line(data.message);
  if(data.available){line(data.source+' · '+data.filename+' · '+new Date(data.updated_at*1000).toLocaleString('zh-CN'));
  if(!data.examples?.length)line('当前检查范围内没有待核验记录；这不代表全部商品已经确认同款。');
- for(const row of data.examples||[]){line('Amazon '+row.asin+' / TEMU '+row.goods_id+'：'+row.state);line(row.reason||'尚无判断依据');line(row.evidence||'尚未取得视觉事实，请看判断依据。');}}
+ for(const row of data.examples||[]){line('Amazon '+row.asin+' / TEMU '+row.goods_id+'：'+row.state);line(row.reason||'尚无判断依据');line(row.evidence||'尚未取得视觉事实，请看判断依据。');
+ for(const [field,label,domain] of [['amazon_url','打开 Amazon 来源','amazon.com'],['temu_url','打开 TEMU 来源','temu.com']]){try{const url=new URL(row[field]);if(url.protocol!=='https:'||url.username||url.password||!(url.hostname===domain||url.hostname.endsWith('.'+domain)))continue;const link=document.createElement('a');link.textContent=label;link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';box.append(link);}catch{}}}}
  }catch(error){box.textContent=error.message;}
 }
 $('visual-review').addEventListener('toggle',()=>{if($('visual-review').open)loadVisualReview();});

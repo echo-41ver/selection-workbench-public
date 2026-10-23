@@ -19,7 +19,7 @@ test('next keyword reuses current results; fresh environment enters empty search
   const code=source.slice(source.indexOf('async function waitForInitialProducts()'),source.indexOf('async function prepareSalesSort()'));
   for(const existing of [true,false]) {
     const actions=[],events=[];
-    const context=vm.createContext({URL,Date,Number,Boolean,QUERY:'new keyword',ENTRY_MODE:'empty_search',bootstrapEntryPlan,bootstrapFromSafeTab:true,bidiStatus:'ACTIVE',
+    const context=vm.createContext({URL,Date,Number,Boolean,QUERY:'new keyword',ENTRY_MODE:'empty_search',bootstrapEntryPlan,bootstrapFromSafeTab:true,recoveredPreviousSearchTab:false,bidiStatus:'ACTIVE',
       TEMU_EMPTY_SEARCH:'https://www.temu.com/search_result.html',
       bootstrapPageState:async()=>({url:existing?'https://www.temu.com/search_result.html?search_key=old':'about:newtab'}),
       classify:()=>null,guardInitialProducts:async()=>({manual:false}),readLocalWarehouse:async()=>({}),

@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 from openpyxl import Workbook
+import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import web_console as web
 from selection_automation.review_evidence import visual_evidence_text,review_explanation
@@ -59,3 +60,25 @@ def test_collection_history_composite_export_tolerates_no_commercial_report(tmp_
     sheet=book['全量综合结果'];assert sheet.max_row==5
     values=list(sheet.values);column=values[3].index('最终判断')
     assert '确认同款' not in str(values[4][column]);book.close()
+
+
+def test_compact_review_reads_unknown_pairs_and_links_from_published_sheet_only(tmp_path,monkeypatch):
+    path=tmp_path/'published.xlsx';book=Workbook();sheet=book.active;sheet.title='待复核依据'
+    sheet.append([]);sheet.append([]);sheet.append([])
+    sheet.append(['Amazon ASIN','TEMU商品ID','最终判断','判断依据','视觉证据','Amazon商品链接','TEMU商品链接'])
+    sheet.append(['A1','T1','无法判断','边缘遮挡','Amazon 正面；TEMU 侧边不可见','https://www.amazon.com/dp/A1?tag=tracking','https://www.temu.com/goods.html?goods_id=T1&session=private'])
+    book.save(path);book.close();before=path.read_bytes()
+    console=web.Console(tmp_path)
+    monkeypatch.setattr(console,'excel_workbook',lambda kind:path)
+    monkeypatch.setattr(console,'invoke',lambda *a,**k:pytest.fail('no process launch'))
+    result=console.visual_review();row=result['examples'][0]
+    assert result['scanned_rows']==1 and row['asin']=='A1' and row['goods_id']=='T1'
+    assert row['state']=='无法判断' and row['reason']=='边缘遮挡'
+    assert row['amazon_url']=='https://www.amazon.com/dp/A1'
+    assert row['temu_url']=='https://www.temu.com/goods.html?goods_id=T1'
+    assert path.read_bytes()==before and not (tmp_path/'runs').exists()
+
+
+def test_review_rejects_non_product_credential_and_script_links():
+    for url in ('javascript:alert(1)','https://example.invalid/','https://user:secret@www.temu.com/goods.html','https://temu.com.evil.invalid/goods.html'):
+        assert web.Console.review_source_url(url,'temu')==''

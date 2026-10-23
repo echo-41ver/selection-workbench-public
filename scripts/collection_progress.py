@@ -6,12 +6,14 @@ import math
 import re
 import time
 from empty_results_checkpoint import confirmed_empty_checkpoint
+from selection_automation.merge_temu_snapshots import raw_count_evidence
 
 _HISTORY = {}
 DONE = {'KEYWORD_COMPLETE', 'KEYWORD_LIMIT_REACHED'}
 
 def collected_count(row):
-    return row.get('raw_collected_count',row.get('unique_goods',0))
+    value = row.get('raw_collected_count')
+    return value if type(value) is int and value >= 0 else 0
 
 
 def blocked_observation(row):
@@ -135,7 +137,8 @@ def collection_total(base, category, *, rate_snapshot=None, worker=None, observe
             row.get('stop_reason'),row.get('completion_basis'))
         done = (row.get('status') in DONE or key in completed_passes) and (goods>=target or explicit_end)
         # A completed pass without its count is not evidence of zero goods.
-        done = (done and bool(row)) or empty_done
+        done = (done and bool(row) and type(row.get('raw_collected_count')) is int
+                and row['raw_collected_count'] >= 0) or empty_done
         if done:
             finished += 1
             shortage += max(0, target - goods)
@@ -164,12 +167,17 @@ def collection_total(base, category, *, rate_snapshot=None, worker=None, observe
     blocked = min(lanes, max(len(blocked_passes), blocked_states))
     capacity = min(max(0, lanes - blocked), max(0, len(planned) - finished - len(blocked_passes)))
     speed = (rate['per_lane_per_second'] or 0) * capacity
-    basis='LEGACY_UNIQUE' if any('raw_collected_count' not in row for row in observed.values()) else 'RAW_FRONTEND_CARDS'
-    return {'completed': completed, 'total': total, 'planned_total': original, 'actual_count': actual,'count_basis':basis,
-            'remaining': remaining,
-            'all_passes_complete':finished==len(planned),
-            'percent':100 if finished==len(planned) else min(99.9,round(100 * completed / total, 1)) if total else 0,
+    # Existing independent empty-result evidence establishes zero; no unique
+    # count or status-only recovery record is converted into a raw count.
+    evidence = raw_count_evidence([{**row, 'raw_collected_count': 0}
+        if confirmed_empty_checkpoint(row, key[0]) else row for key, row in observed.items()])
+    counts_known = evidence['raw_count_complete']
+    return {'completed': completed if counts_known else None, 'completed_lower_bound': completed,
+            'total': total, 'planned_total': original, 'actual_count': actual if counts_known else None, **evidence,
+            'remaining': remaining if counts_known else None,
+            'all_passes_complete':counts_known and finished==len(planned),
+            'percent':(100 if finished==len(planned) else min(99.9,round(100 * completed / total, 1)) if total else 0) if counts_known else None,
             'keyword_count': len({q for q, _ in planned}), 'finished_passes': finished, 'total_passes': len(planned),
             'shortfall': shortage, 'empty_keyword_count': len(empty_queries), 'blocked_lanes': blocked, 'lane_count': lanes,
-            'eta_seconds': math.ceil(remaining / speed) if remaining and speed else (0 if not remaining else None),
-            'rate_per_hour': round(speed * 3600) if speed else None, **rate}
+            'eta_seconds': (math.ceil(remaining / speed) if remaining and speed else (0 if not remaining else None)) if counts_known else None,
+            'rate_per_hour': round(speed * 3600) if counts_known and speed else None, **rate}

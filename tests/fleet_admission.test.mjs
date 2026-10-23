@@ -139,3 +139,79 @@ test('malformed committed admission records fail closed',async t=>{
   }finally{await fs.rm(directory,{recursive:true,force:true});}
  });
 });
+
+
+test('actual dispatch spacing includes admission preparation while actions still overlap',{timeout:10000},async t=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'fleet-dispatch-barrier-')),stopFile=path.join(directory,'STOP');
+ let releaseHook,enteredHook,signalSecond,expire;
+ const hookEntered=new Promise(r=>enteredHook=r),hookRelease=new Promise(r=>releaseHook=r),secondStarted=new Promise(r=>signalSecond=r);
+ const expired=new Promise((_,reject)=>expire=reject);expired.catch(()=>{});
+ let first,second,running=0,max=0,watchdogFired=false,failure;const starts=[];
+ const watchdog=setTimeout(()=>{watchdogFired=true;expire(Error('Admission fixture setup/dispatch exceeded 5 seconds'));},5000);
+ try{
+  const options={directory,stopFile,spacingMs:100,pollMs:5,memory:()=>[50,100]};
+  const a=createFleetAdmission({...options,onAdmit:async()=>{enteredHook();await hookRelease;}}),b=createFleetAdmission(options);
+  first=a.run('first',async()=>{starts.push(Date.now());max=Math.max(max,++running);await secondStarted;running--;});first.catch(()=>{});
+  await Promise.race([hookEntered,expired,first.then(()=>{throw Error('First admission completed before its hook');},error=>{throw Error('First admission failed before its hook',{cause:error});})]);
+  // A real preparation barrier must still own the dispatch mutex. The old
+  // reservation-only gate had already removed it before entering this hook.
+  const mutex=JSON.parse(await fs.readFile(path.join(directory,'admission.lock'),'utf8'));assert.equal(mutex.pid,process.pid);
+  second=b.run('second',async()=>{starts.push(Date.now());max=Math.max(max,++running);signalSecond();running--;});second.catch(()=>{});
+  releaseHook();await Promise.race([Promise.all([first,second]),expired]);
+  assert.equal(watchdogFired,false);assert.equal(starts.length,2);assert.ok(starts[1]-starts[0]>=90,JSON.stringify({actual_callback_entries:starts}));
+  assert.equal(max,2);assert.equal(running,0);
+  assert.ok(!(await fs.readdir(directory)).some(name=>name.startsWith('slot-')||name.startsWith('ticket-')||name==='admission.lock'));
+  t.diagnostic(JSON.stringify({actual_callback_entries:starts,actual_spacing_ms:starts[1]-starts[0],maximum_running:max}));
+ }catch(error){failure=error;throw error;}
+ finally{
+  clearTimeout(watchdog);releaseHook();signalSecond();let settleTimer;
+  try{
+   await fs.writeFile(stopFile,'stop');
+   const outcomes=await Promise.race([Promise.allSettled([first,second].filter(Boolean)),new Promise((_,reject)=>{settleTimer=setTimeout(()=>reject(Error('Owned admission promises did not settle within 1 second after STOP')),1000);})]);
+   const unexpected=outcomes.filter(row=>row.status==='rejected'&&row.reason!==failure&&row.reason!==failure?.cause&&row.reason?.message!=='FLEET_STOP_REQUESTED').map(row=>row.reason);
+   if(unexpected.length)throw new AggregateError(unexpected,'Unexpected owned admission cleanup failures');
+   await fs.rm(directory,{recursive:true,force:true});
+  }catch(error){if(failure)throw new AggregateError([failure,error],'Admission fixture/cleanup failed');throw error;}
+  finally{clearTimeout(settleTimer);}
+ }
+});
+
+test('admission rejection and stop clean owned records before any dispatch',async t=>{
+ for(const kind of ['reject','stop'])await t.test(kind,async()=>{
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'fleet-dispatch-cancel-')),stopFile=path.join(directory,'STOP');
+  const expected=new Error('admission rejected');let hookFails=true,ran=false;
+  const gate=createFleetAdmission({directory,stopFile,spacingMs:0,pollMs:5,onAdmit:async()=>{
+   if(!hookFails)return;
+   if(kind==='reject')throw expected;
+   await fs.writeFile(stopFile,'stop');
+  }});
+  try{
+   await assert.rejects(gate.run('startup',()=>{ran=true;}),error=>kind==='reject'?error===expected:error.message==='FLEET_STOP_REQUESTED');
+   assert.equal(ran,false);assert.ok(!(await fs.readdir(directory)).some(name=>name.startsWith('slot-')||name.startsWith('ticket-')||name==='admission.lock'));
+   hookFails=false;if(kind==='stop')await fs.unlink(stopFile);
+   assert.equal(await gate.run('startup',()=>42),42);
+  }finally{await fs.rm(directory,{recursive:true,force:true});}
+ });
+});
+
+test('mutex cleanup failure retains capacity until the action settles and preserves both errors',{timeout:10000},async()=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'fleet-dispatch-cleanup-'));
+ const original=fs.unlink,cleanupError=Object.assign(new Error('mutex release failed'),{code:'EIO'}),actionError=new Error('action failed after release error');
+ let releaseAction,enteredAction,failedRelease,work,rejected,watchdogFired=false;
+ const actionEntered=new Promise(r=>enteredAction=r),actionRelease=new Promise(r=>releaseAction=r),releaseFailed=new Promise(r=>failedRelease=r);
+ let actionFinished=false;const watchdog=setTimeout(()=>{watchdogFired=true;releaseAction();},5000);
+ fs.unlink=async(file,...args)=>{if(path.basename(String(file))==='admission.lock'){failedRelease();throw cleanupError;}return original.call(fs,file,...args);};
+ try{
+  const gate=createFleetAdmission({directory,spacingMs:0,pollMs:5});
+  work=gate.run('startup',async()=>{enteredAction();await actionRelease;actionFinished=true;throw actionError;});
+  rejected=assert.rejects(work,error=>error instanceof AggregateError&&error.errors.includes(cleanupError)&&error.errors.includes(actionError));rejected.catch(()=>{});
+  await Promise.race([actionEntered,work.then(()=>{throw Error('Action completed before entry');},error=>{throw Error('Admission failed before entering its action',{cause:error});})]);
+  await Promise.race([releaseFailed,work.then(()=>{throw Error('Action completed before mutex cleanup');},error=>{throw Error('Action failed before mutex cleanup',{cause:error});})]);
+  assert.ok((await fs.readdir(directory)).some(name=>name.startsWith('slot-')));assert.equal(actionFinished,false);
+  releaseAction();await rejected;assert.equal(actionFinished,true);assert.equal(watchdogFired,false);
+  const remaining=await fs.readdir(directory);assert.ok(remaining.includes('admission.lock'));
+  assert.ok(!remaining.some(name=>name.startsWith('slot-')||name.startsWith('ticket-')));
+ }finally{
+  fs.unlink=original;releaseAction();await Promise.allSettled([work,rejected].filter(Boolean));clearTimeout(watchdog);await fs.rm(directory,{recursive:true,force:true});
+ }
+});

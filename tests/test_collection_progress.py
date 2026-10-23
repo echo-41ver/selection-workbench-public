@@ -203,3 +203,49 @@ def test_legacy_no_new_completion_cannot_shrink_target_or_show_full_completion(t
     totals=collection_total(tmp_path,{},worker='w1',rate_snapshot={})
     assert totals['total']==800 and totals['shortfall']==0 and totals['finished_passes']==0
     assert not totals['all_passes_complete']
+
+
+def test_control_only_new_query_keeps_recorded_raw_lower_bound_without_legacy_or_completion(tmp_path):
+    put(tmp_path/'temu/supervisors/assignments.json', {'lanes':['w1'], 'jobs':[
+        {'query':'clear curtain','max_products':1}, {'query':'curtain','max_products':3}]})
+    for order in ('sales','recent'):
+        snapshot(tmp_path,'clear-'+order,'clear curtain',1,'KEYWORD_LIMIT_REACHED',order)
+        p=tmp_path/f'temu/workers/w1/clear-{order}/progress.json';row=json.loads(p.read_text());row['unique_goods']=0;put(p,row)
+    p=tmp_path/'temu/workers/w1/curtain/progress.json'
+    control={'search_query':'curtain','status':'RESUMING','collection_phase':'BEFORE_SCROLL',
+             'scroll_collection_started':False,'updated_at':'2026-10-22T05:30:20Z'}
+    put(p,control);before=p.read_bytes()
+    put(tmp_path/'temu/supervisors/worker-01-new.json',{'current_query':'curtain','status':'WAITING_BROWSER_CONTROL_RECOVERY'})
+    row=collection_total(tmp_path,{},rate_snapshot={'per_lane_per_second':100})
+    assert row['count_basis']=='PARTIAL_RAW_FRONTEND_CARDS'
+    assert row['raw_count_lower_bound']==row['completed_lower_bound']==2
+    assert row['raw_recorded_passes']==2 and row['raw_unrecorded_passes']==row['raw_pending_passes']==1
+    assert row['total']==8 and row['finished_passes']==2 and row['blocked_lanes']==0
+    assert not row['raw_count_complete'] and not row['all_passes_complete']
+    assert all(row[name] is None for name in ('completed','actual_count','remaining','percent','eta_seconds','rate_per_hour'))
+    assert p.read_bytes()==before
+    # RESUMING keeps the existing automatic-wait priority. An actual blocked
+    # collector observation still blocks the lane without supplying a raw count.
+    put(p,{**control,'status':'STOPPED_BROWSER_COMMAND_TIMEOUT'})
+    blocked=collection_total(tmp_path,{},rate_snapshot={})
+    assert blocked['blocked_lanes']==1 and blocked['raw_count_lower_bound']==2
+    assert blocked['actual_count'] is None and not blocked['all_passes_complete']
+    # A genuine collector snapshot makes the total exact again, even at zero.
+    put(p,{**control,'status':'RUNNING','raw_collected_count':0,'unique_goods':0})
+    current=collection_total(tmp_path,{},rate_snapshot={})
+    assert current['count_basis']=='RAW_FRONTEND_CARDS' and current['raw_count_complete']
+    assert current['completed']==current['actual_count']==2 and current['remaining']==6
+
+
+def test_legacy_unique_never_becomes_raw_or_finished_and_control_only_is_not_legacy(tmp_path):
+    put(tmp_path/'temu/supervisors/assignments.json',{'jobs':[{'query':'curtain','max_products':1}]})
+    p=tmp_path/'temu/workers/w1/curtain/progress.json'
+    put(p,{'search_query':'curtain','status':'KEYWORD_LIMIT_REACHED','unique_goods':100})
+    row=collection_total(tmp_path,{},rate_snapshot={})
+    assert row['count_basis']=='LEGACY_UNIQUE' and row['raw_count_lower_bound']==0
+    assert row['actual_count'] is None and row['completed'] is None and not row['all_passes_complete']
+    assert row['finished_passes']==0 and row['total']==2 and row['eta_seconds'] is None
+    put(p,{'search_query':'curtain','status':'RESUMING','collection_phase':'BEFORE_SCROLL','scroll_collection_started':False})
+    row=collection_total(tmp_path,{},rate_snapshot={})
+    assert row['count_basis']=='RAW_FRONTEND_PENDING' and row['raw_pending_passes']==1
+    assert row['completed'] is None and row['percent'] is None

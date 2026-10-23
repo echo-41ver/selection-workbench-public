@@ -153,3 +153,16 @@ test('local activity shows real characters and uses its own heartbeat instead of
  assert.equal(vm.runInContext('stage3Heartbeat(data).time',context),77);
  assert.match(vm.runInContext('stage3Heartbeat(data).label',context),/采样/);
 });
+
+
+test('partial raw observations stay visible as a lower bound without a legacy or full-completion claim',()=>{
+ const {nodes,context}=setup();context.data={active:true,scope:{execution_mode:'collection'},details:{阶段:{temu:{overall:{
+  count_basis:'PARTIAL_RAW_FRONTEND_CARDS',raw_count_lower_bound:2,raw_recorded_passes:2,raw_unrecorded_passes:1,raw_pending_passes:1,
+  completed:null,total:8,percent:null,all_passes_complete:false}}}}};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ const card=nodes.get('run-overview').children[1];assert.equal(card.children[1].textContent,'已记录至少 2 条');
+ assert.match(card.children[2].textContent,/另 1 轮尚未记录条数.*恢复\/初始化中/);
+ assert.doesNotMatch(card.children[2].textContent,/旧任务|采集已完成|100%/);
+ context.data.details.阶段.temu.overall={count_basis:'LEGACY_UNIQUE',raw_count_lower_bound:0,raw_recorded_passes:0,raw_unrecorded_passes:1};
+ vm.runInContext('renderRuntimeOverview(data)',context);assert.match(nodes.get('run-overview').children[1].children[2].textContent,/旧任务未记录/);
+});

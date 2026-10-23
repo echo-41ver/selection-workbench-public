@@ -94,7 +94,7 @@ const bidiUrl = (await fs.readFile(BIDI_FILE, 'utf8').catch(() => '')).trim()
   || `ws://127.0.0.1:51105/session/${sid}`;
 
 let browserControlCleanup=null;
-const wd=createBrowserControlClient({base:WD,session:sid,onTimeout:async error=>{
+async function recordBrowserControlTimeout(error){
   // Initial driver commands run before products are loaded. Merge progress only;
   // never replace a complete product checkpoint with uninitialized maps.
   const previous=await fs.readFile(PROGRESS,'utf8').then(JSON.parse).catch(()=>({}));
@@ -119,7 +119,14 @@ const wd=createBrowserControlClient({base:WD,session:sid,onTimeout:async error=>
     finally{clearTimeout(deadline);}
   }
   process.exit(2);
-}});
+}
+const wd=createBrowserControlClient({base:WD,session:sid,onTimeout:recordBrowserControlTimeout});
+const initialWindowClient=createBrowserControlClient({base:WD,session:sid,commandTimeoutMs:5000,onTimeout:recordBrowserControlTimeout});
+const initialWindowDeadline=Date.now()+15000;
+const initialWd=async(...args)=>{
+  if(Date.now()>=initialWindowDeadline)throw Object.assign(new Error('Initial window selection budget exhausted'),{code:'WINDOW_SELECTION_DEADLINE'});
+  return initialWindowClient(...args);
+};
 async function execute(script, args = [], commandLabel = 'execute_sync') { return wd('POST', '/execute/sync', { script, args }, {commandLabel}); }
 async function atomic(file, text) {
   await atomicSnapshot(file,text);
@@ -128,36 +135,66 @@ async function appendEvent(type, data = {}) {
   await fs.appendFile(EVENTS, `${JSON.stringify({ at: now(), type, ...data })}\n`, 'utf8');
 }
 
-const handles = await readInitialWindowHandles(wd,{
+// BEGIN_INITIAL_WINDOW_SELECTION
+function strictExistingSearchUrl(value) {
+  let url;
+  try{url=new URL(String(value||''));}catch{return null;}
+  return url.protocol==='https:'&&/^(?:www\.)?temu\.com$/i.test(url.hostname)
+    &&!url.username&&!url.password&&(!url.port||url.port==='443')
+    &&url.pathname==='/search_result.html'&&url.searchParams.getAll('search_key').length<=1?url:null;
+}
+async function selectInitialWindow(handles,request,query,{maxHandles=8,onDiagnostic=async()=>{}}={}) {
+  if(!Array.isArray(handles)||handles.length<1||handles.length>maxHandles||handles.some(handle=>typeof handle!=='string'||!handle||handle.length>512)||new Set(handles).size!==handles.length) {
+    throw Object.assign(new Error('Initial window handle list invalid or exceeds limit'),{code:'WINDOW_SELECTION_HANDLES'});
+  }
+  let chosen=null,blankBootstrapHandle=null,temuBootstrapHandle=null,localBootstrapHandle=null,minimalBootstrapHandle=null;
+  let temuTabs=0;
+  const emptySearchHandles=[],previousSearchHandles=[];
+  for(const handle of handles){
+    await request('POST','/window',{handle});
+    const url=await request('GET','/url');
+    if(typeof url!=='string')throw Object.assign(new Error('Initial window URL response invalid'),{code:'WINDOW_SELECTION_RESPONSE'});
+    if(/^https:\/\/(?:www\.)?temu\.com\/search/i.test(url)&&new URL(url).searchParams.get('search_key')?.toLowerCase()===query.toLowerCase()){
+      chosen=handle;break;
+    }
+    if(/^about:(?:blank|newtab)$/i.test(url))blankBootstrapHandle=handle;
+    if(/^https:\/\/(?:www\.)?temu\.com\//i.test(url))temuBootstrapHandle=handle;
+    if(url.startsWith('http://127.0.0.1:17892/'))localBootstrapHandle=handle;
+    if(/^https:\/\/example\.com\/?/i.test(url))minimalBootstrapHandle=handle;
+    let parsed;
+    try{parsed=new URL(url);}catch{}
+    if(parsed&&/^(?:www\.)?temu\.com$/i.test(parsed.hostname)){
+      temuTabs++;
+      const search=strictExistingSearchUrl(url);
+      if(search){
+        if(!String(search.searchParams.get('search_key')||'').trim())emptySearchHandles.push(handle);
+        else previousSearchHandles.push(handle);
+      }
+    }
+  }
+  // Extra non-TEMU tabs must not turn the existing verified TEMU document into
+  // a new bootstrap. The ordinary DOM/verification guards still decide readiness.
+  const recoveredExistingTemuTab=!chosen&&handles.length>1&&temuTabs===1&&emptySearchHandles.length===1;
+  if(recoveredExistingTemuTab)chosen=emptySearchHandles[0];
+  const recoveredPreviousSearchTab=!chosen&&handles.length>1&&temuTabs===1&&previousSearchHandles.length===1;
+  if(recoveredPreviousSearchTab)chosen=previousSearchHandles[0];
+  const bootstrapFromSafeTab=!chosen&&handles.length===1&&Boolean(localBootstrapHandle||blankBootstrapHandle||minimalBootstrapHandle||temuBootstrapHandle);
+  if(bootstrapFromSafeTab)chosen=localBootstrapHandle||blankBootstrapHandle||minimalBootstrapHandle||temuBootstrapHandle;
+  await onDiagnostic({stage:'CANDIDATE_SCAN',mode:recoveredPreviousSearchTab?'PREVIOUS_SEARCH':recoveredExistingTemuTab?'EMPTY_SEARCH':bootstrapFromSafeTab?'SINGLE_TAB_BOOTSTRAP':chosen?'CURRENT_TARGET':'REJECTED',
+    handle_count:handles.length,temu_tab_count:temuTabs,empty_search_count:emptySearchHandles.length,previous_search_count:previousSearchHandles.length});
+  if(!chosen)throw Object.assign(new Error('Matching current TEMU search tab not found or recovery tab is ambiguous'),{code:'WINDOW_SELECTION_NOT_FOUND'});
+  // A scan can leave the driver on an auxiliary tab. Rebind only the selected
+  // existing handle; no navigation, new session, new tab, or close is performed.
+  await request('POST','/window',{handle:chosen});
+  return {chosen,bootstrapFromSafeTab,recoveredExistingTemuTab,recoveredPreviousSearchTab};
+}
+// END_INITIAL_WINDOW_SELECTION
+const handles = await readInitialWindowHandles(initialWd,{
   readCheckpoint:()=>fs.readFile(PROGRESS,'utf8').then(JSON.parse).catch(()=>({})),
   saveCheckpoint:row=>atomicSnapshot(PROGRESS,JSON.stringify(row,null,2)),appendEvent,now,
 });
-let chosen = null;
-let blankBootstrapHandle = null;
-let temuBootstrapHandle = null;
-let localBootstrapHandle = null;
-let minimalBootstrapHandle = null;
-for (const handle of handles) {
-  await wd('POST', '/window', { handle });
-  const url = await wd('GET', '/url');
-  if (/^https:\/\/(?:www\.)?temu\.com\/search/i.test(url) && new URL(url).searchParams.get('search_key')?.toLowerCase() === QUERY.toLowerCase()) {
-    chosen = handle; break;
-  }
-  // AdsPower/FlowerBrowser may normalize a configured about:blank startup tab
-  // to about:newtab. Both are local, network-free bootstrap pages and are safe
-  // to accept before the BiDi image interception gate is installed.
-  if (/^about:(?:blank|newtab)$/i.test(url)) blankBootstrapHandle = handle;
-  if (/^https:\/\/(?:www\.)?temu\.com\//i.test(url)) temuBootstrapHandle = handle;
-  if (url.startsWith(SAFE_BOOTSTRAP)) localBootstrapHandle = handle;
-  if (/^https:\/\/example\.com\/?/i.test(url)) minimalBootstrapHandle = handle;
-}
-const bootstrapFromSafeTab = !chosen && handles.length === 1 && Boolean(localBootstrapHandle || blankBootstrapHandle || minimalBootstrapHandle || temuBootstrapHandle);
-if (bootstrapFromSafeTab) {
-  chosen = localBootstrapHandle || blankBootstrapHandle || minimalBootstrapHandle || temuBootstrapHandle;
-  await wd('POST', '/window', { handle: chosen });
-}
-if (!chosen) throw new Error(`matching current Temu search tab for ${QUERY} not found; only one blank or Temu tab may be bootstrapped safely`);
-let currentDocumentUrl = await wd('GET', '/url');
+const {chosen,bootstrapFromSafeTab,recoveredPreviousSearchTab}=await selectInitialWindow(handles,initialWd,QUERY,{onDiagnostic:data=>appendEvent('INITIAL_WINDOW_SELECTION',data)});
+let currentDocumentUrl = await initialWd('GET', '/url');
 
 const products = new Map();
 const pendingProducts = new Map();
@@ -1695,17 +1732,31 @@ async function waitForInitialProducts() {
     resumePage = await bootstrapPageState();
   }
   await guardInitialProducts(resumePage, 'resume_current_page');
+  // A recovered previous-query document must remain the same strict search
+  // context after the ordinary verification/login/network guards. Never turn a
+  // changed auxiliary/unknown page into a bootstrap navigation.
+  if(recoveredPreviousSearchTab){
+    const search=strictExistingSearchUrl(resumePage.url);
+    if(!search||!String(search.searchParams.get('search_key')||'').trim()||classify(resumePage)){
+      await appendEvent('INITIAL_WINDOW_SELECTION',{stage:'PREVIOUS_SEARCH_GUARD',mode:'REJECTED'});
+      throw Object.assign(new Error('Recovered previous search context changed before query submission'),{code:'WINDOW_SELECTION_CONTEXT_CHANGED'});
+    }
+  }
   if (!bootstrapFromSafeTab && isPostVerificationEmptySearchSample(resumePage) && !classify(resumePage)) {
     await execute(`window.scrollTo({top:0,left:0,behavior:'instant'});return true;`);
     await appendEvent('RESTORED_EMPTY_SEARCH_RESUBMIT', {query:QUERY,same_profile:true});
     await bootstrapThroughEmptySearch({navigate:false,reason:'POST_VERIFICATION_EMPTY_SEARCH'});
   }
-  if (bootstrapFromSafeTab) {
+  if (bootstrapFromSafeTab || recoveredPreviousSearchTab) {
     const entryPlan=bootstrapEntryPlan(ENTRY_MODE,resumePage.url,QUERY);
+    if(recoveredPreviousSearchTab&&!['CURRENT_SEARCH_INPUT','CURRENT_TARGET'].includes(entryPlan))
+      throw Object.assign(new Error('Recovered previous search cannot use a navigation bootstrap'),{code:'WINDOW_SELECTION_CONTEXT_CHANGED'});
     await appendEvent('BOOTSTRAP_ENTRY_SELECTED',{requested:ENTRY_MODE,plan:entryPlan});
     if (entryPlan==='CURRENT_SEARCH_INPUT') {
       await execute(`window.scrollTo({top:0,left:0,behavior:'instant'});return true;`);
-      await appendEvent('NEXT_KEYWORD_CURRENT_SEARCH_ENTRY', {query:QUERY,previous_url:resumePage.url,navigation_performed:false});
+      await appendEvent('NEXT_KEYWORD_CURRENT_SEARCH_ENTRY', recoveredPreviousSearchTab
+        ?{stage:'PREVIOUS_SEARCH_SUBMISSION',plan:entryPlan,navigation_performed:false}
+        :{query:QUERY,previous_url:resumePage.url,navigation_performed:false});
       await bootstrapThroughEmptySearch({navigate:false,reuseSearchPage:true,reason:'NEXT_KEYWORD_CURRENT_PAGE'});
     } else if (entryPlan==='direct_search') {
       await appendEvent('DIRECT_SEARCH_BOOTSTRAP_NAVIGATION',{destination:SAFE_SOURCE});

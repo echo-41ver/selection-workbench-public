@@ -286,3 +286,26 @@ test('changed candidate input retains dated completion snapshot without claiming
   assert.doesNotMatch(get('stage3-speed').textContent,/当前候选已全部处理|剩余 0 分钟/);
  }
 });
+
+
+test('partial raw total and source line preserve the same known lower bound and unknown pass',()=>{
+ const nodes=new Map(),get=id=>{if(!nodes.has(id))nodes.set(id,{style:{},setAttribute(k,v){this[k]=String(v);},removeAttribute(k){delete this[k];}});return nodes.get(id);};
+ const context=sandbox({$:get});vm.runInContext(helperHtml.slice(helperHtml.indexOf('function renderCollectionTotal(data)'),helperHtml.indexOf('function render(data)')),context);
+ context.data={category_key:'curtain',active:true,details:{阶段:{temu:{overall:{count_basis:'PARTIAL_RAW_FRONTEND_CARDS',
+  raw_count_lower_bound:2,raw_recorded_passes:2,raw_unrecorded_passes:1,raw_pending_passes:1,completed:null,total:8,percent:null,eta_seconds:null}}}},
+  collection_sources:{frontend_raw_collected_count:null,frontend_raw_count_lower_bound:2,frontend_raw_recorded_passes:2,
+  frontend_raw_unrecorded_passes:1,frontend_raw_pending_passes:1,frontend_unique_goods:1,analysis_unique_goods:1}};
+ const track=get('collection-total-track');track.setAttribute('aria-valuenow',2);track.setAttribute('aria-valuemax',8);
+ vm.runInContext('renderCollectionTotal(data);renderSourceCounts(data)',context);
+ for(const id of ['collection-total-count','collection-source-counts']){
+  assert.match(get(id).textContent,/已记录至少 2 条，另 1 轮尚未记录条数（恢复\/初始化中）/);
+  assert.doesNotMatch(get(id).textContent,/旧任务|已采 2 \/ 8|100%/);
+ }
+ assert.equal(get('collection-total-fill').style.width,'0%');assert.match(get('collection-total-eta').textContent,/不显示完成百分比或预计/);
+ assert.equal('aria-valuenow' in track,false);assert.equal('aria-valuemax' in track,false);
+ track.setAttribute('aria-valuenow',2);track.setAttribute('aria-valuemax',8);
+ context.data.details.阶段.temu.overall={count_basis:'LEGACY_UNIQUE'};
+ vm.runInContext('renderCollectionTotal(data)',context);
+ assert.match(get('collection-total-label').textContent,/旧任务未记录/);
+ assert.equal('aria-valuenow' in track,false);assert.equal('aria-valuemax' in track,false);
+});
