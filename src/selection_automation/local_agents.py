@@ -14,6 +14,9 @@ NAMES = {'codex':'Codex CLI', 'claude':'Claude Code', 'gemini':'Gemini CLI', 'op
          'workbuddy':'WorkBuddy', 'acciowork':'AccioWork', 'doubao':'豆包'}
 _cache = {}
 _lock = threading.RLock()
+CONNECTION_PROBE_TIMEOUT_SECONDS = 120
+CONNECTION_PROBE_FINALIZE_SECONDS = 30
+CONNECTION_PROBE_CLEANUP_SECONDS = 5
 
 
 def environment():
@@ -92,6 +95,119 @@ def _run(prefix, args, root, timeout=12, text=None):
     return subprocess.run([*prefix,*args], cwd=root, env=env, input=text,
                           capture_output=True, encoding='utf-8', errors='replace', timeout=timeout,
                           creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+
+
+def _probe_answer_matches(job, expected):
+    try:
+        return (Path(job)/'vision-probe.txt').read_text(encoding='utf-8-sig').strip() == expected
+    except (OSError, UnicodeError):
+        return False
+
+
+def _probe_output(value):
+    """Bound private probe diagnostics and remove credentials, including URL queries."""
+    text = value.decode('utf-8', 'replace') if isinstance(value, bytes) else str(value or '')
+    for pattern in (
+        r'(?i)\b(?:Bearer|Basic)\s+[^\s"\'<>\\,;}\]]+',
+        r'(?i)["\']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|passwd|secret|credential|cookie|device[_-]?code|login[_-]?code|ticket|signature)["\']?\s*[:=]\s*(?:"(?:\\.|[^"\\])*(?:"|$)|\'[^\']*(?:\'|$)|[^\s,;}\]]+)',
+        r'(?i)https?://[^/\s"<>]*@',
+        r'[?&][A-Za-z0-9_.%~-]+=[^&\s"\'<>\\]*',
+        r'(?<![A-Za-z0-9_-])[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])',
+        r'[A-Za-z0-9_+/=-]{20,}',
+    ):
+        text = re.sub(pattern, '[REDACTED]', text)
+    return text[:256*1024]
+
+
+def _run_connection_probe(command, job, request, expected):
+    """Keep one probe process; a correct answer gets one bounded exit grace."""
+    import hashlib
+    from .merge_temu_snapshots import atomic_write
+    job = Path(job)
+    started = time.monotonic()
+    process = None
+    stdout = stderr = ''
+    execution = {'schema':'agent-connection-probe-execution-v1', 'started_at':time.time(),
+                 'timeout_seconds':CONNECTION_PROBE_TIMEOUT_SECONDS,
+                 'finalize_seconds':CONNECTION_PROBE_FINALIZE_SECONDS,
+                 'cleanup_seconds':CONNECTION_PROBE_CLEANUP_SECONDS,
+                 'process_control_basis':'owned_Popen_process_handle_not_PID_lookup',
+                 'pid':None, 'primary_timeout_reached':False, 'finalize_grace_used':False,
+                 'timed_out':False, 'error_kind':None, 'failure_stage':None,
+                 'terminated_by_probe':False, 'output_capture_complete':False,
+                 'cleanup_errors':[]}
+    def partial(error):
+        nonlocal stdout, stderr
+        if error.output is not None: stdout = error.output
+        if error.stderr is not None: stderr = error.stderr
+    try:
+        env = environment()
+        if any('codebuddy' in str(part).lower() for part in command):
+            env.update(workbuddy_environment(command[-1]))
+        process = subprocess.Popen(command, cwd=job, env=env, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8',
+            errors='replace', creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+        execution['pid'] = process.pid
+        try:
+            stdout, stderr = process.communicate(input=request, timeout=CONNECTION_PROBE_TIMEOUT_SECONDS)
+            execution['output_capture_complete'] = True
+        except subprocess.TimeoutExpired as error:
+            partial(error)
+            execution['primary_timeout_reached'] = True
+            if _probe_answer_matches(job, expected):
+                execution['finalize_grace_used'] = True
+                # communicate() resumes the same pipes; never send the prompt again.
+                try:
+                    stdout, stderr = process.communicate(timeout=CONNECTION_PROBE_FINALIZE_SECONDS)
+                    execution['output_capture_complete'] = True
+                except subprocess.TimeoutExpired as error:
+                    partial(error)
+                    execution.update(timed_out=True, error_kind='TimeoutExpired', failure_stage='finalize_wait')
+            else:
+                execution.update(timed_out=True, error_kind='TimeoutExpired', failure_stage='initial_wait')
+    except BaseException as error:
+        execution.update(error_kind=type(error).__name__, failure_stage='start_or_capture')
+        if not isinstance(error, (OSError, RuntimeError)):
+            raise
+    finally:
+        # Only our Popen handle is controlled. Inherited child pipes must not make
+        # timeout cleanup wait forever, even when the original process has exited.
+        if process is not None and process.poll() is None:
+            try:
+                process.kill()
+                execution['terminated_by_probe'] = True
+            except OSError as error:
+                if process.poll() is None:
+                    execution['cleanup_errors'].append(type(error).__name__)
+            try:
+                stdout, stderr = process.communicate(timeout=CONNECTION_PROBE_CLEANUP_SECONDS)
+                execution['output_capture_complete'] = True
+            except subprocess.TimeoutExpired as error:
+                partial(error)
+                execution['cleanup_errors'].append('OutputCaptureTimeout')
+            except (OSError, RuntimeError) as error:
+                execution['cleanup_errors'].append(type(error).__name__)
+            try:
+                process.wait(timeout=CONNECTION_PROBE_CLEANUP_SECONDS)
+            except subprocess.TimeoutExpired:
+                execution['cleanup_errors'].append('ProcessExitTimeout')
+            except (OSError, RuntimeError) as error:
+                execution['cleanup_errors'].append(type(error).__name__)
+        native = process.poll() if process is not None else None
+        matches = _probe_answer_matches(job, expected)
+        completed = (native == 0 and matches and not execution['timed_out']
+                     and not execution['error_kind'] and not execution['cleanup_errors'])
+        execution.update(native_exit_code=native, vision_answer_matches=matches,
+                         completed=completed, ended_at=time.time(), seconds=time.monotonic()-started)
+        for name, value in (('stdout', stdout), ('stderr', stderr)):
+            raw = value if isinstance(value, bytes) else str(value or '').encode('utf-8')
+            execution[name+'_bytes'] = len(raw)
+            execution[name+'_sha256'] = hashlib.sha256(raw).hexdigest()
+            atomic_write(job/(name+'.log'), _probe_output(value))
+        atomic_write(job/'probe-execution.json', json.dumps(execution, ensure_ascii=False, indent=2))
+    response = subprocess.CompletedProcess(command, native, stdout, stderr)
+    response.probe_execution = execution
+    return response
 
 
 def connection_receipt(root,agent_id,model=None):
@@ -288,20 +404,22 @@ def check_connection(root, agent_id,model=None):
                    f'to {answer_path} using the file write tool. Then return the digits. Do not use shell commands.')
         command = analysis_command(agent,job,effort='default')
         # Non-Codex agents use their native image-reading tool or attachment.
+        response = None
         try:
-            response = _run(command,[],job,timeout=120,text=request)
-            (job/'stdout.log').write_text(response.stdout or '',encoding='utf-8')
-            (job/'stderr.log').write_text(response.stderr or '',encoding='utf-8')
-            output = response.stdout
-            summary = job/'summary.txt'
-            if summary.exists():
-                output += summary.read_text(encoding='utf-8')
-            connected = (response.returncode==0 and answer_path.is_file()
-                         and answer_path.read_text(encoding='utf-8-sig').strip()==token)
+            response = _run_connection_probe(command,job,request,token)
+            connected = (response.returncode==0 and response.probe_execution['completed']
+                         and _probe_answer_matches(job,token))
         except (subprocess.TimeoutExpired,OSError,RuntimeError):
             connected = False
         agent.update(connected=connected,ready=connected,probe_job=str(job),
                      status='已连接，可看图分析' if connected else '连接或看图验证失败，请检查登录、模型权限与网络')
+        if not connected and response is not None:
+            execution = response.probe_execution
+            if execution['timed_out']:
+                agent['status'] = ('已读图，但等待 Agent 结束超时；本次未确认连接，请将诊断交给维护者'
+                    if execution['vision_answer_matches'] else 'Agent 看图连接验证超时，请将诊断交给维护者')
+            elif execution['native_exit_code'] not in (None,0):
+                agent['status'] = f"Agent 看图连接验证失败（退出码 {execution['native_exit_code']}），请将诊断交给维护者"
         if not connected:
             try:
                 failure=json.loads((job/'transport-error.json').read_text(encoding='utf-8'))

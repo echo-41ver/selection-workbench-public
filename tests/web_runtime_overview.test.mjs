@@ -17,11 +17,11 @@ test('collection stays above analysis until collection completes, including afte
  vm.runInContext('placeCollectionWorkspace({collection_complete:false})',context);assert.equal(order[0],box);assert.equal(box.input,'preserved');
 });
 function setup(){
- const node=()=>({children:[],append(...values){this.children.push(...values);},replaceChildren(){this.children=[];}});
- const nodes=new Map(['run-overview','human-attention','export-status','next-step'].map(id=>[id,node()]));
- const context=vm.createContext({$:id=>nodes.get(id),document:{createElement:node},
+ const node=tag=>({tag,children:[],listeners:{},append(...values){this.children.push(...values);},replaceChildren(){this.children=[];},addEventListener(type,callback){this.listeners[type]=callback;},scrollIntoView(){this.scrolled=true;}});
+ const nodes=new Map(['run-overview','human-attention','export-status','next-step','market-details'].map(id=>[id,node()])),pages=[];
+ const context=vm.createContext({$:id=>nodes.get(id),document:{createElement:node},showPage:page=>pages.push(page),
   first:(row,keys)=>keys.map(k=>row?.[k]).find(v=>v!==undefined&&v!==null&&v!==''),workerCardRow:(row)=>row});
- vm.runInContext(helpers,context);return {nodes,context};
+ vm.runInContext(helpers,context);return {nodes,context,pages};
 }
 
 test('recorded unfinished layer counts state the remaining work without claiming activity',()=>{
@@ -280,4 +280,37 @@ test('partial raw observations stay visible as a lower bound without a legacy or
  assert.doesNotMatch(card.children[2].textContent,/旧任务|采集已完成|100%/);
  context.data.details.阶段.temu.overall={count_basis:'LEGACY_UNIQUE',raw_count_lower_bound:0,raw_recorded_passes:0,raw_unrecorded_passes:1};
  vm.runInContext('renderRuntimeOverview(data)',context);assert.match(nodes.get('run-overview').children[1].children[2].textContent,/旧任务未记录/);
+});
+
+
+test('market authorization alert uses a Chinese reason and opens its existing results controls without requests',()=>{
+ const {context,nodes,pages}=setup();let calls=0;
+ context.fetch=context.action=()=>{calls++;throw Error('navigation must not request');};
+ context.data={scope:{execution_mode:'collection'},market_status:{status:'ACTION_REQUIRED',action:'AUTH_REQUIRED',jumpUrl:'https://openapi.geekbi.com/login?token=fixture-secret'}};
+ const before=JSON.stringify(context.data);vm.runInContext('renderRuntimeOverview(data)',context);
+ const p=nodes.get('human-attention').children[1],link=p.children.find(n=>n.tag==='a');
+ assert.match(p.textContent,/极鲸云需要网页登录授权/);assert.doesNotMatch(p.textContent,/AUTH_REQUIRED|ACTION_REQUIRED|fixture-secret/);
+ assert.equal(link.href,'#results');assert.match(link.textContent,/极鲸云/);
+ let prevented=false;link.listeners.click({preventDefault(){prevented=true;}});
+ assert.equal(prevented,true);assert.deepEqual(pages,['results']);assert.equal(nodes.get('market-details').open,true);assert.equal(nodes.get('market-details').scrolled,true);
+ assert.equal(calls,0);assert.equal(JSON.stringify(context.data),before);
+ assert.match(html,/<details id="market-details"[^>]*><summary>更多市场数据 · 极鲸云/);
+});
+
+test('simultaneous TEMU verification and market authorization retain separate actions',()=>{
+ const {context,nodes,pages}=setup();context.data={scope:{execution_mode:'collection'},workers:[{name:'worker-01-new',status:'WAITING_SEARCH_VERIFICATION',manual_action_required:true}],market_status:{status:'ACTION_REQUIRED',action:'AUTH_REQUIRED'}};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ const ps=nodes.get('human-attention').children.slice(1),links=ps.map(p=>p.children.find(n=>n.tag==='a'));
+ assert.equal(ps.length,2);assert.match(ps[0].textContent,/TEMU 第 1 路/);assert.match(ps[1].textContent,/市场数据/);
+ assert.equal(links[0].href,'#monitor');assert.equal(links[1].href,'#results');
+ assert.equal(links[0].listeners.click,undefined);assert.notEqual(nodes.get('market-details').open,true);
+ links[1].listeners.click({preventDefault(){}});assert.deepEqual(pages,['results']);assert.equal(nodes.get('market-details').open,true);
+});
+
+test('other market actions do not claim login and a confirmed stopped task remains free of alerts',()=>{
+ const {context,nodes}=setup();context.data={scope:{execution_mode:'collection'},market_status:{status:'ACTION_REQUIRED',action:'PAYMENT_REQUIRED',message:'fixture-private-message'}};
+ vm.runInContext('renderRuntimeOverview(data)',context);const p=nodes.get('human-attention').children[1];
+ assert.match(p.textContent,/极鲸云需要人工处理/);assert.doesNotMatch(p.textContent,/需要网页登录授权|fixture-private-message|PAYMENT_REQUIRED/);
+ assert.equal(p.children.find(n=>n.tag==='a').href,'#results');
+ context.data.task_stopped=true;vm.runInContext('renderRuntimeOverview(data)',context);assert.equal(nodes.get('human-attention').hidden,true);assert.equal(nodes.get('human-attention').children.length,0);
 });

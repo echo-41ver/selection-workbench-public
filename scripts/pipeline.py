@@ -696,8 +696,13 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                     attempt=0
                     continue
                 recovery_kind = classify_recovery_kind(status, progress, transport_recovery_allowed(progress))
+                http_recovery = (status in {'STOPPED_HTTP_403', 'STOPPED_HTTP_429', 'STOPPED_ACCESS_DENIED'}
+                    or str((progress.get('http_block') or {}).get('status') or progress.get('http_status') or '') in {'403', '429'})
+                limited_login_recovery = recovery_kind == 'LOGIN' and (
+                    status in {'STOPPED_LOGIN_REQUIRED', 'WAITING_LOGIN', 'LOGIN_REQUIRED'} or not http_recovery)
                 recovery_allowed, next_record = recovery_budget(recovery_record,
-                    int(progress.get('unique_goods') or 0), str(session.get('profile_id') or ''), recovery_kind)
+                    int(progress.get('unique_goods') or 0), str(session.get('profile_id') or ''), recovery_kind,
+                    limit=3 if limited_login_recovery else None)
                 if recovery_kind and recovery_allowed:
                     cooldown_path = output / 'session_cooldown.json'
                     prior_cooldown = json.loads(cooldown_path.read_text('utf-8')) if cooldown_path.exists() else {}
@@ -765,8 +770,11 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                         "completed_queries": completed_queries,
                         "browser_preserved": True,
                         "manual_action_required": True,
-                        "recovery_action": ("连续 3 次恢复均无新增商品，请检查该路；可点击重启重新尝试" if recovery_kind and not recovery_allowed else recovery["action"]),
+                        "recovery_action": ("当前关键词/排序连续 3 次换环境仍无新增商品，请完成登录或验证后继续采集；原断点已保留"
+                            if recovery_kind == 'LOGIN' and not recovery_allowed else recovery["action"]),
                         "recovery_budget_exhausted": bool(recovery_kind and not recovery_allowed),
+                        **({"automatic_retry": False, "automatic_resume_pending": False}
+                            if recovery_kind == 'LOGIN' and not recovery_allowed else {}),
                         "verify_to_resume": recovery["verify_to_resume"],
                     })
                     return False
