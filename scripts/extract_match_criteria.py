@@ -39,7 +39,7 @@ def repair_cached_text_fields(category,snapshot,ledger):
     return attach(deepcopy(category),preserve(catalog))
 
 
-def extract(category,snapshot,ask=model_json,receipt=None,progress=None):
+def extract(category,snapshot,ask=model_json,receipt=None,progress=None,*,retry_http400=False):
     previous=category.get('match_criteria') or {}
     catalog=start(seed(category,snapshot,previous))
     if (previous.get('source_fingerprint')==catalog['source_fingerprint'] and
@@ -80,19 +80,30 @@ def extract(category,snapshot,ask=model_json,receipt=None,progress=None):
                     'provider':category.get('rule_generation_provider'),
                     'source':catalog['source_fingerprint'],'offset':offset})
         entry=ledger['batches'].get(key,{})
+        explicit_retry=(retry_http400 and len(batch)==1 and entry.get('state')=='uncertain'
+            and entry.get('error')=='MODEL_HTTP_400' and entry.get('http400_retries',0)==0
+            and 'Failed to download image' in str(entry.get('message',''))
+            and batch[0]['url'] in str(entry.get('message','')))
         # A provider's explicit HTTP rejection is not an unknown sent request.
         # Adapt to image-count/payload limits without replaying the rejected batch.
         if entry.get('error')=='MODEL_HTTP_400' and len(batch)>1:
             middle=len(batch)//2
             pending[:0]=[(offset,batch[:middle]),(offset+middle,batch[middle:])]
             continue
-        if entry.get('state') in {'started','uncertain'}:
+        if entry.get('state') in {'started','uncertain'} and not explicit_retry:
             errors.append('上次请求结果不明');report('partial');continue
-        for attempt in range(2):
+        retry_limit=1 if explicit_retry else 2
+        for attempt in range(retry_limit):
             try:
                 if entry.get('state') in {'complete','answered'}:proposal=entry['proposal']
                 else:
-                    entry={'state':'started','request_id':uuid.uuid4().hex,'attempt':attempt+1}
+                    history=entry.get('history',[])
+                    if explicit_retry:
+                        history=[*history,deepcopy({k:v for k,v in entry.items() if k!='history'})]
+                    retry_count=entry.get('http400_retries',0)+int(explicit_retry)
+                    entry={'state':'started','request_id':uuid.uuid4().hex,'attempt':attempt+1,
+                           **({'history':history,'http400_retries':retry_count} if history else {})}
+                    explicit_retry=False
                     ledger['batches'][key]=entry
                     if receipt:selection.save(receipt,ledger)
                     proposal=ask(question,max_tokens=6000,retry_truncated=False,images=[row['url'] for row in batch])
@@ -109,8 +120,8 @@ def extract(category,snapshot,ask=model_json,receipt=None,progress=None):
                     pending[:0]=[(offset,batch[:middle]),(offset+middle,batch[middle:])]
                     break
                 retryable=(entry.get('state')=='answered' or code in {'MODEL_INVALID_JSON','MODEL_OUTPUT_TRUNCATED','MODEL_HTTP_429'})
-                entry.update(state='failed' if retryable else 'uncertain',error=code or type(error).__name__,message=str(error)[:600])
-                if attempt==0 and retryable:continue
+                entry.update(state='failed' if retryable or code=='MODEL_IMAGE_INPUT_FAILED' else 'uncertain',error=code or type(error).__name__,message=str(error)[:600])
+                if attempt+1<retry_limit and retryable:continue
                 errors.append(entry['error']);break
         report('processing')
     report('ready' if not errors and available==total_asins and images else 'partial' if completed else 'structured')
@@ -121,11 +132,12 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--category',type=Path,required=True)
     parser.add_argument('--amazon',type=Path,required=True)
+    parser.add_argument('--retry-http-400',action='store_true',help='显式继续准备时仅重试一次已确认主图下载被拒绝的批次')
     args=parser.parse_args()
     category=selection.read(args.category,{})
     snapshot=selection.read(args.amazon,{})
     if not snapshot.get('records'):raise SystemExit('Amazon 商品记录为空，尚未生成匹配条件')
     value=extract(category,snapshot,receipt=args.category.with_suffix('.criteria-request.json'),
-                  progress=lambda current:selection.save(args.category,current))
+                  progress=lambda current:selection.save(args.category,current),retry_http400=args.retry_http_400)
     selection.save(args.category,value)
     print(value['match_criteria']['message'])

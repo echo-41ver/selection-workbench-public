@@ -63,6 +63,7 @@ def model_http_error(error, key):
     if key:detail=detail.replace(key,'[密钥已隐藏]')
     detail=re.sub(r'(?i)Bearer\s+[^\s,;]+','Bearer [密钥已隐藏]',detail)
     detail=re.sub(r'sk[-_][A-Za-z0-9_-]{8,}','[密钥已隐藏]',detail)
+    detail=re.sub(r'(?i)data:image/[^;\s,]+;base64,[A-Za-z0-9+/=]*','[图片内容已隐藏]',detail)
     detail=' '.join(detail.split())[:240]
     return CategoryGenerationError(f'品类模型请求返回 HTTP {error.code}；{hint}'+
         ('；服务返回：'+detail if detail else ''),f'MODEL_HTTP_{error.code}')
@@ -145,6 +146,14 @@ def _model_json(prompt: str, *, max_tokens: int, retry_truncated: bool, images, 
         payload.update(thinking={'type': 'disabled'})
     protocol,endpoint=request_protocol(provider)
     if images:
+        from selection_automation.rule_image_input import prepare_images
+        try:
+            images,bindings=prepare_images(ROOT,images)
+        except Exception as error:
+            _evidence.image_input_failed()
+            raise CategoryGenerationError('Amazon 主图下载或校验失败，未发送模型请求；请检查图片后继续准备',
+                                          'MODEL_IMAGE_INPUT_FAILED') from error
+        _evidence.bind_images(bindings)
         payload['messages'][-1]['content']=[{'type':'text','text':prompt}]+[
             {'type':'image_url','image_url':{'url':url}} for url in images]
     if protocol=='responses':
@@ -209,6 +218,7 @@ def _model_json(prompt: str, *, max_tokens: int, retry_truncated: bool, images, 
         raise model_http_error(error,key) from None
     except ModelStreamError as error:
         detail=str(error).replace(key,'[密钥已隐藏]')
+        detail=re.sub(r'(?i)data:image/[^;\s,]+;base64,[A-Za-z0-9+/=]*','[图片内容已隐藏]',detail)
         detail=re.sub(r'(?i)Bearer\s+[^\s,;]+|sk[-_][A-Za-z0-9_-]{8,}','[密钥已隐藏]',detail)
         raise CategoryGenerationError(detail[:240],error.code) from None
     except TimeoutError:

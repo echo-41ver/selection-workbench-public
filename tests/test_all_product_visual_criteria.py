@@ -104,9 +104,17 @@ def test_model_transport_sends_all_eight_attachments_without_old_three_image_sli
     monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY')
     monkeypatch.setenv('SELECTION_RULES_BASE_URL','http://localhost:1234/v1')
     monkeypatch.setenv('SELECTION_RULES_MODEL','test')
+    from PIL import Image
+    import io,base64
+    from selection_workflow.image_transport import ImageTransport
+    from test_rule_image_delivery import image_client
+    data=io.BytesIO();Image.new('RGB',(24,24),'red').save(data,format='JPEG')
+    monkeypatch.setattr(ImageTransport,'_client',lambda *a,**k:image_client(data.getvalue(),[]))
     images=[f'https://m.media-amazon.com/{i}.jpg' for i in range(8)]
     generator.model_json('test',images=images)
-    assert [part['image_url']['url'] for part in captured[0]['messages'][-1]['content'][1:]]==images
+    attached=[part['image_url']['url'] for part in captured[0]['messages'][-1]['content'][1:]]
+    assert len(attached)==8
+    assert all(base64.b64decode(value.split(',',1)[1])==data.getvalue() for value in attached)
 
 
 def test_default_auto_mode_returns_three_classes_without_any_checkbox():

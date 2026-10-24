@@ -160,6 +160,20 @@ class RuleModelEvidence:
                 self.record['http_statuses'].append(code)
             self._save()
 
+    def bind_images(self, bindings):
+        # Only provenance and digests: never image base64, prompts or credentials.
+        self.record['image_inputs'] = bindings
+        self._save()
+        if self.storage_state != 'recorded':
+            raise RuleModelEvidenceError()
+
+    def image_input_failed(self):
+        self.record.update(request_sent=False,billing_state='NO_CHARGE',
+                           amount_state='LOCAL_INPUT_REJECTED_BEFORE_MODEL_REQUEST')
+        self._save()
+        if self.storage_state != 'recorded':
+            raise RuleModelEvidenceError()
+
     def finish(self, outcome, error_type=None):
         self.record['outcome'] = outcome if outcome in ('success', 'failed') else 'failed'
         self.record['finished_at'] = time.time()

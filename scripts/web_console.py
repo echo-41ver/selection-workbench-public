@@ -761,6 +761,7 @@ class Console:
         env={**os.environ,**environment(provider),'DEEPSEEK_API_KEY':supplied_key,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
         env['AMAZON_BROWSER_ROUTE_MODE']=body.pop('amazon_route_mode','AUTO')
         env.pop('AMAZON_CONTINUATION_RECHECK',None)
+        explicit_preparation_resume=bool(self.preparation_path)
         if self.preparation_path:env['AMAZON_CONTINUATION_RECHECK']='1'
         try:
             folder=self.root/'runtime'/'web-console'; folder.mkdir(parents=True,exist_ok=True)
@@ -792,7 +793,7 @@ class Console:
                     self.preparation_stage='visual_mismatch';self.persist_preparation()
                     raise ConsoleError('VISUAL_CHECKPOINT_MISMATCH','已保存的主图提取与当前 Amazon 商品证据不匹配；原记录保留，未自动重发付费请求')
                 extracted=self.invoke([str(self.root/'scripts/extract_match_criteria.py'),'--category',str(output),
-                    '--amazon',str(self.draft_amazon_path)],env=env,timeout=3600)
+                    '--amazon',str(self.draft_amazon_path),*(['--retry-http-400'] if explicit_preparation_resume else [])],env=env,timeout=3600)
                 category=selection.read(output,category)
                 if extracted.returncode or not self.visual_preparation_complete(category,snapshot):
                     raise ConsoleError('VISUAL_PREPARATION_INCOMPLETE','商品主图提取尚未完成；已完成批次和请求记录保留，请检查后继续准备，未知请求不会自动重复计费')
