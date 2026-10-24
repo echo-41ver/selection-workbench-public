@@ -135,6 +135,24 @@ def declarative_text_revision(category: dict) -> str:
     return digest(stable_json(payload))
 
 
+def local_category_contract(category: dict) -> str:
+    """Freeze local decisions without treating visual-provider setup as a rule edit.
+
+    The immutable batch snapshot is still used for every text evaluation. Only
+    category identity, local rules and the visual fields actually consulted by
+    the text gate participate in this running-pipeline drift guard. Provider,
+    concurrency and paid-result checkpoint changes cannot alter those decisions.
+    """
+    return digest(stable_json({
+        "category_key": category["category_key"],
+        "category_name_zh": category["category_name_zh"],
+        "stage12_output_dir": category.get("stage12_output_dir", "stage12"),
+        "stage1": category["stage1"],
+        "stage2": category["stage2"],
+        "text_revision": declarative_text_revision(category),
+    }))
+
+
 def without_volatile(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: without_volatile(v) for k, v in sorted(value.items()) if k not in VOLATILE_FIELDS}
@@ -407,9 +425,9 @@ class IncrementalStage12:
             from selection_automation import rules
             gate_file = inspect.getsourcefile(rules.text_gate)
             category_bytes = Path(self.text_gate_name.split(":", 1)[1]).read_bytes()
-            self._frozen_category_digest = digest(category_bytes)
             self._declarative_snapshot = category_bytes.decode("utf-8")
             category = _category_snapshot(self._declarative_snapshot)
+            self._frozen_category_digest = local_category_contract(category)
             self._text_gate_revision = declarative_text_revision(category)
         else:
             gate_file = inspect.getsourcefile(GATES[self.text_gate_name])
@@ -575,7 +593,8 @@ class IncrementalStage12:
         remain available; current candidate eligibility is rebuilt locally.
         """
         if self._frozen_category_digest is not None:
-            current = digest(Path(self.text_gate_name.split(":", 1)[1]).read_bytes())
+            current_category = _category_snapshot(Path(self.text_gate_name.split(":", 1)[1]).read_text("utf-8"))
+            current = local_category_contract(current_category)
             if current != self._frozen_category_digest:
                 raise ValueError("category rule content changed during this pipeline; stop and reopen before importing or processing new evidence")
         contract = stable_json({

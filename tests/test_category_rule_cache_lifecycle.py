@@ -48,6 +48,51 @@ def test_active_pipeline_refuses_rule_drift_then_reopen_uses_new_rules(tmp_path,
     finally:pipeline.close()
 
 
+@pytest.mark.parametrize('change', ['provider', 'concurrency', 'checkpoint', 'formatting'])
+def test_running_local_pipeline_keeps_contract_when_only_stage3_delivery_changes(tmp_path,change):
+    a,_=versions('provider_switch_fixture');path=tmp_path/'category.json'
+    path.write_text(json.dumps(a),encoding='utf8')
+    pipeline=IncrementalStage12(tmp_path/'stage12',vectorizer=SimpleNamespace(revision='NO_MODEL_PROVIDER_SWITCH'),
+                               text_gate_name='declarative:'+str(path))
+    try:
+        pipeline.ensure_processing_contract()
+        original=pipeline.con.execute("SELECT value FROM processing_metadata WHERE key='stage12_contract'").fetchone()[0]
+        b=deepcopy(a)
+        if change=='provider':
+            b['stage3'].update(provider={'mode':'liquid_d1','protocol':'decisions'},model='d1',base_url='https://api.liquid.ai/decisions/v1/systemone')
+        elif change=='concurrency':b['stage3']['max_concurrency']=1
+        elif change=='checkpoint':b['stage3_checkpoint_sources']=[{'model':'previous','rule_version':'kept-paid-result'}]
+        path.write_text(json.dumps(b,ensure_ascii=False,indent=2,sort_keys=True),encoding='utf8')
+        result=pipeline.ensure_processing_contract()
+        assert not result['changed']
+        assert pipeline.con.execute("SELECT value FROM processing_metadata WHERE key='stage12_contract'").fetchone()[0]==original
+    finally:pipeline.close()
+
+
+@pytest.mark.parametrize('change',['category_key','category_name','stage1','stage2','ordinary_variant'])
+def test_running_local_pipeline_still_rejects_actual_local_contract_changes(tmp_path,change):
+    a,_=versions('local_contract_fixture');path=tmp_path/'category.json'
+    path.write_text(json.dumps(a),encoding='utf8')
+    pipeline=IncrementalStage12(tmp_path/'stage12',vectorizer=SimpleNamespace(revision='NO_MODEL_LOCAL_CONTRACT'),
+                               text_gate_name='declarative:'+str(path))
+    try:
+        pipeline.ensure_processing_contract()
+        original=pipeline.con.execute("SELECT value FROM processing_metadata WHERE key='stage12_contract'").fetchone()[0]
+        b=deepcopy(a)
+        if change=='category_key':b['category_key']='another_category'
+        elif change=='category_name':b['category_name_zh']='另一品类'
+        elif change=='stage1':b['stage1']['attributes'][0]['hard_conflict']=False
+        elif change=='stage2':b['stage2']['candidate_threshold']+=1
+        else:
+            feature=next(item for item in b['stage3']['identity_policy']['features'] if item['id']=='finish')
+            feature.update(role='context',preserves=[])
+            b=compile_policy(b)
+        path.write_text(json.dumps(b),encoding='utf8')
+        with pytest.raises(ValueError,match='rule content changed'):pipeline.ensure_processing_contract()
+        assert pipeline.con.execute("SELECT value FROM processing_metadata WHERE key='stage12_contract'").fetchone()[0]==original
+    finally:pipeline.close()
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Windows path compatibility')
 def test_long_candidate_export_path_is_explained_without_replacing_previous_file(tmp_path,monkeypatch):
     import selection_workflow.incremental_stage12 as engine

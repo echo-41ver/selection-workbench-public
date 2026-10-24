@@ -365,6 +365,90 @@ def service_step(name, cmd, *, children, finished, attempts, next_at, state, lau
     if name not in children and name not in finished and time.monotonic()>=next_at.get(name,0): launch(name,cmd)
 
 
+def stage12_existing_owner(base):
+    """Return only the native, same-task watch owner with a stable identity."""
+    import psutil
+    from restart_web import native_process_active
+    config=(base/'stage12_config.json').resolve()
+    config_data=read(config,{})
+    if not isinstance(config_data,dict):return None
+    output_value=config_data.get('output_dir',base/'stage12')
+    if not isinstance(output_value,(str,Path)):return None
+    output=Path(output_value)
+    if not output.is_absolute():output=ROOT/output
+    if not output.resolve().is_relative_to(base.resolve()):return None
+    path=output/'stage12_watch_owner.json'
+    if not path.exists():return False
+    record=read(path,{})
+    if not isinstance(record,dict):return None
+    pid=record.get('pid');created=record.get('created')
+    if type(pid) is not int or pid<=0 or type(created) not in (int,float) or not math.isfinite(created) or created<=0:return None
+    if not isinstance(record.get('config'),str) or Path(record['config']).resolve()!=config:return False
+    try:
+        process=psutil.Process(pid)
+        if not native_process_active(pid) or abs(process.create_time()-created)>=.01:return False
+        args=process.cmdline();script=(ROOT/'scripts/run_incremental_stage12.py').resolve()
+        indexes=[i for i,arg in enumerate(args) if arg.endswith(script.name) and (ROOT/arg).resolve()==script]
+        if (len(indexes)!=1 or indexes[0]+1>=len(args) or args[indexes[0]+1]!='watch'
+                or args.count('--config')!=1 or '--no-process' in args):return False
+        flag=args.index('--config')
+        if flag+1>=len(args) or (ROOT/args[flag+1]).resolve()!=config:return False
+        current=read(path,{})
+        if not isinstance(current,dict):return None
+        if (current.get('pid'),current.get('created'),current.get('config'))!=(pid,created,record['config']):return None
+        return record
+    except psutil.AccessDenied:return None
+    except psutil.NoSuchProcess:return False
+
+
+def stage12_service_step(base, cmd, *, children, finished, attempts, next_at, state,
+                         launch, log, existing_owner=stage12_existing_owner):
+    """Do not exhaust supervisor retries on a verified recovered writer's lock."""
+    name='stage12';child=children.get(name)
+    if child is not None and child.poll() is None:
+        service_step(name,cmd,children=children,finished=finished,attempts=attempts,
+            next_at=next_at,state=state,launch=launch,log=log)
+        return state.get(name,{})
+    identity_error=None
+    try:owner=existing_owner(base)
+    except (OSError,ValueError,TypeError,KeyError) as error:
+        owner=None;identity_error=type(error).__name__
+    prior=state.get(name,{})
+    previous_exit=prior.get('previous_exit')
+    if child is not None:
+        previous_exit={'pid':child.pid,'returncode':child.returncode,'utc_epoch':time.time()}
+        with (log/'stage12_lifecycle.jsonl').open('a',encoding='utf-8') as stream:
+            stream.write(json.dumps({'event':'PROCESS_EXIT_OBSERVED',**previous_exit})+'\n')
+    elif '退出码' in prior:
+        previous_exit={'returncode':prior['退出码']}
+    if owner is not False:
+        prior_attempts=attempts.get(name,0)
+        if child is not None:
+            service_step(name,cmd,children=children,finished=finished,attempts=attempts,
+                next_at=next_at,state=state,launch=lambda *args:None,log=log)
+            # A live process alone cannot reset a genuine prior failure budget.
+            attempts[name]=max(prior_attempts,attempts.get(name,0))
+        if owner is None:
+            row={**state.get(name,{}),'状态':'正在核对本任务第一二层进程身份，暂不启动重复进程',
+                 '阻断':True,'owner_verification_pending':True,
+                 **({'owner_verification_error_type':identity_error} if identity_error else {})}
+        else:
+            row={'状态':'运行中，沿用本任务已恢复的第一二层后台程序','阻断':False,
+                 'PID':owner['pid'],'owner_created':owner['created'],'external_service':True}
+        if previous_exit is not None:row['previous_exit']=previous_exit
+        state[name]=row
+        return row
+    if prior.get('external_service'):
+        state[name]={'状态':'本任务已恢复的第一二层后台程序已退出，等待有界恢复'}
+        if previous_exit is not None:state[name]['previous_exit']=previous_exit
+    service_step(name,cmd,children=children,finished=finished,attempts=attempts,
+        next_at=next_at,state=state,launch=launch,log=log)
+    if name not in children and name in finished and attempts.get(name,0)>=3:
+        state[name]={**state.get(name,{}),'状态':'第一二层后台程序已退出，自动恢复预算已用尽',
+                     '阻断':True,'recovery_exhausted':True}
+    return state.get(name,{})
+
+
 def prepare(category_path, amazon_count=None, per_keyword=None):
     cat=load_category(category_path, compile_authored_policy=True)
     if amazon_count is not None: cat['amazon']['target_count']=amazon_count
@@ -1120,7 +1204,10 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                 if not union_health and union_age>90:
                     union_health={'状态':'汇总监督器无心跳，等待自动重启','阻断':True,'stale':True}
                 state['temu_union']={**state.get('temu_union',{}),**union_health}
-                if not only_collection: service('stage12',py('run_incremental_stage12.py','watch','--config',cfg),interval=10)
+                if not only_collection:
+                    stage12_service_step(base,py('run_incremental_stage12.py','watch','--config',cfg),
+                        children=children,finished=finished,attempts=attempts,next_at=next_at,
+                        state=state,launch=launch,log=log)
                 candidates=output/f'layer3_candidates_{cat["category_key"]}.jsonl'
                 stage3_marker=read(base/'stage123'/'paid_enabled.json',{})
                 stage3_authorized=not only_collection and (base/'stage123'/'paid_enabled.json').exists() and not (base/'stage123/STOP').exists()
