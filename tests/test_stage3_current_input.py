@@ -244,4 +244,75 @@ def test_standalone_cli_still_rechecks_its_current_published_revision(tmp_path):
     with pytest.raises(CurrentInputUnavailable): gate.allows([row])
 
 
+def stable_metadata(gate, paths, monkeypatch):
+    """Reproduce equal-size writes inside one filesystem timestamp interval."""
+    signatures = {Path(path): gate._signature(path) for path in paths}
+    monkeypatch.setattr(gate, '_signature', lambda path: signatures[Path(path)])
+    return signatures
+
+
+def test_standalone_same_metadata_cannot_authorize_old_revision(tmp_path, monkeypatch):
+    from selection_automation.stage3_current_input import CurrentInputGuard
+    path = tmp_path / 'candidate.jsonl'
+    row = {'asin': 'A', 'goods_id': 'T', 'pair_revision': 'old'}
+    write(path, [row])
+    gate = CurrentInputGuard(tmp_path, path, root=tmp_path)
+    signature = stable_metadata(gate, [path], monkeypatch)[path]
+    assert gate.allows([row])
+    write(path, [{**row, 'pair_revision': 'new'}])
+    assert path.stat().st_size == signature[2]
+    assert not gate.allows([row])
+
+
+@pytest.mark.parametrize('change', ['facts', 'invalid_json', 'config'])
+def test_managed_same_metadata_rechecks_authoritative_sources_and_config(task, monkeypatch, change):
+    from selection_automation.stage3_current_input import CurrentInputUnavailable
+    gate = guard(task)
+    config_path = task.base / 'stage12_config.json'
+    signatures = stable_metadata(gate, [task.candidate, config_path, task.amazon, task.temu], monkeypatch)
+    assert gate.allows([task.pairs[0]])
+    if change == 'facts':
+        task.raw_t[0]['title'] = 'changed'
+        write(task.temu, task.raw_t)
+        assert task.temu.stat().st_size == signatures[task.temu][2]
+        assert not gate.allows([task.pairs[0]])
+    else:
+        if change == 'invalid_json':
+            size = task.temu.stat().st_size
+            task.temu.write_text('{invalid' + ' ' * (size - len('{invalid')), encoding='utf-8')
+            assert task.temu.stat().st_size == signatures[task.temu][2]
+        else:
+            task.config['paths'][0]['temu_source'] = 'a'
+            config_path.write_text(json.dumps(task.config), encoding='utf-8')
+            assert config_path.stat().st_size == signatures[config_path][2]
+        with pytest.raises(CurrentInputUnavailable):
+            gate.allows([task.pairs[0]])
+    assert task.calls == []
+
+
+def test_same_metadata_change_during_multifile_check_fails_closed(task, monkeypatch):
+    from selection_automation.stage3_current_input import CurrentInputUnavailable
+    gate = guard(task)
+    signatures = stable_metadata(gate, [task.candidate, task.base / 'stage12_config.json',
+                                      task.amazon, task.temu], monkeypatch)
+    assert gate.allows([task.pairs[0]])
+    original = gate._source_version
+    changed = False
+
+    def source_version(source, product_id):
+        nonlocal changed
+        if not changed:
+            rows = [dict(row) for row in task.pairs]
+            rows[0]['pair_revision'] = 'q0'
+            write(task.candidate, rows)
+            assert task.candidate.stat().st_size == signatures[task.candidate][2]
+            changed = True
+        return original(source, product_id)
+
+    monkeypatch.setattr(gate, '_source_version', source_version)
+    with pytest.raises(CurrentInputUnavailable):
+        gate.allows([task.pairs[0]])
+    assert changed and task.calls == []
+
+
 pytestmark = pytest.mark.usefixtures('offline_api_transport')

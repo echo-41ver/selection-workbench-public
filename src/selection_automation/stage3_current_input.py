@@ -1,4 +1,5 @@
 """Read-only dispatch admission against current published inputs, not frozen iterators."""
+import hashlib
 import json
 from pathlib import Path
 import threading
@@ -26,17 +27,32 @@ class CurrentInputGuard:
         info = path.stat()
         return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
-    def _read(self, path, kind, build):
+    def _version(self, path):
         signature = self._signature(path)
-        self._checked[path] = signature
-        prior = self._cache.get((path, kind))
-        if prior is not None and prior[0] == signature:
-            return prior[1]
-        data = path.read_text(encoding='utf-8-sig')
-        value = build(data)
+        with path.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').digest()
         if self._signature(path) != signature:
             raise CurrentInputUnavailable()
-        self._cache[(path, kind)] = signature, value
+        return signature, digest
+
+    def _read(self, path, kind, build):
+        signature = self._signature(path)
+        data = path.read_bytes()
+        if self._signature(path) != signature:
+            raise CurrentInputUnavailable()
+        # Equal-size writes can share every stat field on Windows. The cache
+        # only avoids parsing/normalization; actual bytes authorize dispatch.
+        version = signature, hashlib.sha256(data).digest()
+        if path in self._checked and self._checked[path] != version:
+            raise CurrentInputUnavailable()
+        self._checked[path] = version
+        prior = self._cache.get((path, kind))
+        if prior is not None and prior[0] == version:
+            return prior[1]
+        value = build(data.decode('utf-8-sig'))
+        if self._signature(path) != signature:
+            raise CurrentInputUnavailable()
+        self._cache[(path, kind)] = version, value
         return value
 
     @staticmethod
@@ -117,7 +133,7 @@ class CurrentInputGuard:
                                 allowed = False
                 # Atomic producer replacements during this multi-file check
                 # cannot silently authorize a mixture of input generations.
-                if any(self._signature(path) != signature for path, signature in self._checked.items()):
+                if any(self._version(path) != version for path, version in self._checked.items()):
                     raise CurrentInputUnavailable()
                 if not allowed:
                     self.skipped += 1
