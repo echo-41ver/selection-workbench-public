@@ -556,17 +556,18 @@ def export_snapshot(category_path, kind):
                 image_sources[row[f'{side}_image_url']] = row[f'{side}_image_path']
         try: expected[(row['asin'],row['goods_id'])]=set(compatible_vision_keys(cat,row,context=vision_context))
         except OSError: pass
+    from selection_automation.codex_visual_review import preferred_api_result
     results={}; failures={}; log_warnings=[]
     for row in jsonl(base/'stage123'/'results.jsonl', allow_incomplete_tail=True, warnings=log_warnings):
         identity=(row.get('asin'),row.get('goods_id'))
         if row.get('vision_revision_key') in expected.get(identity,set()):
-            if row.get('api_status')=='success': results[identity]=row
+            if row.get('api_status')=='success': results[identity]=preferred_api_result(cat,results.get(identity),row)
             elif row.get('api_status')=='failed': failures[identity]=row
     modules=cat['stage3']['modules']; labels=cat['stage3'].get('module_labels',{})
     from selection_automation.codex_visual_review import load_reviews, checked_facts, supersedes_api
     codex_reviews = load_reviews(base, expected)
     for pair, review in codex_reviews.items():
-        if pair in results and supersedes_api(cat, review):
+        if pair in results and supersedes_api(cat, review, results[pair]):
             results.pop(pair)
     codex_reviews = {pair: row for pair, row in codex_reviews.items() if pair not in results}
     codex_scores = {}

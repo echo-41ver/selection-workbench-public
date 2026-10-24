@@ -1,4 +1,5 @@
 import {createCategoryRelevance} from './category_relevance.mjs';
+process.stdin.setEncoding('utf8');
 let input='';for await(const chunk of process.stdin)input+=chunk;
 const {category,rows}=JSON.parse(input);const policy=createCategoryRelevance(category);
 const result={accepted:[],excluded:[],unclassified:[],version:policy.version,fingerprint:policy.fingerprint};

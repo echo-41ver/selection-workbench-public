@@ -1394,10 +1394,8 @@ class Console:
             raise ConsoleError('EXCEL_UPDATE_FAILED', 'Excel 更新失败，旧文件已保留；请查看任务发布状态', 500)
 
     def open_excel(self,kind):
+        self.refresh_excel(kind)
         path=self.excel_workbook(kind)
-        if not path:
-            self.refresh_excel(kind)
-            path=self.excel_workbook(kind)
         if not path: raise ConsoleError('EXCEL_NOT_READY','当前任务的这份 Excel 尚未生成',404)
         require_excel_open_association()
         # WPS can launch another process for a path already locked by its first
@@ -1881,14 +1879,23 @@ class Console:
                 from selection_automation.stage3_runtime import resume_dispatch
                 (base/'stage123/STOP').unlink(missing_ok=True)
                 resume_dispatch(base/'stage123',provider['agent_ids'] if provider['mode']=='local_agent' else ())
+                selection.save(base/'stage123/paid_enabled.json',{'category_key':key,'enabled_at':time.time(),
+                    'source':'web-console','controller':'independent','provider':provider['mode']})
+                if provider['mode']=='local_agent' and pool_config:
+                    selection.save(base/'stage123/codex_pool_config.json',{**pool_config,'enabled':True})
                 return {'ok':True,'phase':'第三层已继续，沿用已保存断点','provider':provider}
             if self.stage3_busy and self.stage3_key==key and not running and not provider_changed:
                 return {'ok':True,'phase':'第三层启动中'}
             progress=self.stage3_snapshot(key)
             if not configure_only and (progress.get('counting') or progress.get('refreshing') or type(progress.get('total')) is not int):
                 raise ConsoleError('PROGRESS_NOT_READY','正在核对已处理候选，请等待进度读取完成后再启动',409)
-            if not configure_only and not provider_changed and not active and progress.get('total',0)>0 and progress.get('pending_after_codex',progress.get('pending'))==0:
+            pending=progress.get('pending_after_codex',progress.get('pending'))
+            if provider['mode']=='local_agent':pending=progress.get('agent_pending_after_codex',pending)
+            if not configure_only and (not provider_changed or provider['mode']=='local_agent') and not active and progress.get('total',0)>0 and pending==0:
                 raise ConsoleError('NO_PENDING_CANDIDATES','当前第三层候选已全部处理，无需重复启动付费分析',409)
+            if not configure_only and provider['mode']=='local_agent' and (progress.get('billing_hold_fail_closed') or
+                    (pending and progress.get('agent_runnable_pending',pending)==0)):
+                raise ConsoleError('BILLING_REVIEW_REQUIRED','当前候选的费用或复验授权尚待核对，未派发新的 Agent 分析；原结果已保留',409)
             supplied=body.get('api_key')
             if supplied is not None and (not isinstance(supplied,str) or not supplied.strip() or len(supplied)>4096 or any(ord(c)<32 for c in supplied)):
                 raise ConsoleError('INVALID_INPUT','API key无效')
@@ -2036,12 +2043,12 @@ class Console:
                 check_stage3_local_service(provider,self.root)
                 if provider!=from_category(selection.read(folder.parent/'category.json',{})):
                     return self.start_stage3({'provider':provider})
+                from selection_automation.stage3_progress import controller_alive
+                if ((folder/'STOP').exists() or
+                        not controller_alive(self.root/'runs'/key) and not codex_review_control(self.root/'runs'/key).get('running')):
+                    return self.start_stage3({})
                 value=resume_dispatch(folder,provider['agent_ids'] if provider['mode']=='local_agent' else ())
             else:value=update_control(folder,paused=True,switch_error=None)
-            if action=='resume':
-                from selection_automation.stage3_progress import controller_alive
-                if not controller_alive(self.root/'runs'/key) and not codex_review_control(self.root/'runs'/key).get('running'):
-                    return self.start_stage3({})
         return {'ok':True,'control':value,'message':'已暂停派发新组；已发送结果会继续保存' if action.startswith('pause') else '已继续，保留原有断点'}
 
     def _run_stage3(self,key,category_path,candidates,api_key):
@@ -2591,10 +2598,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ConsoleError('NOT_FOUND','历史任务不存在',404)
             if self.path.startswith('/api/excel/'):
                 kind=self.path.removeprefix('/api/excel/')
+                self.server.console.refresh_excel(kind)
                 path=self.server.console.excel_workbook(kind)
-                if not path:
-                    self.server.console.refresh_excel(kind)
-                    path=self.server.console.excel_workbook(kind)
                 return self.send_workbook(path)
             pages = {'/': 'index.html', '/index.html': 'index.html', '/accuracy-benchmark': 'accuracy_benchmark.html'}
             if self.path not in pages: raise ConsoleError('NOT_FOUND','不存在',404)

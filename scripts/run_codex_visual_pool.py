@@ -331,18 +331,44 @@ def _strict_attempt(record):
     return record
 
 
-def import_job(category, task, job):
-    compact=job/'compact-response.json'
-    if compact.is_file() and not (job/'reviews.jsonl').is_file():
-        from selection_automation.native_agent_transport import write_response
-        if not write_response(job,compact.read_text('utf-8')):
-            return 0,['精简看图结果尚未形成有效双边事实']
+def import_job(category, task, job, *, recover_saved=False):
     expected = list(read_jsonl(job / 'manifest.jsonl'))
     bound = {key(row): row for row in expected}
+    preserved = set()
+    if recover_saved:
+        # A saved reply is reusable only for its original, still-current task
+        # and images. A product/revision match alone cannot bind changed files.
+        info = read(job / 'job.json', {})
+        contract = read(job / 'analysis-contract.json', {})
+        if (not bound or len(bound) != len(expected)
+                or info.get('task_id') != task['task_id']
+                or contract.get('task_id') != task['task_id']
+                or not (job / 'image-inputs.json').is_file()
+                or {tuple(value) for value in info.get('identities', [])} != set(bound)):
+            raise ValueError('saved response task or manifest binding changed')
+        current = {}
+        for member in task.get('members', [task]):
+            assigned = {tuple(value) for value in member.get('assigned_identities', [])} or {key(row) for row in member['rows']}
+            current.update({key(row): row for row in member['rows'] if key(row) in assigned})
+            pending = {key(row) for row in pending_rows(category, member)}
+            preserved.update(assigned - pending)
+        if not set(bound) <= current.keys():
+            raise ValueError('saved response is absent from the current task revision')
+        for identity in bound:
+            check_original_binding(job, current[identity])
+        save(job / 'saved-response-recovery.json', {
+            'preserved_existing_identities': [list(value) for value in sorted(preserved & bound.keys())],
+            'original_images_checked': True})
+    compact=job/'compact-response.json'
+    review_path=job/'reviews.jsonl'
+    if compact.is_file() and (not review_path.is_file() or not review_path.read_text('utf-8').strip()):
+        from selection_automation.native_agent_transport import write_response
+        if not write_response(job,compact.read_text('utf-8')):
+            error=read(job/'native-response-error.json',{}).get('error','精简看图结果尚未形成有效双边事实')
+            return 0,[error]
     good, errors, validation_errors = {}, [], []
     identity_error=False;seen=set()
     job_info=read(job/'job.json',{})
-    review_path=job/'reviews.jsonl'
     source=review_path.read_text(encoding='utf-8') if review_path.exists() else ''
     for line, raw_line in enumerate(source.splitlines(),1):
         if not raw_line.strip():continue
@@ -390,12 +416,12 @@ def import_job(category, task, job):
         # Import valid candidates now so only invalid candidates are requeued.
         for member in task.get('members',[task]):
             assigned={tuple(value) for value in member.get('assigned_identities',[])} or {key(row) for row in member['rows']}
-            values=[row for identity,row in good.items() if identity in assigned]
+            values=[row for identity,row in good.items() if identity in assigned and identity not in preserved]
             if values:import_reviews(category,member['rows'],values,member['output'],member['task_id'])
     if good:
         for member in task.get('members',[task]):
             assigned={tuple(value) for value in member.get('assigned_identities',[])} or {key(row) for row in member['rows']}
-            values={identity:row for identity,row in good.items() if identity in assigned}
+            values={identity:row for identity,row in good.items() if identity in assigned and identity not in preserved}
             if not values:continue
             raw=Path(member['raw_reviews']);prior={key(row):row for row in read_jsonl(raw,allow_incomplete_tail=True)}
             prior.update(values);save_rows(raw,list(prior.values()))
@@ -496,12 +522,25 @@ class Pool:
         self.last_prepare = 0
         self.completed_groups = 0
         self.started_at=time.time();self.window_started=time.monotonic();self.sample_success=0;self.sample_failed=0;self.tuner=None;self.tuning_key=None
-        # Adopt owned subprocesses after a supervisor restart instead of duplicating them.
+        # Adopt owned subprocesses and the latest saved retry reply before any
+        # new dispatch. Keep the original job, PID, attempt and model ledger.
+        saved = []
+        adopted = set()
         for path in sorted((self.folder / 'jobs').glob('*/job.json')):
             row = read(path, {})
             self.completed_groups += row.get('state') == 'complete'
+            if row.get('state') == 'complete':
+                adopted.add(row.get('digest'))
             if row.get('state') == 'running':
                 self.jobs[path.parent.name] = row
+                adopted.add(row.get('digest'))
+            elif row.get('state') == 'retry' and (path.parent/'compact-response.json').is_file():
+                saved.append((row.get('started_at', 0), path, row))
+        for _, path, row in sorted(saved, key=lambda item: (item[0], item[1].name), reverse=True):
+            if row.get('digest') in adopted:
+                continue
+            adopted.add(row.get('digest'))
+            self.jobs[path.parent.name] = {**row, 'recover_saved_response': True}
 
     def recover_native_reader(self,job):
         """Recover an unresponsive observer in place; never submit a model turn."""
@@ -628,6 +667,12 @@ class Pool:
             cli = command(codex_executable(self.config),job,model,effort)
         if native_pending:cli+=['--observe-only']
         command_marker = str(job/'summary.txt') if agent_id=='codex' else str(job/'contacts/contact-001.jpg') if agent_id=='opencode' else str(job)
+        from selection_automation.stage3_runtime import dispatch_allowed
+        if stage3_stop_requested(self.base) or not self.config.get('enabled',True) or not dispatch_allowed(self.base/'stage123',agent_id):
+            raise RuntimeError('已停止或暂停第三层派发，保留已有结果和断点')
+        billing_blocks=agent_billing_blocks(self.base)
+        if any((row['asin'],row['goods_id']) in billing_blocks for row in rows):
+            raise RuntimeError('候选费用或复验授权待核对，未启动新的 Agent 请求')
         with (job / 'events.jsonl').open('ab') as stdout, (job / 'stderr.log').open('ab') as stderr:
             child = subprocess.Popen(cli,
                 cwd=job, env=env, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
@@ -669,7 +714,13 @@ class Pool:
                 if not task or not job_reviews_ready(self.category, job) or not stop_owned_job(job):
                     continue
             try:
-                count, errors = import_job(self.category, task, Path(job['folder'])) if task else (0, ['task missing'])
+                if job.get('recover_saved_response'):
+                    contract=read(Path(job['folder'])/'analysis-contract.json',{})
+                    if Path(contract.get('category','')).resolve() != self.category_path:
+                        raise ValueError('saved response category binding changed')
+                    count, errors = import_job(self.category, task, Path(job['folder']), recover_saved=True) if task else (0, ['task missing'])
+                else:
+                    count, errors = import_job(self.category, task, Path(job['folder'])) if task else (0, ['task missing'])
             except OSError as exc:
                 # The reply is already saved. Retry this import in place, never
                 # launch or charge another model turn for a Windows file lock.
@@ -681,6 +732,12 @@ class Pool:
                 count, errors = 0, [str(exc)]
             state = {**job, 'state':'complete' if count == len(job['identities']) else 'retry',
                      'imported':count, 'errors':errors, 'finished_at':time.time()}
+            if job.get('recover_saved_response'):
+                state['finished_at']=job.get('finished_at',state['finished_at'])
+                state['recovered_at']=time.time()
+                if state['state']=='retry':
+                    state['hold_reason']='SAVED_RESPONSE_INVALID'
+                    errors.append('已保存的响应未通过当前任务或原图校验，保留原件且不重新调用模型')
             native=read(Path(job['folder'])/'native-session.json',{})
             transport=read(Path(job['folder'])/'transport-error.json',{})
             if native and native.get('state')!='complete' and job.get('observation_only') and state['state']=='retry':
@@ -738,12 +795,20 @@ class Pool:
         pending_keys={task_id:{key(row) for row in rows} for task_id,rows in candidates.items()}
         completed={key(row) for task_id,task in current.items() for row in task['rows'] if key(row) not in pending_keys[task_id]}
         source_by_key={};all_available=[]
+        try:billing_blocks=agent_billing_blocks(self.base)
+        except (OSError,ValueError,KeyError,TypeError,RuntimeError) as exc:
+            billing_blocks=None
+            self.errors.append(str(exc))
+        billing_held=0
         for task in current.values():
             rows = candidates[task['task_id']]
             if task['task_id'] in owners and owner_active(owners[task['task_id']]):
                 external_pending += len(rows)
                 continue
             available = [row for row in rows if key(row) not in active and key(row) not in seen and key(row) not in completed]
+            allowed=[row for row in available if billing_blocks is not None and (row['asin'],row['goods_id']) not in billing_blocks]
+            billing_held+=len(available)-len(allowed)
+            available=allowed
             seen.update(key(row) for row in available)
             for row in available:source_by_key[key(row)]=task
             all_available.extend(available)
@@ -784,6 +849,7 @@ class Pool:
         for group in same_amazon_groups([row for row in all_available if key(row) not in reserved],group_size):
             waiting.append((grouped_task(group),group))
         workers = int(self.config.get('workers', 6))
+        if billing_blocks is None:workers=0
         from selection_automation.stage3_runtime import read_control
         control=read_control(self.base/'stage123')
         paused=control.get('paused_agents',[])
@@ -866,7 +932,7 @@ class Pool:
                          '等待已有任务或冷却后自动补齐，结果保留' if waiting or external_pending else
                          '当前候选已分析，持续检测新增候选并汇总Excel'),
                 'running':len(self.jobs), 'pending':sum(len(rows) for _, rows in waiting)-newly_dispatched,
-                'external_pending':external_pending, 'held_pending':held_pending,'paused':bool(control.get('paused')),'paused_agents':paused,'retry_exhausted':retry_exhausted,
+                'external_pending':external_pending, 'held_pending':held_pending,'billing_held_pending':billing_held,'paused':bool(control.get('paused')),'paused_agents':paused,'retry_exhausted':retry_exhausted,
                 'workers':workers, 'group_size':int(self.config.get('group_size',12)),
                 'model':self.config.get('model','gpt-6.1-sol'), 'effort':self.config.get('effort','medium'),
                 'agents':[{'id':a['id'],'name':a['name'],'effort':self.config.get('agent_efforts',{}).get(a['id'],self.config.get('effort','medium')),'paused':a['id'] in paused,'running':sum(j.get('agent_id','codex')==a['id'] for j in self.jobs.values())} for a in self.config.get('agent_backends',[])],
@@ -876,6 +942,37 @@ class Pool:
                 'automatic_observation_restarts':sum(j.get('automatic_observation_restarts',0) for j in self.jobs.values()),
                 'action_required':bool(blocked_messages),'agent_blocks':blocks,
                 'updated_at':time.time()}
+
+
+def agent_billing_blocks(base):
+    """Read existing fee isolation; Agent dispatch never consumes API retry grants."""
+    from selection_automation.stage3_billing import billing_hold,retry_authorizations
+    folder=Path(base)/'stage123'
+    hold=billing_hold(folder/'request_intents.jsonl',folder/'results.jsonl')
+    if hold['fail_closed']:raise RuntimeError('费用记录无法对应，Agent 派发已暂停；原结果保留')
+    authorization=retry_authorizations(folder/'request_intents.jsonl',folder/'results.jsonl')
+    if authorization.get('schema_retry'):
+        raise RuntimeError('单对 API 复验授权不可转作 Agent 队列，未派发新的请求')
+    return hold['pairs'] | authorization['success_pairs'] | set(authorization['by_pair'])
+
+
+def stage3_stop_requested(base):
+    """Only a later explicit independent authorization can cross an old task Stop."""
+    import math
+    base=Path(base)
+    try:
+        (base/'stage123/STOP').stat()
+        return True
+    except FileNotFoundError:pass
+    except OSError:return True
+    try:stopped_at=(base/'STOP').stat().st_mtime
+    except FileNotFoundError:return False
+    except OSError:return True
+    marker=read(base/'stage123/paid_enabled.json',{})
+    if not isinstance(marker,dict):return True
+    enabled_at=marker.get('enabled_at')
+    return not (marker.get('category_key')==base.name and marker.get('controller')=='independent'
+        and type(enabled_at) in (int,float) and math.isfinite(enabled_at) and enabled_at>stopped_at)
 
 
 def ensure_pool(category_path, root=ROOT):
@@ -915,10 +1012,11 @@ def watch(category_path, interval=5):
         pool = Pool(category_path, read(category_path.parent / 'stage123/codex_pool_config.json', {}))
         while True:
             config = read(category_path.parent / 'stage123/codex_pool_config.json', {})
-            if (not config.get('enabled') or (category_path.parent / 'STOP').exists()) and not pool.jobs:
+            stopped=stage3_stop_requested(category_path.parent)
+            if (not config.get('enabled') or stopped) and not pool.jobs:
                 save(folder / 'pool.json', {**identity, 'phase':'已停止，结果保留', 'running':0, 'updated_at':time.time()})
                 return
-            if (category_path.parent/'STOP').exists():config={**config,'workers':0}
+            if stopped:config={**config,'workers':0}
             pool.config = config
             try:
                 state = pool.tick()

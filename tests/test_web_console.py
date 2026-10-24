@@ -782,7 +782,7 @@ def test_four_excel_buttons_use_current_run_and_newest_view(tmp_path,monkeypatch
     assert all(not row['available'] for row in console.status()['excel_files'].values())
 
 
-def test_finished_run_excel_button_opens_published_file_without_refresh(tmp_path,monkeypatch):
+def test_finished_run_excel_button_checks_publication_before_opening_existing_file(tmp_path,monkeypatch):
     monkeypatch.setattr(web,'require_excel_open_association',lambda:None)
     console=web.Console(tmp_path);console.key='drill_run'
     monkeypatch.setattr(console,'owner',lambda:None)
@@ -799,8 +799,8 @@ def test_finished_run_excel_button_opens_published_file_without_refresh(tmp_path
     monkeypatch.setattr(web.subprocess,'run',publish)
     opened=[];monkeypatch.setattr(web.os,'startfile',lambda path:opened.append(path),raising=False)
     assert console.open_excel('amazon')['ok']
-    assert Path(opened[0])!=old and Path(opened[0]).read_bytes()==old.read_bytes()
-    assert not called
+    assert Path(opened[0])!=old and Path(opened[0]).read_bytes()==latest.read_bytes()==b'new'
+    assert len(called)==1
 
 
 def test_excel_http_download_and_open_only_allow_current_task(tmp_path,monkeypatch):
@@ -841,7 +841,7 @@ def test_cancel_generation_terminates_owned_child(tmp_path,monkeypatch):
     assert exc.value.code=='CANCELLED' and stopped==[child]
 
 
-def test_layer123_download_does_not_rebuild_published_workbook(tmp_path,monkeypatch):
+def test_layer123_download_checks_publication_without_rewriting_current_workbook(tmp_path,monkeypatch):
     console=web.Console(tmp_path);console.key='drill_run'
     monkeypatch.setattr(console,'owner',lambda:None)
     base=tmp_path/'runs/drill_run';excel=base/'excel';excel.mkdir(parents=True)
@@ -849,9 +849,8 @@ def test_layer123_download_does_not_rebuild_published_workbook(tmp_path,monkeypa
     (base/'stage123').mkdir()
     (base/'stage123/paid_enabled.json').write_text('{}')
     source=excel/'电钻_第一二三层.xlsx';source.write_bytes(b'published-color-workbook')
-    def reject_rebuild(kind):
-        raise AssertionError('Published download must not rebuild Excel')
-    monkeypatch.setattr(console,'refresh_excel',reject_rebuild)
+    checks=[]
+    monkeypatch.setattr(console,'refresh_excel',lambda kind:checks.append(kind))
     server=web.ThreadingHTTPServer(('127.0.0.1',0),web.Handler);server.console=console
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
@@ -859,6 +858,7 @@ def test_layer123_download_does_not_rebuild_published_workbook(tmp_path,monkeypa
         client.request('GET','/api/excel/layer123');response=client.getresponse()
         assert response.status==200 and response.read()==source.read_bytes()
         assert 'spreadsheetml' in response.getheader('Content-Type')
+        assert checks==['layer123']
         client.close()
     finally:
         server.shutdown();server.server_close();thread.join()

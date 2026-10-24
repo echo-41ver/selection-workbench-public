@@ -398,14 +398,14 @@ def build_report(root, category, *, as_of=None):
     from .jsonl_records import read_jsonl
     log_warnings = []
     results = {}
+    from .codex_visual_review import load_reviews, supersedes_api, preferred_api_result
     for row in read_jsonl(base/'stage123/results.jsonl', allow_incomplete_tail=True, warnings=log_warnings):
         identity = (row.get('asin'), row.get('goods_id'))
         if row.get('api_status') == 'success' and row.get('vision_revision_key') in candidates.get(identity, set()):
-            results[identity] = row
-    from .codex_visual_review import load_reviews, supersedes_api
+            results[identity] = preferred_api_result(category, results.get(identity), row)
     reviews = load_reviews(base, candidates, category=category)
     for pair, review in reviews.items():
-        if pair in results and supersedes_api(category, review):
+        if pair in results and supersedes_api(category, review, results[pair]):
             results.pop(pair)
     counts = defaultdict(Counter)
     confirmed_goods=defaultdict(set)

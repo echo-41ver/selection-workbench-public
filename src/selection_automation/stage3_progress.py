@@ -268,12 +268,17 @@ def historical_group_duration(base, model, batch_size):
     return result
 
 
+def _qualified_api_facts(category, row):
+    from .codex_visual_review import qualified_api_facts
+    return qualified_api_facts(category, row)
+
+
 def snapshot(base, category, *, history=True, on_phase=None):
     base = Path(base)
     def phase(name,**counts):
         if on_phase:on_phase(name,counts)
     phase('读取已保存的Codex复核')
-    from .codex_visual_review import load_reviews, supersedes_api
+    from .codex_visual_review import load_reviews, supersedes_api, preferred_api_result
     codex_reviews = load_reviews(base, by_revision=True, category=category)
     review_pairs = {identity[:2] for identity in codex_reviews}
     codex_counts = {'SAME':0,'SIMILAR':0,'DIFFERENT':0,'UNKNOWN':0}
@@ -281,7 +286,8 @@ def snapshot(base, category, *, history=True, on_phase=None):
     phase('读取已保存的API结果')
     for row in records(base/'stage123/results.jsonl'):
         identity = row.get('vision_revision_key') or row.get('pair_revision')
-        if identity and cached.get(identity, {}).get('api_status') != 'success': cached[identity] = row
+        if identity:
+            cached[identity] = preferred_api_result(category, cached.get(identity), row)
     completed_pairs = {(row.get('asin'),row.get('goods_id')) for row in cached.values()}
     total = success = failed = retained = source_candidates = 0
     waiting_groups = {}
@@ -294,7 +300,10 @@ def snapshot(base, category, *, history=True, on_phase=None):
     stage = category.get('stage3',{})
     batch_size = max(1,min(12,stage.get('batch_size',12)))
     from .stage3_provider import from_category
-    if from_category(category)['mode']=='liquid_d1':batch_size=1
+    provider=from_category(category)
+    agent_mode=provider['mode']=='local_agent'
+    if provider['mode']=='liquid_d1':batch_size=1
+    agent_fact_pending=agent_fact_runnable=api_authorized_runnable=0
     parallel = concurrency(stage)
     seen = set()
     phase('读取当前候选文件')
@@ -321,10 +330,22 @@ def snapshot(base, category, *, history=True, on_phase=None):
             except (OSError, KeyError, ValueError, TypeError): pass
         priors = [cached.get(k,{}) for k in keys]
         review = next((codex_reviews[(*pair,key)] for key in keys if (*pair,key) in codex_reviews),None)
-        if review and supersedes_api(category, review):
+        api_priors = [p for p in priors if p.get('api_status') == 'success']
+        if review and (supersedes_api(category, review)
+                or api_priors and all(supersedes_api(category, review, p) for p in api_priors)):
             codex_counts[review['review_status']] += 1
             continue
-        if any(p.get('api_status') == 'success' for p in priors):
+        api_success=any(p.get('api_status') == 'success' for p in priors)
+        qualified=any(_qualified_api_facts(category,p) for p in priors)
+        needs_agent_facts=api_success and not qualified and review is None
+        if needs_agent_facts:
+            agent_fact_pending+=1
+            if (not is_held and pair not in authorization['success_pairs'] and
+                    pair not in authorization['by_pair'] and not authorization.get('schema_retry')):
+                agent_fact_runnable+=1
+        # An explicit Agent review requires the same complete facts as its batch
+        # preparer. Decision-only API success stays saved and complete for API use.
+        if api_success and (not agent_mode or qualified):
             success += 1
             continue
         if review:
@@ -335,6 +356,11 @@ def snapshot(base, category, *, history=True, on_phase=None):
         if pair in authorization['success_pairs']:
             pending_blocked += 1; retry_consumed += 1
             continue
+        # A one-shot authorization for the original API cannot be consumed by
+        # the independent Agent retry loop or expanded to its other candidates.
+        if agent_mode and pair in authorization['by_pair']:
+            pending_blocked += 1
+            continue
         if is_held:
             pending_blocked += 1
             continue
@@ -343,10 +369,12 @@ def snapshot(base, category, *, history=True, on_phase=None):
             continue
         group = (row['asin'],row.get('amazon_image_path'))
         waiting_groups[group] = waiting_groups.get(group,0)+1
+        if agent_mode and needs_agent_facts:continue
         if (row['asin'],row['goods_id']) not in completed_pairs: continue
         if pair in authorization['by_pair']:
             if authorized_retry_attempt(authorization,pair,keys) is None:
                 failed += 1; waiting_groups[group] -= 1
+            else:api_authorized_runnable+=1
         elif max((int(p.get('attempt') or 0) for p in priors),default=0) >= 2:
             failed += 1; waiting_groups[group] -= 1
     completed = success + sum(codex_counts.values())
@@ -373,6 +401,9 @@ def snapshot(base, category, *, history=True, on_phase=None):
             'codex_completed':sum(codex_counts.values()),'codex_same':codex_counts['SAME'],'codex_similar':codex_counts['SIMILAR'],
             'codex_different':codex_counts['DIFFERENT'],'codex_unknown':codex_counts['UNKNOWN'],
             'pending_after_codex':pending,
+            'agent_pending_after_codex':pending if agent_mode else pending+agent_fact_pending,
+            'agent_runnable_pending':(0 if held['fail_closed'] or authorization.get('schema_retry') else
+                runnable if agent_mode else runnable-api_authorized_runnable+agent_fact_runnable),
             'source_candidates':source_candidates,'retained_for_review':retained,
             'admission_threshold':threshold(category),
             'pending':pending,'percent':round((completed+failed)*100/total,1) if total else 0,

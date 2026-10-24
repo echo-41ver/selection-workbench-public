@@ -53,7 +53,8 @@ def review_paths(base):
 
 
 def usable_review(category, row):
-    if category.get('visual_decision') != 'visible_core_binary_v1':
+    if (category.get('visual_decision') != 'visible_core_binary_v1'
+            and not category.get('stage3', {}).get('codex_require_module_facts')):
         return True
     try:
         score(category, checked_facts(category, row['visual_facts'], row['goods_id']))
@@ -142,9 +143,32 @@ def checked_facts(category, facts, goods_id):
     return decode(category, {'candidates': [candidate]}, [goods_id])[goods_id]
 
 
-def supersedes_api(category, review):
-    """Only an explicitly authorized, complete image recheck replaces API output."""
-    if review.get('supersedes_api') is not True:
+def qualified_api_facts(category, row):
+    if row.get('api_status') != 'success' or not isinstance(row.get('visual_facts'), dict):
+        return False
+    try:
+        checked_facts(category, row['visual_facts'], row['goods_id'])
+    except (OSError, KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
+def preferred_api_result(category, prior, row):
+    """Keep complete current facts when another compatible API record is decision-only."""
+    if prior and prior.get('api_status') == 'success' and (
+            row.get('api_status') != 'success'
+            or qualified_api_facts(category, prior) and not qualified_api_facts(category, row)):
+        return prior
+    return row
+
+
+def supersedes_api(category, review, api_result=None):
+    """Honor explicit rechecks; complete facts may also fill an inconclusive decision-only result.
+
+    Callers first restrict both sources to the current pair/image revision. No
+    API result or billing record is rewritten, and a complete API keeps priority.
+    """
+    if review.get('supersedes_api') is not True and api_result is None:
         return False
     strict = deepcopy(category)
     strict['stage3']['codex_require_module_facts'] = True
@@ -152,7 +176,22 @@ def supersedes_api(category, review):
         checked_facts(strict, review['visual_facts'], review['goods_id'])
     except (KeyError, TypeError, ValueError):
         return False
-    return True
+    if review.get('supersedes_api') is True:
+        return True
+    if (not api_result or api_result.get('api_status') != 'success'
+            or not all(review.get(k) and review.get(k) == api_result.get(k) for k in ('asin', 'goods_id'))
+            or not isinstance(api_result.get('visual_facts'), dict)
+            or 'decision_api' not in api_result['visual_facts']
+            or qualified_api_facts(strict, api_result)):
+        return False
+    try:
+        bound = {k: review[k] for k in ('asin', 'goods_id', 'vision_revision_key',
+                                       'amazon_image_path', 'temu_image_path')}
+        normalized = normalize_review(strict, review, bound, review['task_id'])
+        return (normalized['review_status'] == review['review_status']
+                and score(category, api_result['visual_facts'])['state'] == '待补充证据')
+    except (OSError, KeyError, TypeError, ValueError):
+        return False
 
 
 def normalize_review(category, row, pair, task_id):
