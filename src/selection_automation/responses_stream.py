@@ -1,7 +1,7 @@
 """Native Responses SSE: only completed output may become category rules."""
-import json
 import time
 from .model_stream import ModelStreamError
+from .model_parse_diagnostic import parse_json, read_response_json
 
 
 def _text(response):
@@ -31,7 +31,7 @@ def _metadata(response):
 
 def read_responses(response,notify=lambda **fields:None,*,started=None,max_seconds=600):
     if 'text/event-stream' not in (getattr(response,'headers',{}) or {}).get('Content-Type','').lower():
-        packet=json.load(response);notify(**_metadata(packet));return _result(packet)
+        packet=read_response_json(response);notify(**_metadata(packet));return _result(packet)
     started=time.monotonic() if started is None else started
     lines=[];events=0;characters=0;received=0;last_update=0;metadata={}
     while True:
@@ -48,7 +48,7 @@ def read_responses(response,notify=lambda **fields:None,*,started=None,max_secon
             if not lines:continue
             data='\n'.join(lines);lines=[]
             if data=='[DONE]':break
-            packet=json.loads(data)
+            packet=parse_json(data,'stream_packet_json')
             if not isinstance(packet,dict):raise ModelStreamError('模型流式响应结构无效','MODEL_STREAM_INVALID')
             events+=1;kind=packet.get('type','');record=packet.get('response') or {}
             if isinstance(record,dict):metadata.update(_metadata(record))

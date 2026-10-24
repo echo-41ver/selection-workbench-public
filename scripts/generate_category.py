@@ -127,6 +127,8 @@ def model_json(prompt: str, *, max_tokens: int = 8000, retry_truncated: bool = T
 def _model_json(prompt: str, *, max_tokens: int, retry_truncated: bool, images, _evidence) -> dict:
     from selection_automation.rule_provider import settings,request_protocol,authoring_output_budget
     from selection_automation.model_stream import read_chat_completion,ModelStreamError
+    from selection_automation.model_parse_diagnostic import (ModelParseFailure,
+        response_choice, rule_object, save_parse_diagnostic)
     try:
         provider = settings(os.getenv('SELECTION_RULES_BASE_URL', ''), os.getenv('SELECTION_RULES_MODEL', ''))
     except ValueError as error:
@@ -187,14 +189,21 @@ def _model_json(prompt: str, *, max_tokens: int, retry_truncated: bool, images, 
         if MODEL_PROGRESS_REPORTER:
             try:MODEL_PROGRESS_REPORTER(model_waiting=False,message='模型回答已接收，正在检查完整规则')
             except OSError:pass
-        if result.get('choices', [{}])[0].get('finish_reason') == 'length':
+        choice = response_choice(result)
+        if choice.get('finish_reason') == 'length':
             raise CategoryGenerationError(f'品类模型达到本次 {max_tokens} token 输出上限，规则未完整生成；不会自动重发计费请求', 'MODEL_OUTPUT_TRUNCATED')
-        value = json.loads(result['choices'][0]['message']['content'])
-        if not isinstance(value, dict):
-            raise ValueError()
-        return value
+        return rule_object(choice)
     except CategoryGenerationError:
         raise
+    except ModelParseFailure as error:
+        message = '品类模型返回无效 JSON 或缺少结构字段；未创建任务'
+        try:
+            diagnostic_id = save_parse_diagnostic(ROOT, error, _evidence.record, secret=key, protocol=protocol)
+        except (OSError, ValueError):
+            message += '；诊断保存失败，请检查程序目录权限或磁盘后再重试'
+        else:
+            message += '；失败详情已记录，诊断编号：' + diagnostic_id
+        raise CategoryGenerationError(message, 'MODEL_INVALID_JSON') from None
     except urllib.error.HTTPError as error:
         _evidence.http_status(error.code)
         raise model_http_error(error,key) from None

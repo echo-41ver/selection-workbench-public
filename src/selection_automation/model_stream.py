@@ -1,7 +1,7 @@
 """Read standard Chat Completions SSE without exposing reasoning or partial rules."""
-import json
 import time
 from .rule_model_evidence import provider_metadata
+from .model_parse_diagnostic import parse_json, read_response_json
 
 
 class ModelStreamError(RuntimeError):
@@ -12,7 +12,7 @@ class ModelStreamError(RuntimeError):
 
 def read_chat_completion(response,notify=lambda **fields:None,*,started=None,max_seconds=600):
     if 'text/event-stream' not in (getattr(response,'headers',{}) or {}).get('Content-Type','').lower():
-        packet = json.load(response)
+        packet = read_response_json(response)
         notify(**provider_metadata(packet))
         return packet
     started=time.monotonic() if started is None else started
@@ -32,7 +32,7 @@ def read_chat_completion(response,notify=lambda **fields:None,*,started=None,max
             if not lines:continue
             data='\n'.join(lines);lines=[]
             if data=='[DONE]':done=True;break
-            packet=json.loads(data)
+            packet=parse_json(data,'stream_packet_json',finish_reason=finish)
             if not isinstance(packet,dict):
                 raise ModelStreamError('模型流式响应结构无效，未发布规则','MODEL_STREAM_INVALID')
             observed = provider_metadata(packet)
