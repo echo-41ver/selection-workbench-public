@@ -2289,7 +2289,16 @@ class Console:
                     self.phase='准备已停止，已生成规则和 Amazon 断点已保留，可继续准备'
                     self.generation_error={'code':'PREPARATION_STOPPED','message':self.phase}
                     self.persist_preparation()
-                else:self.clear_workspace()
+                else:
+                    # A CLI with an earlier live_owner result can overwrite the
+                    # supervisor's terminal status with "stopping". Only after
+                    # every existing ownership gate above closes may history be
+                    # finalized; preserve all stage evidence and task files.
+                    if base is not None and (base/'STOP').is_file():
+                        details=selection.read(base/'status.json',{})
+                        if details.get('状态') in ('停止中','运行中','启动中'):
+                            selection.save(base/'status.json',{**details,'状态':'已停止'})
+                    self.clear_workspace()
             else:
                 elapsed=time.monotonic()-(getattr(self,'workspace_stop_started',None) or time.monotonic())
                 self.phase=('停止中：等待独立后台程序退出，当前任务和断点保留' if elapsed<30 else

@@ -12,6 +12,8 @@ import sqlite3
 from statistics import median
 from urllib.parse import urlsplit
 
+from .snapshot_io import open_snapshot_text
+
 DEFAULTS = {
     'same_operator': 'lte',
     'same_limit': 20, 'new_days': 90, 'growth_min_percent': 20.0,
@@ -48,7 +50,7 @@ def read_json(path, default=None):
 
 def jsonl(path):
     if path.exists():
-        with path.open(encoding='utf-8') as stream:
+        with open_snapshot_text(path, encoding='utf-8') as stream:
             for line in stream:
                 if line.strip(): yield json.loads(line)
 

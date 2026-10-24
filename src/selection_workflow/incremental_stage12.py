@@ -440,6 +440,8 @@ class IncrementalStage12:
         self._init_schema()
         from .image_retry import ImageRetryQueue
         self.image_retry=ImageRetryQueue(self.con)
+        self._corrupt_cache_assets={row[0] for row in self.con.execute(
+            "SELECT DISTINCT image_key FROM image_retry_history WHERE event='CORRUPT_CACHE_RETRY_SCHEDULED'")}
         self.stop_requested=lambda:False
         self.image_retry_scope=None
         self.image_pair_scope=None
@@ -848,9 +850,20 @@ class IncrementalStage12:
             data = self._image_transport.read(ref,proxy=proxy)
         if len(data) < 100:
             raise RuntimeError(f"image too small: {len(data)} bytes")
-        with Image.open(io.BytesIO(data)) as image:
-            image.verify()
+        self._validate_image_bytes(data)
         return data
+
+    @staticmethod
+    def _validate_image_bytes(data: bytes) -> None:
+        # JPEG verify() can accept an intact header with a broken pixel stream.
+        # Decode the same bytes before marking an asset READY.
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image.verify()
+            with Image.open(io.BytesIO(data)) as image:
+                image.load()
+        except (OSError, SyntaxError, ValueError) as exc:
+            raise RuntimeError(f'invalid image: {exc}') from exc
 
     def _persist_image(self, image_key: str, ref: str, data: bytes, retry_count: int) -> tuple[str, Path]:
         content_hash = digest(data)
@@ -878,6 +891,7 @@ class IncrementalStage12:
             except ImageSourceMissing:continue
             active[key]=product
         with self.con:
+            self._repair_cached_decode_failures(active)
             for image in self.con.execute("SELECT * FROM images WHERE status='FAILED'").fetchall():
                 if self.image_retry_scope is not None and image['image_key'] not in self.image_retry_scope:continue
                 if image['image_key'] in active:
@@ -886,8 +900,40 @@ class IncrementalStage12:
                     if self.image_retry.get(image['image_key'])['status']=='RETRY':
                         self._wake_image_pairs(image['image_key'],target_status='WAIT_IMAGE_RETRY')
 
-    def _wake_image_pairs(self,image_key,target_status='PENDING'):
+    def _repair_cached_decode_failures(self, active):
+        """One download recovery for a proven bad READY cache, under the writer lease."""
+        from .image_retry import classify_failure
+        images=self.con.execute("""SELECT i.*,v.last_error AS vector_error FROM images i
+          JOIN vectors v ON v.content_hash=i.content_hash
+          WHERE i.status='READY' AND v.status='FAILED' AND v.vector_revision=?""",
+          (self.vectorizer.revision,)).fetchall()
+        for image in images:
+            self._raise_if_stopped()
+            key=image['image_key']
+            if key not in active or (self.image_retry_scope is not None and key not in self.image_retry_scope):continue
+            if classify_failure(image['vector_error'])!='ACTION_INVALID_IMAGE':continue
+            scheduled=self.image_retry.get(key)
+            if scheduled and scheduled['status']!='READY':continue
+            # A filesystem read failure is not evidence of corrupt image bytes.
+            data=Path(image['local_path']).read_bytes()
+            try:self._validate_image_bytes(data)
+            except RuntimeError as exc:
+                if not self._wake_image_pairs(key,target_status='WAIT_IMAGE_RETRY',decode_failures_only=True):continue
+                if scheduled is None:
+                    self.image_retry.legacy(key,image['source_ref'],active[key],image['retry_count'],exc)
+                    scheduled=self.image_retry.get(key)
+                now=self.image_retry.clock()
+                self.con.execute("UPDATE images SET status='FAILED',last_error=?,updated_at=? WHERE image_key=?",
+                    (str(exc),utcnow(),key))
+                self.con.execute("""UPDATE image_retry_queue SET status='RETRY',next_due=?,lease_until=NULL,
+                  last_classification='ACTION_INVALID_IMAGE',last_error=?,updated_at=? WHERE image_key=?""",
+                  (now,str(exc),now,key))
+                self.image_retry._event(key,scheduled['attempts'],'CORRUPT_CACHE_RETRY_SCHEDULED','ACTION_INVALID_IMAGE',str(exc))
+                self._corrupt_cache_assets.add(key)
+
+    def _wake_image_pairs(self,image_key,target_status='PENDING',*,decode_failures_only=False):
         import uuid
+        awakened=0
         for product in self.con.execute('SELECT source_key,product_id,evidence_hash,record_json FROM products').fetchall():
             try:_,key=self._image_identity(json.loads(product['record_json']))
             except ImageSourceMissing:continue
@@ -899,6 +945,9 @@ class IncrementalStage12:
               (product['source_key'],product['product_id'],product['evidence_hash'])*2).fetchall()
             for row in rows:
                 if row['status']==target_status:continue
+                if (decode_failures_only or image_key in self._corrupt_cache_assets) and row['status'] in ('FAILED_BOUNDED','FAILED_RETRYABLE'):
+                    from .image_retry import classify_failure
+                    if classify_failure(row['last_error'])!='ACTION_INVALID_IMAGE':continue
                 identity=(row['path_key'],row['asin'],row['goods_id'],row['pair_revision'])
                 if self.image_pair_scope is not None and identity not in self.image_pair_scope:continue
                 self.con.execute('INSERT INTO image_pair_requeue_history VALUES(?,?,?,?,?,?,?,?,?,?)',
@@ -906,6 +955,8 @@ class IncrementalStage12:
                      row['status'],row['retry_count'],row['last_error'],time.time()))
                 self.con.execute("UPDATE pairs SET status=?,updated_at=? WHERE path_key=? AND asin=? AND goods_id=? AND pair_revision=?",
                     (target_status,utcnow(),row['path_key'],row['asin'],row['goods_id'],row['pair_revision']))
+                awakened+=1
+        return awakened
 
     def _prefetch_images(self, products: Iterable[dict[str, Any]]) -> tuple[dict[str, Exception], float]:
         started = time.monotonic()
@@ -989,6 +1040,8 @@ class IncrementalStage12:
                     status='FAILED',retry_count=images.retry_count+1,last_error=excluded.last_error,updated_at=excluded.updated_at""",
                     (image_key, ref, None, None, "FAILED", retry_count + 1, str(exc), utcnow()))
                 self.image_retry.finish(image_key,exc)
+                if image_key in self._corrupt_cache_assets and self.image_retry.get(image_key)['status']=='ACTION_REQUIRED':
+                    self._wake_image_pairs(image_key,target_status='FAILED_IMAGE_ACTION')
                 errors[image_key]=self.image_retry.deferred(image_key)
             self._inc("image_downloaded", len(successes))
         return errors, time.monotonic() - started
@@ -1098,6 +1151,8 @@ class IncrementalStage12:
                     status='FAILED',retry_count=images.retry_count+1,last_error=excluded.last_error,updated_at=excluded.updated_at""",
                     (image_key, str(ref), None, None, "FAILED", retry_count + 1, str(exc), utcnow()))
                 self.image_retry.finish(image_key,exc)
+                if image_key in self._corrupt_cache_assets and self.image_retry.get(image_key)['status']=='ACTION_REQUIRED':
+                    self._wake_image_pairs(image_key,target_status='FAILED_IMAGE_ACTION')
             raise self.image_retry.deferred(image_key) from exc
 
     def _vector(self, content_hash: str, image_path: Path) -> tuple[np.ndarray, bool]:
