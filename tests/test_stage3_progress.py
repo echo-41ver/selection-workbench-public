@@ -52,6 +52,80 @@ def test_progress_signature_stats_large_inputs_and_tracks_revision_billing_and_r
     assert progress.snapshot_signature(base,cat)!=before
 
 
+def controller_state(base, **changes):
+    from selection_automation.merge_temu_snapshots import atomic_write
+    row={'pid':7,'created':100,'phase':'已暂停派发，结果和断点已保存','updated_at':101,**changes}
+    path=base/'stage123/controller.json';path.parent.mkdir(parents=True,exist_ok=True)
+    atomic_write(path,json.dumps(row,ensure_ascii=False))
+    return path
+
+
+def test_controller_heartbeat_atomic_replace_keeps_completed_reader_current(tmp_path,monkeypatch):
+    (tmp_path/'category.json').write_text('{}',encoding='utf-8')
+    write(progress.candidate_path(tmp_path),[{'asin':'A','goods_id':'T','pair_revision':'p'}])
+    controller_state(tmp_path)
+    monkeypatch.setattr(progress,'controller_alive',lambda _:True)
+    original=progress.snapshot
+    def snapshot_with_heartbeat(*args,**kwargs):
+        result=original(*args,**kwargs)
+        controller_state(tmp_path,updated_at=999999.123)
+        return result
+    monkeypatch.setattr(progress,'snapshot',snapshot_with_heartbeat)
+    document=progress.snapshot_document(tmp_path)
+    assert document['progress']['total']==document['progress']['pending']==1
+    assert document['progress']['completed']==0
+    assert document['stable'] is True
+    # The web cache restores signature rows after a JSON worker response.
+    serialized=json.loads(json.dumps(document['signature']))
+    restored=(serialized[0],tuple(tuple(row) for row in serialized[1]),serialized[2])
+    assert restored==progress.snapshot_signature(tmp_path,{})
+
+
+@pytest.mark.parametrize('change',[{'pid':8},{'created':101},{'phase':'分析中'},
+                                 {'error':True},{'error_code':'INPUT_INVALID'},
+                                 {'new_dispatch_state':{'pending':2}}])
+def test_controller_state_changes_still_invalidate_progress(tmp_path,monkeypatch,change):
+    controller_state(tmp_path)
+    monkeypatch.setattr(progress,'controller_alive',lambda _:True)
+    before=progress.snapshot_signature(tmp_path,{})
+    controller_state(tmp_path,updated_at=102,**change)
+    assert progress.snapshot_signature(tmp_path,{})!=before
+
+
+@pytest.mark.parametrize('target', ['candidate','stage12_config.json','category.json',
+                                  'stage123/results.jsonl','stage123/request_intents.jsonl'])
+def test_real_input_or_inflight_settlement_during_reader_stays_dirty(tmp_path,monkeypatch,target):
+    (tmp_path/'category.json').write_text('{}',encoding='utf-8')
+    controller_state(tmp_path)
+    monkeypatch.setattr(progress,'controller_alive',lambda _:True)
+    path=progress.candidate_path(tmp_path) if target=='candidate' else tmp_path/target
+    def changed_during_read(*args,**kwargs):
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps({'pair_revision':'new','status':'settled','billing_state':'KNOWN'}),encoding='utf-8')
+        controller_state(tmp_path,updated_at=200)
+        return {'total':1,'completed':0}
+    monkeypatch.setattr(progress,'snapshot',changed_during_read)
+    assert progress.snapshot_document(tmp_path)['stable'] is False
+
+
+@pytest.mark.parametrize('content',['{bad json','[]','null'])
+def test_invalid_controller_cannot_be_cached_as_healthy_state(tmp_path,monkeypatch,content):
+    path=controller_state(tmp_path)
+    path.write_text(content,encoding='utf-8')
+    monkeypatch.setattr(progress,'controller_alive',lambda _:False)
+    with pytest.raises(ValueError):progress.snapshot_signature(tmp_path,{})
+
+
+def test_unreadable_controller_is_not_silently_normalized(tmp_path,monkeypatch):
+    path=controller_state(tmp_path)
+    original=Path.read_text
+    def denied(self,*args,**kwargs):
+        if self==path:raise PermissionError('controller is not readable')
+        return original(self,*args,**kwargs)
+    monkeypatch.setattr(Path,'read_text',denied)
+    with pytest.raises(PermissionError):progress.snapshot_signature(tmp_path,{})
+
+
 def test_incremental_queue_uses_current_revision_and_preserves_retries(tmp_path,monkeypatch):
     base=tmp_path/'task';base.mkdir()
     monkeypatch.setattr(progress,'compatible_vision_keys',lambda _,r,**kwargs:(r['pair_revision'],))

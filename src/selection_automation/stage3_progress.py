@@ -144,7 +144,7 @@ def candidate_path(base):
 
 
 def snapshot_signature(base, category):
-    """Version the read-only progress inputs without opening large data files."""
+    """Version progress inputs, excluding only the controller's heartbeat time."""
     base = Path(base)
     folder = base/'stage123'
     paths = [candidate_path(base), base/'stage12_config.json', base/'category.json',
@@ -160,6 +160,15 @@ def snapshot_signature(base, category):
     versions = []
     for path in paths:
         try:
+            if path == folder/'controller.json':
+                # The watcher atomically rewrites this small document while
+                # paused or waiting. File stats change even when queue state
+                # does not; retain every state field except that heartbeat.
+                state = json.loads(path.read_text(encoding='utf-8'))
+                if not isinstance(state,dict):raise ValueError('第三层控制器状态格式无效')
+                versions.append((str(path),'controller-state',json.dumps(
+                    {k:v for k,v in state.items() if k!='updated_at'},ensure_ascii=False,sort_keys=True)))
+                continue
             stat = path.stat()
             versions.append((str(path),stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns))
         except FileNotFoundError:
