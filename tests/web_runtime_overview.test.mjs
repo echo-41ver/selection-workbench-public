@@ -46,6 +46,26 @@ test('recorded unfinished layer counts state the remaining work without claiming
  assert.equal(nodes.get('run-overview').children[3].children[2].textContent,'尚有 12 对未处理；进度按批次更新');
 });
 
+test('terminal image-source failures surface in the overview and attention without claiming a batch is pending',()=>{
+ const {nodes,context}=setup();
+ const notice='1 件商品图片来源损坏，影响 10 对图片筛选；程序已停止这些图片的自动重试';
+ context.data={active:true,details:{阶段:{stage2:{completed:52770,total:52780,remaining:10,failed:10,waiting:0,
+  image_action_required:true,image_action_products:1,image_action_assets:1,image_action_pairs:10,
+  manual_action_required:true,状态:notice,建议动作:'已完成结果和断点已保留。请联系维护者处理图片来源，修复后继续本任务。'}}}};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ const card=nodes.get('run-overview').children[4];
+ assert.equal(card.children[1].textContent,'52,770 / 52,780');
+ assert.equal(card.children[2].textContent,notice);assert.match(card.className,/danger/);
+ assert.doesNotMatch(card.children[2].textContent,/进度按批次更新|已完成|100%/);
+ assert.equal(nodes.get('human-attention').hidden,false);
+ assert.match(nodes.get('human-attention').children[1].textContent,/第二层.*1 件商品.*10 对.*停止.*维护者/);
+ context.data.details.阶段.stage2={completed:52780,total:52780,remaining:0,failed:0,waiting:0,image_action_required:false};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ assert.equal(nodes.get('human-attention').hidden,true);
+ assert.equal(nodes.get('run-overview').children[4].children[2].textContent,'当前入库范围已完成');
+ assert.match(nodes.get('run-overview').children[4].className,/success/);
+});
+
 test('missing, empty or inconsistent layer counts cannot imply completion or remaining work',()=>{
  const {nodes,context}=setup();
  const cases=[{}, {completed:0,total:0,remaining:0}, {completed:7,total:7},

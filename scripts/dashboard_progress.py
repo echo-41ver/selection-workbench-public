@@ -1,6 +1,7 @@
 """Bounded read-only dashboard metrics; absent evidence stays absent."""
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import threading
@@ -16,8 +17,54 @@ MAX_RESULT_BYTES=2*1024*1024
 
 def _bar(done,total,scope,dynamic=True):
     return {'completed':done,'total':total,'remaining':max(0,total-done) if done is not None and total is not None else None,
-            'percent':round(min(done,total)/total*100,1) if done is not None and total else None,
+            'percent':min(99.9 if done<total else 100,round(min(done,total)/total*100,1)) if done is not None and total else None,
             'scope_label':scope,'dynamic_total':dynamic}
+
+
+def _image_action_metrics(con,has_failed_pairs):
+    metrics={'image_action_required':False,'image_action_products':0,'image_action_assets':0,
+             'image_action_pairs':0,'image_action_reasons':{},'image_action_notice':'','image_action_next_step':''}
+    if not has_failed_pairs:return metrics
+    actions=dict(con.execute("SELECT image_key,last_classification FROM image_retry_queue WHERE status='ACTION_REQUIRED'"))
+    if not actions:return metrics
+    # Match the same current source, product version and asset as the writer's
+    # wake-up logic. Old queue rows and superseded product versions are not blocks.
+    rows=con.execute('''
+        SELECT p.path_key,p.asin,p.goods_id,a.source_key,a.product_id,a.evidence_hash,a.record_json
+          FROM pairs p JOIN paths x ON x.path_key=p.path_key
+          JOIN products a ON a.source_key=x.amazon_source AND a.product_id=p.asin AND a.evidence_hash=p.amazon_version
+          WHERE p.status='FAILED_IMAGE_ACTION' AND p.stage1_status IS NOT NULL AND p.stage1_status!='TEXT_HARD_EXCLUDE'
+        UNION ALL
+        SELECT p.path_key,p.asin,p.goods_id,t.source_key,t.product_id,t.evidence_hash,t.record_json
+          FROM pairs p JOIN paths x ON x.path_key=p.path_key
+          JOIN products t ON t.source_key=x.temu_source AND t.product_id=p.goods_id AND t.evidence_hash=p.temu_version
+          WHERE p.status='FAILED_IMAGE_ACTION' AND p.stage1_status IS NOT NULL AND p.stage1_status!='TEXT_HARD_EXCLUDE'
+    ''')
+    keys={};products=set();pairs=set();assets={}
+    for path,asin,goods,source,product,version,raw in rows:
+        identity=(source,product,version)
+        if identity not in keys:
+            try:
+                record=json.loads(raw)
+                ref=record.get('local_image_path') or record.get('main_image_url')
+            except (ValueError,AttributeError,TypeError) as exc:
+                raise sqlite3.DatabaseError('current image evidence is unreadable') from exc
+            keys[identity]=hashlib.sha256(str(ref).encode('utf-8')).hexdigest() if ref else None
+        key=keys[identity]
+        if key not in actions:continue
+        products.add((source,product));pairs.add((path,asin,goods));assets[key]=actions[key] or 'ACTION_UNKNOWN'
+    if not pairs:return metrics
+    reasons={}
+    for classification in assets.values():reasons[classification]=reasons.get(classification,0)+1
+    labels={'ACTION_INVALID_IMAGE':'图片来源损坏','ACTION_AUTH':'图片来源访问被拒绝',
+            'ACTION_MISSING':'图片来源已不存在','ACTION_TLS':'图片来源证书校验失败','ACTION_UNKNOWN':'图片来源异常'}
+    reason='、'.join(dict.fromkeys(labels.get(code,labels['ACTION_UNKNOWN']) for code in sorted(reasons)))
+    notice=f'{len(products)} 件商品{reason}，影响 {len(pairs)} 对图片筛选；程序已停止这些图片的自动重试'
+    action='已完成结果和断点已保留。无需重复启动或更改规则；请联系维护者处理图片来源，修复后继续本任务。'
+    metrics.update(image_action_required=True,image_action_products=len(products),image_action_assets=len(assets),
+                   image_action_pairs=len(pairs),image_action_reasons=reasons,image_action_notice=notice,
+                   image_action_next_step=action,manual_action_required=True,状态=notice,建议动作=action)
+    return metrics
 
 
 def _database(stage12):
@@ -28,6 +75,7 @@ def _database(stage12):
         con=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=.2)
         deadline=time.monotonic()+.5
         con.set_progress_handler(lambda:int(time.monotonic()>deadline),10000)
+        con.execute('BEGIN')
         groups=con.execute('SELECT status,stage1_status,COUNT(*) FROM pairs GROUP BY status,stage1_status').fetchall()
         total=sum(n for _,_,n in groups)
         text=sum(n for _,gate,n in groups if gate is not None)
@@ -35,8 +83,10 @@ def _database(stage12):
         vectors=sum(n for status,gate,n in groups if gate is not None and gate!='TEXT_HARD_EXCLUDE' and status in ('CANDIDATE','BELOW_VECTOR_THRESHOLD'))
         failed=sum(n for status,gate,n in groups if gate is not None and gate!='TEXT_HARD_EXCLUDE' and status in ('FAILED_BOUNDED','FAILED_RETRYABLE','FAILED_IMAGE_ACTION'))
         waiting=sum(n for status,gate,n in groups if gate is not None and gate!='TEXT_HARD_EXCLUDE' and status.startswith('WAIT_'))
+        image_failed=sum(n for status,gate,n in groups if gate is not None and gate!='TEXT_HARD_EXCLUDE' and status=='FAILED_IMAGE_ACTION')
         return {'stage1':{**_bar(text,total,'当前已登记商品对；随采集增长'),'excluded':sum(n for _,g,n in groups if g=='TEXT_HARD_EXCLUDE')},
-                'stage2':{**_bar(vectors,eligible,'当前通过文字筛选的商品对；不含文字排除或尚未文字处理'),'failed':failed,'waiting':waiting}}
+                'stage2':{**_bar(vectors,eligible,'当前通过文字筛选的商品对；不含文字排除或尚未文字处理'),
+                          'failed':failed,'waiting':waiting,**_image_action_metrics(con,image_failed)}}
     except sqlite3.Error:
         return {s:{**_bar(None,None,'当前数据库统计暂不可用'),'reason':'数据库忙、查询超时或结构不支持'} for s in ('stage1','stage2')}
     finally:
@@ -276,7 +326,14 @@ def enrich_progress(base:Path,details:dict,*,watch_running=True,asynchronous=Fal
         if not isinstance(stages,dict):return result
         for name,metrics in entry.get('metrics',{}).items():
             current=stages.setdefault(name,{})
-            if isinstance(current,dict):current.update(deepcopy(metrics))
+            if isinstance(current,dict):
+                if name=='stage2' and current.get('image_action_required') and 'image_action_required' in metrics:
+                    # Remove only our previous notice. Other stage errors and
+                    # unrelated status fields remain owned by their producers.
+                    if current.get('状态')==current.get('image_action_notice'):
+                        current.pop('状态',None);current.pop('manual_action_required',None)
+                    if current.get('建议动作')==current.get('image_action_next_step'):current.pop('建议动作',None)
+                current.update(deepcopy(metrics))
         amazon=stages.get('amazon',{})
         union=stages.get('temu_union',{})
         if not union.get('阻断'):

@@ -157,6 +157,117 @@ def test_database_separates_text_completion_from_failed_images(tmp_path):
     assert result['stage2']['remaining']==2 and result['stage2']['failed']==1
 
 
+def image_action_database(stage12,*,classification='ACTION_INVALID_IMAGE',queue_status='ACTION_REQUIRED'):
+    """The source/version and asset identity used by the real processing tables."""
+    import hashlib,sqlite3
+    stage12.mkdir(parents=True,exist_ok=True)
+    con=sqlite3.connect(stage12/'stage12.sqlite3')
+    con.executescript('''
+        CREATE TABLE paths(path_key TEXT,amazon_source TEXT,temu_source TEXT);
+        CREATE TABLE products(source_key TEXT,product_id TEXT,evidence_hash TEXT,record_json TEXT);
+        CREATE TABLE pairs(path_key TEXT,asin TEXT,goods_id TEXT,amazon_version TEXT,temu_version TEXT,status TEXT,stage1_status TEXT);
+        CREATE TABLE image_retry_queue(image_key TEXT,status TEXT,last_classification TEXT);
+    ''')
+    con.execute('INSERT INTO paths VALUES(?,?,?)',('path','amazon','temu'))
+    ref='https://example.invalid/current-image.jpg';key=hashlib.sha256(ref.encode()).hexdigest()
+    con.execute('INSERT INTO products VALUES(?,?,?,?)',('temu','T','v1',json.dumps({'main_image_url':ref})))
+    con.execute('INSERT INTO image_retry_queue VALUES(?,?,?)',(key,queue_status,classification))
+    con.executemany('INSERT INTO pairs VALUES(?,?,?,?,?,?,?)',[
+        ('path',f'A{i}','T','av1','v1','FAILED_IMAGE_ACTION','TEXT_PASS') for i in range(10)])
+    con.executemany('INSERT INTO pairs VALUES(?,?,?,?,?,?,?)',[
+        ('path','complete','other','av1','tv1',state,'TEXT_PASS') for state in ('CANDIDATE','BELOW_VECTOR_THRESHOLD')])
+    con.commit();return con,key
+
+
+def test_terminal_current_image_source_is_actionable_without_counting_failure_as_success(tmp_path):
+    con,_=image_action_database(tmp_path);con.close()
+    before=(tmp_path/'stage12.sqlite3').read_bytes()
+    row=dashboard._database(tmp_path)['stage2']
+    assert (row['completed'],row['total'],row['remaining'],row['failed'],row['waiting'])==(2,12,10,10,0)
+    assert row['manual_action_required'] is True
+    assert (row['image_action_products'],row['image_action_assets'],row['image_action_pairs'])==(1,1,10)
+    assert row['image_action_reasons']=={'ACTION_INVALID_IMAGE':1}
+    assert '1 件商品' in row['状态'] and '图片来源损坏' in row['状态'] and '10 对' in row['状态']
+    assert '停止' in row['状态'] and '自动重试' in row['状态']
+    assert '维护' in row['建议动作'] and '日志' not in row['建议动作']
+    assert (tmp_path/'stage12.sqlite3').read_bytes()==before
+
+
+def test_incomplete_progress_cannot_round_up_to_100_percent():
+    assert dashboard._bar(52770,52780,'fixture')['percent']==99.9
+    assert dashboard._bar(52780,52780,'fixture')['percent']==100
+
+
+def test_stale_queue_wrong_source_or_version_cannot_create_current_image_alert(tmp_path):
+    con,key=image_action_database(tmp_path)
+    con.execute("UPDATE products SET evidence_hash='v2'")
+    con.execute("INSERT INTO products SELECT 'unrelated',product_id,'v1',record_json FROM products")
+    con.commit()
+    row=dashboard._database(tmp_path)['stage2']
+    assert not row.get('manual_action_required') and row['image_action_pairs']==0
+    # The current product is updated to an unrelated asset; the old queue remains.
+    con.execute("UPDATE products SET evidence_hash='v1',record_json=? WHERE source_key='temu'",
+                (json.dumps({'main_image_url':'https://example.invalid/new.jpg'}),))
+    con.commit();con.close()
+    row=dashboard._database(tmp_path)['stage2']
+    assert not row.get('manual_action_required') and row['image_action_assets']==0
+    assert row['completed']==2 and row['failed']==10
+
+
+def test_both_failed_images_count_affected_pair_once_and_classifications_stay_accurate(tmp_path):
+    import hashlib
+    con,_=image_action_database(tmp_path,classification='ACTION_AUTH')
+    ref='C:/current-local-image.jpg';key=hashlib.sha256(ref.encode()).hexdigest()
+    con.execute('INSERT INTO products VALUES(?,?,?,?)',('amazon','A0','av1',json.dumps({'local_image_path':ref,'main_image_url':'ignored'})))
+    con.execute('INSERT INTO image_retry_queue VALUES(?,?,?)',(key,'ACTION_REQUIRED','ACTION_TLS'))
+    con.commit();con.close()
+    row=dashboard._database(tmp_path)['stage2']
+    assert (row['image_action_products'],row['image_action_assets'],row['image_action_pairs'])==(2,2,10)
+    assert row['image_action_reasons']=={'ACTION_AUTH':1,'ACTION_TLS':1}
+    assert '访问被拒绝' in row['状态'] and '证书校验失败' in row['状态']
+    assert '损坏' not in row['状态']
+
+
+def test_active_network_retry_or_ready_asset_is_not_terminal_action(tmp_path):
+    con,_=image_action_database(tmp_path,classification='TRANSIENT_NETWORK',queue_status='RETRY')
+    for state in ('RETRY','RUNNING','READY','INACTIVE'):
+        con.execute('UPDATE image_retry_queue SET status=?',(state,));con.commit()
+        row=dashboard._database(tmp_path)['stage2']
+        assert not row.get('manual_action_required') and row['image_action_pairs']==0
+    con.close()
+
+
+def test_image_recovery_removes_only_owned_notice_and_preserves_other_stage_failure(tmp_path,monkeypatch):
+    con,_=image_action_database(tmp_path/'stage12')
+    monkeypatch.setattr(dashboard,'_collect',lambda base,entry:dashboard._database(base/'stage12'))
+    original={'阶段':{'stage2':{'状态':'运行中'},'market':{'状态':'需要登录','manual_action_required':True}}}
+    failed=dashboard.enrich_progress(tmp_path,original)
+    assert failed['阶段']['stage2']['manual_action_required']
+    con.execute("UPDATE image_retry_queue SET status='READY'")
+    con.execute("UPDATE pairs SET status='CANDIDATE' WHERE status='FAILED_IMAGE_ACTION'");con.commit();con.close()
+    dashboard._CACHE[str(tmp_path.resolve())]['checked']=float('-inf')
+    recovered=dashboard.enrich_progress(tmp_path,failed)
+    row=recovered['阶段']['stage2']
+    assert row['completed']==row['total']==12 and row['remaining']==0
+    assert not row.get('manual_action_required') and not row.get('image_action_required')
+    assert '状态' not in row and '建议动作' not in row
+    assert recovered['阶段']['market']==original['阶段']['market']
+    assert failed['阶段']['stage2']['manual_action_required'] is True
+
+
+def test_unavailable_database_does_not_clear_last_confirmed_image_action(tmp_path,monkeypatch):
+    con,_=image_action_database(tmp_path/'stage12');con.close()
+    monkeypatch.setattr(dashboard,'_collect',lambda base,entry:dashboard._database(base/'stage12'))
+    failed=dashboard.enrich_progress(tmp_path,{})
+    assert failed['阶段']['stage2']['manual_action_required']
+    # A failed bounded refresh is not evidence that the source was repaired.
+    monkeypatch.setattr(dashboard,'_collect',lambda base,entry:{'stage2':{'completed':None,'total':None,'reason':'数据库忙'}})
+    dashboard._CACHE[str(tmp_path.resolve())]['checked']=float('-inf')
+    unavailable=dashboard.enrich_progress(tmp_path,failed)['阶段']['stage2']
+    assert unavailable['manual_action_required'] and unavailable['image_action_required']
+    assert unavailable['状态']==failed['阶段']['stage2']['状态']
+
+
 def test_current_visual_versions_exclude_stale_success(tmp_path,monkeypatch):
     from selection_automation import vision
     put(tmp_path/'category.json',{'category_key':'fixture'})
