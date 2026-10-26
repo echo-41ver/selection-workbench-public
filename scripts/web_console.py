@@ -1131,6 +1131,14 @@ class Console:
         with self.lock:
             if self.busy or self.stage3_busy or self.owner():raise ConsoleError('TASK_BUSY','当前任务仍在运行，请先停止',409)
             base,category=self.history_base(body['category_key'])
+            union=base/'temu/union'
+            if (union/'products.jsonl').is_file():
+                from watch_temu_union import publish_once
+                from selection_automation.process_lock import ProcessLock
+                with ProcessLock(union/'watcher.lock'):
+                    publication=publish_once(base/'temu',selection.read(union/'watch_state.json',{}))
+                if publication['status']=='SOURCE_READ_FAILED_PRESERVED_PREVIOUS_UNION':
+                    raise ConsoleError('HISTORY_SOURCE_FAILED','历史采集数据汇总失败，原结果已保留，请导出诊断记录',409)
             self.key=base.name;self.draft_used=True;self.pending_scope=None;self.generation_error=None
             self.phase='历史任务已恢复，可查看结果或继续运行'
             selection.save(self.root/'runtime/web-console/state.json',{'category_key':self.key,'explicitly_restored':True})

@@ -109,6 +109,52 @@ def test_strict_threshold_and_unfinished_evidence(tmp_path):
     assert data['products'][0]['amazon']['price']['min'] is None
 
 
+@pytest.mark.parametrize('restored_change', ['timestamp', 'directory'])
+def test_history_restore_rebuilds_union_from_preserved_sources(tmp_path, monkeypatch, restored_change):
+    import os
+    import shutil
+    import web_console as web
+    cat, report = setup(tmp_path)
+    root = tmp_path
+    if restored_change == 'directory':
+        root = tmp_path / 'restored'
+        shutil.copytree(tmp_path / 'runs', root / 'runs')
+    base = root / 'runs/fixture'
+    worker = base / 'temu/workers/worker-01/session/products.jsonl'
+    original = worker.read_bytes()
+    if restored_change == 'timestamp':
+        stat = worker.stat()
+        os.utime(worker, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    assert build_delivery(root, cat, report)['collection']['complete'] is False
+    console = web.Console(root)
+    monkeypatch.setattr(console, 'owner', lambda: None)
+    monkeypatch.setattr(console, 'invoke', lambda *a, **k: pytest.fail('restoring history must not start a task or analysis'))
+    console.restore_history({'category_key': 'fixture'})
+    data = build_delivery(root, cat, report)
+    assert data['collection']['complete'] is True
+    assert [row['asin'] for row in data['products']] == ['A1']
+    assert [(row['asin'], row['goods_id']) for row in data['pairs']] == [('A1', '1'), ('A2', '1'), ('A2', '2')]
+    assert worker.read_bytes() == original
+    assert not (base / 'stage123/paid_enabled.json').exists()
+
+
+def test_history_restore_preserves_union_and_reports_invalid_source(tmp_path, monkeypatch):
+    import web_console as web
+    setup(tmp_path)
+    base = tmp_path / 'runs/fixture'
+    union = base / 'temu/union/products.jsonl'
+    previous = union.read_bytes()
+    (base / 'temu/workers/worker-01/session/products.jsonl').write_text('{invalid JSON}\n', encoding='utf-8')
+    console = web.Console(tmp_path)
+    monkeypatch.setattr(console, 'owner', lambda: None)
+    with pytest.raises(web.ConsoleError) as error:
+        console.restore_history({'category_key': 'fixture'})
+    assert error.value.code == 'HISTORY_SOURCE_FAILED'
+    assert union.read_bytes() == previous
+    assert console.current_run_key() == (None, False)
+    assert json.loads((base / 'temu/union/watch_state.json').read_text('utf-8'))['status'] == 'SOURCE_READ_FAILED_PRESERVED_PREVIOUS_UNION'
+
+
 def test_zero_unexecuted_analysis_is_progress_not_selection(tmp_path):
     cat,report=setup(tmp_path)
     report['products']=[{'asin':'A1','confirmed_goods_ids':[],
