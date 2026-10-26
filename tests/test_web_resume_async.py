@@ -86,8 +86,13 @@ def test_failed_resume_persists_error_stops_cooperatively_and_preserves_billing(
     assert state['phase']==record['message'] and state['can_resume']
 
 
-def test_running_label_requires_registered_owner_and_keeps_original_task(tmp_path,monkeypatch):
+@pytest.mark.parametrize('environment',['current','retired','cleared'])
+def test_running_label_requires_registered_owner_and_keeps_original_task(tmp_path,monkeypatch,environment):
     console,base=fixture_console(tmp_path,monkeypatch)
+    if environment=='current':
+        web.selection.save(tmp_path/'config/sessions.json',{'task_key':'original_task','machine_id':'fixture-machine'})
+    elif environment=='retired':
+        web.selection.save(tmp_path/'runtime/profile_retirement/receipt.json',{'new_task_key':'original_task','machine_id':'fixture-machine'})
     data=base/'real_input.jsonl';data.write_bytes(b'real saved checkpoint\n')
     calls=[]
     monkeypatch.setattr(console,'invoke',lambda argv,**kw:calls.append((argv,kw)) or SimpleNamespace(returncode=0))
@@ -97,9 +102,21 @@ def test_running_label_requires_registered_owner_and_keeps_original_task(tmp_pat
     record=web.selection.read(base/'resume_launch.json')
     assert not console.cancel.is_set() and queued['launch_pending']
     assert record['state']=='running' and record['owner']=={'pid':987,'created':12345}
-    assert calls[0][0][1:]==['start','--preserve-prepared','--category',str(base/'category.json')]
+    assert calls[0][0][1:]==['start',*(['--preserve-prepared'] if environment!='cleared' else []),
+                                '--category',str(base/'category.json')]
     assert '--paid' not in calls[0][0] and not (base/'stage123/paid_enabled.json').exists()
     assert data.read_bytes()==b'real saved checkpoint\n'
+
+
+def test_supervisor_terminal_failure_exposes_current_cause_after_owner_exits(tmp_path,monkeypatch):
+    console,base=fixture_console(tmp_path,monkeypatch)
+    reason='维护续接必须属于本任务与本安装'
+    web.selection.save(base/'status.json',{'状态':'自动恢复已停止，原断点已保留','原因':reason})
+    console.record_resume_launch(base,{'id':'fixture','category_key':'original_task'},'running',
+                                owner={'pid':987,'created':12345})
+    state=console.status()
+    assert state['severity']=='red' and state['phase']==reason
+    assert state['preparation_error']==reason and state['can_resume']
 
 
 def test_thread_start_failure_releases_busy_and_leaves_durable_failure(tmp_path,monkeypatch):

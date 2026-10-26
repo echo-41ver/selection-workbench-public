@@ -401,6 +401,7 @@ def test_resume_uses_current_saved_task_and_never_regenerates_or_enables_paid_an
     base=tmp_path/'runs/current';base.mkdir(parents=True)
     web.selection.save(base/'category.json',{'category_key':'current','category_name_zh':'遥控器','execution_mode':'collection'})
     web.selection.save(tmp_path/'runtime/last_run.json',{'category_key':'current'})
+    web.selection.save(tmp_path/'config/sessions.json',{'task_key':'current','machine_id':'fixture-machine'})
     data=base/'temu/products.jsonl';data.parent.mkdir();data.write_text('existing-data')
     monkeypatch.setattr(console,'owner',lambda:None)
     calls=[]

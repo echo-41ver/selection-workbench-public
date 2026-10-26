@@ -2120,7 +2120,10 @@ class Console:
         try:
             if self.cancel.is_set():raise ConsoleError('CANCELLED','继续启动已取消，数据和断点已保留')
             self.record_resume_launch(base,job,'launching')
-            result=self.invoke([str(self.root/'scripts/selection.py'),'start','--preserve-prepared',
+            # A cleared installation has no old browsers to preserve. Normal
+            # preparation creates new environments while keeping the frozen run.
+            prepared=(self.root/'config/sessions.json').exists() or any((self.root/'runtime/profile_retirement').glob('*.json'))
+            result=self.invoke([str(self.root/'scripts/selection.py'),'start',*(['--preserve-prepared'] if prepared else []),
                                 '--category',str(base/'category.json')],timeout=90,cancellable=True)
             if self.cancel.is_set():raise ConsoleError('CANCELLED','继续启动已取消，数据和断点已保留')
             if result.returncode:
@@ -2488,7 +2491,10 @@ class Console:
             details['后台停止状态']={name:('已退出' if value is False else '仍在运行' if value is True else '身份待核对')
                 for name,value in getattr(self,'workspace_writer_states',{}).items()}
         resume_launch=selection.read(self.root/'runs'/key/'resume_launch.json',{}) if key else {}
-        resume_error=(resume_launch.get('message') if resume_launch.get('state')=='failed' and not owner and not self.busy else None)
+        resume_error=None
+        if not owner and not self.busy:
+            resume_error=(resume_launch.get('message') if resume_launch.get('state')=='failed' else
+                details.get('原因') if details.get('状态') in ('启动或运行失败','自动恢复已停止，原断点已保留') else None)
         if resume_error:phase=resume_error
         return clean({'ok':True,'loaded_runtime':selection.LOADED_VERSION,'api_reasoning_supported':True,
                       'task_stopped':bool(stopped.get('task_stopped')) and not self.workspace_stop_pending,'match_criteria':category.get('match_criteria'),
