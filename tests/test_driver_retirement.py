@@ -235,7 +235,7 @@ def test_native_backend_uses_exact_integer_ticks_and_same_handle_for_termination
 
 @pytest.mark.skipif(os.name != 'nt', reason='Windows exact FILETIME/.NET identity contract')
 def test_native_identity_matches_readonly_dotnet_ticks_for_this_test_process():
-    import sys
+    import psutil
     process = drivers._WindowsProcess(os.getpid())
     try:
         ticks, executable, command = process.identity()
@@ -243,7 +243,7 @@ def test_native_identity_matches_readonly_dotnet_ticks_for_this_test_process():
             f'(Get-Process -Id {os.getpid()}).StartTime.ToUniversalTime().Ticks'], capture_output=True, timeout=15)
         assert result.returncode == 0, result.stderr
         assert ticks == int(result.stdout.strip())
-        assert Path(executable).resolve() == Path(sys.executable).resolve()
+        assert Path(executable).resolve() == Path(psutil.Process(os.getpid()).exe()).resolve()
         assert command
     finally:
         process.close()

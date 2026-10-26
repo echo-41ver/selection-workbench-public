@@ -443,10 +443,10 @@ const redFlags=/failed|error|存在阻断|失败|错误|需要处理/i;
 function statusTone(row={}){
  const state=String(first(row,['采集状态','status','状态','phase'])||'');
  if(row.automatic_recovery)return 'warning';
+ if(needsHuman(row))return 'danger';
  if(!row.agent_block&&/LOGIN_REQUIRED|WAITING_LOGIN/.test(state))return 'success';
  if(/^REPLACING_.*_ENVIRONMENT$/.test(state)||/正在自动更换环境/.test(state)||/WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY/.test(state))return 'success';
  if(/FAILED|ERROR|BINDING_FAILED|失败|错误/i.test(state))return 'danger';
- if(needsHuman(row))return 'danger';
  if(/监督进程已退出/i.test(state))return 'warning';
  if(row['阻断']||/STOPPED_HTTP|STOPPED_PROXY|ACCESS_DENIED|PROVIDER_BLOCKED|存在阻断/i.test(state))return 'danger';
  if(/尚无|未启动|尚未|等待状态|状态未知|等待点击|等待手动|已暂停|已停止|停止中/.test(state))return '';
@@ -457,9 +457,11 @@ function statusTone(row={}){
 function needsHuman(row={}){
  const state=String(first(row,['采集状态','status','状态','phase','code'])||'');
  if(row.automatic_recovery)return false;
+ if(/^REPLACING_.*_ENVIRONMENT$/.test(state)||/正在自动更换环境/.test(state))return false;
+ if(row.manual_action_required||row.human_action_required||row['需人工介入']||row.recovery_exhausted||row.recovery_budget_exhausted)return true;
  if(!row.agent_block&&/LOGIN_REQUIRED|WAITING_LOGIN/.test(state))return false;
- if(/^REPLACING_.*_ENVIRONMENT$/.test(state)||/WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_INITIAL_PRODUCTS/.test(state))return false;
- return Boolean(row.manual_action_required||row.human_action_required||row['需人工介入']||row.recovery_exhausted||/CAPTCHA|HUMAN_VERIFICATION|WAITING_.*VERIFICATION|HUMAN_ACTION|LOGIN_REQUIRED|WAITING_LOGIN|ACTION_REQUIRED|验证码|等待人工|待人工|需要人工|需要.*登录|失败.*需要处理|恢复.*耗尽/i.test(state));
+ if(/WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_INITIAL_PRODUCTS/.test(state))return false;
+ return /CAPTCHA|HUMAN_VERIFICATION|WAITING_.*VERIFICATION|HUMAN_ACTION|LOGIN_REQUIRED|WAITING_LOGIN|ACTION_REQUIRED|验证码|等待人工|待人工|需要人工|需要.*登录|失败.*需要处理|恢复.*耗尽/i.test(state);
 }
 function runtimeUnion(row={}){
  if(row.automatic_recovery||!row['阻断']||!row.recovery_exhausted)return row;
@@ -538,7 +540,7 @@ function runtimeStage3(data={}){
 function attentionItems(data={}){
  if(data.task_stopped)return [];
  const stages=data.details?.['阶段']||data.modules||{},items=[];
- const add=(name,row,target='monitor')=>{if(needsHuman(row))items.push({name,target,message:String(first(row,['采集状态','状态','status','phase'])||'需要人工处理'),action:first(row,['建议动作','recovery_action','action'])||'请查看对应运行详情，完成处理后继续。'});};
+ const add=(name,row,target='monitor')=>{if(needsHuman(row))items.push({name,target,message:String(first(row,['状态','采集状态','status','phase'])||'需要人工处理'),action:first(row,['建议动作','recovery_action','action'])||'请查看对应运行详情，完成处理后继续。'});};
  for(const w of Array.isArray(data.workers)?data.workers:Object.values(data.workers||{})){const n=(w.name||'').match(/worker-(\d+)/)?.[1];add('TEMU 第 '+Number(n||0)+' 路',workerCardRow(w,stages[w.name]||{}));}
  for(const [id,name] of [['amazon','Amazon 采集'],['temu_union','TEMU 汇总'],['stage12','第一、二层'],['stage1','第一层'],['stage2','第二层']]){if(stages[id])add(name,id==='temu_union'?runtimeUnion(stages[id]):stages[id]);}
  if(data.scope?.execution_mode!=='collection')add('第三层分析',runtimeStage3(data));
@@ -909,6 +911,8 @@ function workerCardRow(actual={},stage={},metrics={}){
 const live=actual.live_snapshot;const row={...actual,...stage,...metrics,...(live||{})};
 // Current collector evidence takes priority over an older supervisor alert.
 if(live){row['建议动作']=live['建议动作']||'';row.recovery_action='';row.action='';row.manual_action_required=live['需人工介入']===true;if(live['唯一商品数']!=null)row.unique_goods=live['唯一商品数'];if(live['采集条数']!=null)row.completed=live['采集条数'];if(live['当前排序目标']!=null)row.total=live['当前排序目标'];if(live['采集更新时间'])row['更新时间']=live['采集更新时间'];}
+if(live&&/^(RUNNING|WORKER_COMPLETE|QUERY_COMPLETE|KEYWORD_COMPLETE)$/.test(String(first(live,['采集状态','status'])||''))&&!live['需人工介入']){row.recovery_budget_exhausted=false;row.recovery_exhausted=false;}
+if(actual.status==='HUMAN_ACTION_REQUIRED'&&row.recovery_budget_exhausted&&/LOGIN_REQUIRED|WAITING_LOGIN/.test(String(first(live||{},['采集状态','status'])||actual.query_status||''))){row.manual_action_required=true;row['需人工介入']=true;row['建议动作']=actual.recovery_action||'自动换环境仍未取得商品；请完成当前浏览器登录后继续，原断点已保留。';}
 if(/^REPLACING_.*_ENVIRONMENT$/.test(actual.status||'')){Object.assign(row,{'状态':'正在自动更换环境，保留当前关键词断点','采集状态':actual.status,'建议动作':'','需人工介入':false,'阻断':false,manual_action_required:false});}
 if(/_RECOVERY_FAILED$/.test(actual.status||'')){Object.assign(row,{status:actual.status,'状态':'环境恢复失败，未完成换环境','采集状态':actual.status,'建议动作':actual.rotation_control?.message||'恢复未完成，浏览器和数据已保留；可点击重启重新尝试','需人工处理':true,'异常':true,manual_action_required:true,browser_preserved:true});}
 if(row.lane_ended_before_goal)row['状态']='历史采集提前结束，尚未达到目标';

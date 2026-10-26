@@ -2393,10 +2393,12 @@ class Console:
             if not isinstance(value,dict): return 'neutral'
             state=' '.join(str(value.get(field) or '') for field in ('状态','status','采集状态','query_status')).upper()
             if value.get('automatic_recovery'):return 'neutral'
-            if re.search(r'REPLACING_.*_ENVIRONMENT|正在自动更换环境|LOGIN_REQUIRED|WAITING_LOGIN|WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY|WAITING_INITIAL_PRODUCTS_RETRY',state): return 'green'
+            if re.search(r'REPLACING_.*_ENVIRONMENT|正在自动更换环境',state): return 'green'
+            if any(value.get(flag) is True for flag in ('需人工介入','manual_action_required','human_action_required',
+                                                       'recovery_exhausted','recovery_budget_exhausted')): return 'red'
+            if re.search(r'LOGIN_REQUIRED|WAITING_LOGIN|WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY|WAITING_INITIAL_PRODUCTS_RETRY',state): return 'green'
             if re.search(r'FAILED|ERROR|失败|错误',state): return 'red'
-            if any(value.get(flag) is True for flag in ('需人工介入','manual_action_required','human_action_required')) or re.search(
-                    r'CAPTCHA|VERIFICATION|HUMAN_ACTION|LOGIN_REQUIRED|WAITING_LOGIN|ACTION_REQUIRED|验证码|等待人工|待人工|需要人工',state): return 'red'
+            if re.search(r'CAPTCHA|VERIFICATION|HUMAN_ACTION|LOGIN_REQUIRED|WAITING_LOGIN|ACTION_REQUIRED|验证码|等待人工|待人工|需要人工',state): return 'red'
             if value.get('阻断') or re.search(r'STOPPED_HTTP|STOPPED_PROXY|ACCESS_DENIED|PROVIDER_BLOCKED|存在阻断',state): return 'red'
             return 'neutral'
         def current_worker(worker):

@@ -185,6 +185,32 @@ test('all manual-only stages are aggregated; automatic waits are not alerts',()=
  assert.equal(vm.runInContext('statusTone({status:"WAITING_LOGIN"})',context),'success');
 });
 
+test('exhausted login recovery is red and visible while automatic login rotation remains quiet',()=>{
+ const {context,nodes}=setup();
+ context.data={workers:[{name:'worker-01-new',status:'HUMAN_ACTION_REQUIRED',manual_action_required:true,
+  recovery_budget_exhausted:true,live_snapshot:{采集状态:'STOPPED_LOGIN_REQUIRED',状态:'等待人工登录，保留浏览器',需人工介入:true,阻断:true},
+  recovery_action:'连续 3 次换环境仍无新增商品，原断点已保留'}],details:{阶段:{}}};
+ vm.runInContext(html.slice(html.indexOf('function workerCardRow('),html.indexOf('const expandedWorkers=')),context);
+ const original=JSON.stringify(context.data);
+ assert.equal(vm.runInContext('statusTone(workerCardRow(data.workers[0]))',context),'danger');
+ assert.equal(vm.runInContext('needsHuman(workerCardRow(data.workers[0]))',context),true);
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ assert.equal(nodes.get('human-attention').hidden,false);
+ assert.match(nodes.get('human-attention').children[1].textContent,/TEMU 第 1 路.*登录/);
+ assert.match(nodes.get('human-attention').children[1].textContent,/连续 3 次.*原断点已保留/);
+ assert.equal(JSON.stringify(context.data),original);
+ for(const flag of ['manual_action_required','human_action_required','需人工介入','recovery_exhausted','recovery_budget_exhausted']){
+  context.row={status:'STOPPED_LOGIN_REQUIRED',[flag]:true};
+  assert.equal(vm.runInContext('needsHuman(row)',context),true,flag);
+  assert.equal(vm.runInContext('statusTone(row)',context),'danger',flag);
+ }
+ assert.equal(vm.runInContext('statusTone({status:"REPLACING_LOGIN_ENVIRONMENT",manual_action_required:true})',context),'success');
+ assert.equal(vm.runInContext('needsHuman({status:"REPLACING_LOGIN_ENVIRONMENT",manual_action_required:true})',context),false);
+ context.data.workers[0].live_snapshot={采集状态:'RUNNING',状态:'采集中',需人工介入:false};
+ assert.equal(vm.runInContext('needsHuman(workerCardRow(data.workers[0]))',context),false);
+ assert.equal(vm.runInContext('statusTone(workerCardRow(data.workers[0]))',context),'success');
+});
+
 test('page scripts parse after moving controls without duplicate IDs',()=>{
  for(const script of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g))new vm.Script(script[1]);
  const ids=Array.from(html.matchAll(/\bid="([^"]+)"/g),match=>match[1]);
