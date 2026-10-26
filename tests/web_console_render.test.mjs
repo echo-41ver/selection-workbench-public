@@ -69,7 +69,7 @@ test('saved market authorization is retried automatically, with cooldown and exp
  const code=html.slice(html.indexOf('let marketLoginRetry='),html.indexOf("window.addEventListener('focus',()=>continueMarketLogin(true))"));
  let now=100000,calls=0;
  const data={category_key:'fixture',market_busy:false,release_update:{pending:true},market_status:{status:'ACTION_REQUIRED',action:'AUTH_REQUIRED',jumpUrl:'https://openapi.geekbi.com/agent/auth/login',updated_at:new Date(0).toISOString(),expiresIn:600}};
- const context=sandbox({lastStatus:data,busy:false,statusFresh:true,Date:{now:()=>now,parse:Date.parse},Number,action:async endpoint=>{assert.equal(endpoint,'/api/refresh-market');calls++;}});
+ const context=sandbox({lastStatus:data,busy:false,statusFresh:true,Date:{now:()=>now,parse:Date.parse},Number,action:async (endpoint,body,showSuccess)=>{assert.equal(endpoint,'/api/refresh-market');assert.equal(showSuccess,false);calls++;}});
  vm.runInContext(code,context);
  await vm.runInContext('continueMarketLogin()',context);assert.equal(calls,1);
  await vm.runInContext('continueMarketLogin(true)',context);assert.equal(calls,1);

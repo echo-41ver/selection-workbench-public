@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
-const recoveryCode=html.slice(html.indexOf('const taskScopeFieldIds='),html.indexOf('async function action(endpoint,body)'));
+const recoveryCode=html.slice(html.indexOf('const taskScopeFieldIds='),html.indexOf('async function action('));
 const draftCode=html.slice(html.indexOf('function renderDraft(draft)'),html.indexOf('function renderFrontendMarketDetails('));
 const retryCode=html.split('\n').find(line=>line.startsWith("$('retry-generation').addEventListener"));
 const submitCode=html.split('\n').find(line=>line.startsWith("$('task-form').addEventListener"));

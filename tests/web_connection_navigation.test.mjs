@@ -181,7 +181,7 @@ test('a timed out control request unlocks the page and never resubmits automatic
  const context=sandbox({busy:false,statusFresh:false,lastStatus:{category_key:'fixture'},liveStage3Fresh:()=>true,AbortController,
   updateControls(){},feedback(text){message=text;},poll(){},setTimeout(callback){timeout=callback;return 1;},clearTimeout(){},
   fetch:(_path,{signal})=>{calls++;return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(Error('timeout'),{name:'AbortError'}))));}});
- vm.runInContext(html.slice(html.indexOf('async function action(endpoint,body)'),html.indexOf("$('retry-generation').addEventListener")),context);
+ vm.runInContext(html.slice(html.indexOf('async function action('),html.indexOf("$('retry-generation').addEventListener")),context);
  const pending=vm.runInContext("action('/api/control-stage3',{action:'pause'})",context);
  assert.equal(calls,1);timeout();await pending;
  assert.equal(context.busy,false);assert.equal(calls,1);assert.match(message,/提交结果待确认.*不会自动重复提交/);
