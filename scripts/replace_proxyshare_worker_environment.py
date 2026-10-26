@@ -143,7 +143,7 @@ def api_call(base: str, path: str, *, method: str = "GET", body: dict | None = N
 
 def stop_profile_and_wait(base, profile_id, *, api=None, timeout=25):
     """Do not reopen a profile while its previous browser is still closing."""
-    import psutil
+    from selection_automation.profile_single_use import running_profile
     call = api or api_call
     suffix = urllib.parse.urlencode({'user_id': profile_id})
     try:
@@ -154,18 +154,7 @@ def stop_profile_and_wait(base, profile_id, *, api=None, timeout=25):
     deadline = time.monotonic() + timeout
     while True:
         state = call(base, '/api/v1/browser/active?' + suffix, timeout=5).get('data') or {}
-        alive = False
-        for process in psutil.process_iter(['name', 'cmdline']):
-            try:
-                if (str(process.info['name']).lower() == 'flowerbrowser.exe'
-                        and any(arg.startswith('--user-data-dir=') and
-                            (arg.split('=',1)[1].replace('\\','/').rsplit('/',1)[-1].strip(chr(34)) == str(profile_id)
-                             or arg.split('=',1)[1].replace('\\','/').rsplit('/',1)[-1].strip(chr(34)).startswith(str(profile_id)+'_'))
-                            for arg in process.info['cmdline'] or [])):
-                    alive = True
-                    break
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
+        alive = running_profile(profile_id)
         if str(state.get('status', '')).lower() == 'inactive' and not alive:
             return
         if time.monotonic() >= deadline:
@@ -210,9 +199,10 @@ def delete_profile_after_release(base: str, profile_id: str, attempts: int = 60)
         except RuntimeError as error:
             last_error = error
             message = str(error).lower()
-            if (isinstance(error, AdsPowerAPIError) and error.diagnostic["category"] == "CONNECTIVITY") or "无法连接" in message:
-                # Delete may have succeeded before the response was lost. Read back
-                # this exact profile before retrying the idempotent deletion.
+            category = error.diagnostic['category'] if isinstance(error, AdsPowerAPIError) else None
+            if category in {'CONNECTIVITY', 'PROFILE_IN_USE'} or "无法连接" in message:
+                # AdsPower can report "being used" for an already absent profile.
+                # Resolve this exact id before repeating an idempotent deletion.
                 try:
                     result = api_call(base, "/api/v1/user/list?" + urllib.parse.urlencode(
                         {"user_id": profile_id, "page": 1, "page_size": 100}), timeout=12)
@@ -236,7 +226,7 @@ def delete_profile_after_release(base: str, profile_id: str, attempts: int = 60)
                                 return
                 except RuntimeError:
                     pass
-                if attempt >= 2:
+                if attempt >= 2 and category != 'PROFILE_IN_USE':
                     raise
             elif "being used" not in message and "cannot be deleted" not in message:
                 raise

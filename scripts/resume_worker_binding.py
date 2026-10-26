@@ -62,6 +62,8 @@ def mark_rebound_worker(row):
     path=r.ROOT/'runs'/key/'temu/supervisors'/f"{row['name']}.json"
     if not path.exists():return
     state=json.loads(path.read_text(encoding='utf-8'))
+    if state.get('recovery_budget_exhausted'):
+        return  # A repaired driver is not evidence that the site's login wall recovered.
     output=Path(state['output']).resolve() if state.get('output') else None
     if output and output.is_relative_to((r.ROOT/'runs'/key).resolve()):
         progress_path=output/'progress.json'
@@ -73,7 +75,7 @@ def mark_rebound_worker(row):
                     'manual_action_required':False,'automatic_retry':True,'automatic_resume_pending':True,
                     'command_execution_unknown':False,'control_recovery_profile_id':row.get('profile_id')})
     r.atomic_json(path,{**state,'status':'RESUMING','query_status':'RESUMING',
-        'manual_action_required':False,'automatic_retry':True,'automatic_resume_pending':True,'recovery_budget_exhausted':False})
+        'manual_action_required':False,'automatic_retry':True,'automatic_resume_pending':True})
 
 
 def ensure_collector_resumed(base,row):
@@ -133,19 +135,12 @@ def invalid_session(row):
 
 
 def profile_closed(row):
-    import psutil
     import urllib.parse
-    from selection_automation.profile_single_use import closed_used_profile
+    from selection_automation.profile_single_use import closed_used_profile, running_profile
     if closed_used_profile(r.ROOT,row.get('profile_id')):return True
     data=r.api_call(r.api_base(),'/api/v1/browser/active?'+urllib.parse.urlencode({'user_id':row['profile_id']}),timeout=5).get('data') or {}
     if str(data.get('status','')).lower()!='inactive':return False
-    for process in psutil.process_iter(['name','cmdline']):
-        if str(process.info['name']).lower()!='flowerbrowser.exe':continue
-        for arg in process.info['cmdline'] or []:
-            if arg.startswith('--user-data-dir='):
-                folder=arg.split('=',1)[1].replace('\\','/').rsplit('/',1)[-1].strip(chr(34))
-                if folder==row['profile_id'] or folder.startswith(row['profile_id']+'_'):return False
-    return True
+    return not running_profile(row['profile_id'])
 
 
 def repair_waiting(base, row, last_attempt, now=None):

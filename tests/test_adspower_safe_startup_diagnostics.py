@@ -47,12 +47,13 @@ def test_bootstrap_failure_checkpoint_reuses_created_profile(tmp_path,monkeypatc
  assert 'SECRET' not in json.dumps(journal) and not setup.SESSIONS.exists()
 
 @pytest.mark.parametrize('readback',['empty','exists','unknown','malformed'])
-def test_lost_delete_response_requires_exact_profile_absence(readback,monkeypatch):
+@pytest.mark.parametrize('category',['CONNECTIVITY','PROFILE_IN_USE'])
+def test_lost_delete_response_requires_exact_profile_absence(readback,monkeypatch,category):
  calls=[]
  def api(base,path,**kw):
   calls.append((path,kw))
   if 'delete' in path:
-   raise AdsPowerAPIError(path,'CONNECTIVITY','request outcome unconfirmed')
+   raise AdsPowerAPIError(path,category,'request outcome unconfirmed')
   assert '/user/list?' in path and 'user_id=owned-profile' in path
   if readback=='unknown':raise AdsPowerAPIError(path,'CONNECTIVITY','unavailable')
   if readback=='malformed':return {'data':{}}

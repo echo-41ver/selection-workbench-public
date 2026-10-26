@@ -341,7 +341,8 @@ class DeploymentSmokeDiagnosticsTests(unittest.TestCase):
                     events.append('READBACK')
                     return {'data': {'list': []}}
                 return {'code': 0}
-            with patch.dict(sys.modules, {'psutil': psutil}), patch.object(smoke.time, 'sleep'):
+            from selection_automation import profile_single_use
+            with patch.dict(sys.modules, {'psutil': psutil}), patch.object(profile_single_use, 'psutil', psutil), patch.object(smoke.time, 'sleep'):
                 result = smoke._cleanup_flower_profile(folder, 'PRIVATE_PROFILE', driver, 41000, 'loopback',
                                                         api, replacement.stop_profile_and_wait, psutil)
         self.assertTrue(result['ready'])

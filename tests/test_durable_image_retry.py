@@ -89,6 +89,33 @@ def test_legacy_failure_migration_keeps_pair_revision_attempts_and_audit(tmp_pat
     assert e.con.execute("select count(*) from pairs where status='CANDIDATE' and retry_count=3").fetchone()[0]==30
     assert revisions==[r[0] for r in e.con.execute('select pair_revision from pairs')];e.close();lease.release()
 
+
+@pytest.mark.parametrize('recovered', [True, False])
+def test_new_jpeg_compatibility_rechecks_existing_failure_once_without_erasing_pairs(tmp_path, monkeypatch, recovered):
+    e,clock,data=setup(tmp_path)
+    original_download=e._download_image_bytes
+    def prior_failure(product):
+        if product['platform']=='TEMU':raise RuntimeError('invalid image: broken data stream when reading image file')
+        return data
+    e._download_image_bytes=prior_failure;e.process_batch(100)
+    failed=[tuple(r) for r in e.con.execute('select pair_revision,retry_count from pairs')]
+    lease=WatchInstance(e.root);lease.acquire()
+    try:
+        e.migrate_image_retries(lease)
+        assert e.con.execute("select count(*) from pairs where status='WAIT_IMAGE_RETRY'").fetchone()[0]==30
+        assert [tuple(r) for r in e.con.execute('select pair_revision,retry_count from pairs')]==failed
+        hits=[]
+        monkeypatch.setattr(e._image_transport,'read',lambda ref,**kw:hits.append(ref) or (data[:-1]+b'\x65'))
+        if recovered:e._download_image_bytes=original_download
+        e.process_batch(100);e.process_batch(100)
+        assert e.con.execute('select count(*) from image_pair_requeue_history').fetchone()[0]==60
+        assert e.con.execute("select count(*) from image_retry_history where event='JPEG_TRAILER_COMPATIBILITY_RECHECK'").fetchone()[0]==1
+        e.migrate_image_retries(lease)
+        assert e.con.execute("select count(*) from pairs where status=?",('CANDIDATE' if recovered else 'FAILED_IMAGE_ACTION',)).fetchone()[0]==30
+        assert len(hits)==(1 if recovered else 0)
+        assert e.con.execute('select count(*) from image_pair_requeue_history').fetchone()[0]==60
+    finally:e.close();lease.release()
+
 def test_read_only_constructor_does_not_migrate_and_restore_needs_exclusive_writer(tmp_path):
     e,clock,data=setup(tmp_path);product=e._product('t','T0');ref,key=e._image_identity(product)
     e.con.execute('insert into images values(?,?,?,?,?,?,?,?)',(key,ref,None,None,'FAILED',3,'SSL: UNEXPECTED_EOF_WHILE_READING','old'))

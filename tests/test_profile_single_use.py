@@ -25,3 +25,18 @@ def test_closed_used_binding_requires_fresh_replacement(tmp_path):
     reserve_start(tmp_path, 'profile1', lambda: {})
     assert closed_used_profile(tmp_path, 'profile1', lambda _: False)
     assert not closed_used_profile(tmp_path, 'profile1', lambda _: True)
+
+
+@pytest.mark.parametrize('arguments', [
+    ['--user-data-dir', r'C:\.ADSPOWER_GLOBAL\cache\profile1_machine_flower'],
+    ['--user-data-dir', 'C:/cache/profile1_machine'],
+    ['--user-data-dir=C:/cache/profile1'],
+])
+def test_running_profile_recognizes_separate_and_equals_arguments_without_matching_other_ids(monkeypatch, arguments):
+    from types import SimpleNamespace
+    from selection_automation import profile_single_use as profiles
+    monkeypatch.setattr(profiles.psutil, 'process_iter', lambda _fields: [
+        SimpleNamespace(info={'name': 'flowerbrowser.exe', 'cmdline': ['flowerbrowser.exe', *arguments]})])
+    assert profiles.running_profile('profile1')
+    assert not profiles.running_profile('profile')
+    assert not profiles.running_profile('profile2')

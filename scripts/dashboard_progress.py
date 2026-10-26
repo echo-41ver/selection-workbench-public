@@ -56,11 +56,11 @@ def _image_action_metrics(con,has_failed_pairs):
     if not pairs:return metrics
     reasons={}
     for classification in assets.values():reasons[classification]=reasons.get(classification,0)+1
-    labels={'ACTION_INVALID_IMAGE':'图片来源损坏','ACTION_AUTH':'图片来源访问被拒绝',
+    labels={'ACTION_INVALID_IMAGE':'图片当前无法完整解码','ACTION_AUTH':'图片来源访问被拒绝',
             'ACTION_MISSING':'图片来源已不存在','ACTION_TLS':'图片来源证书校验失败','ACTION_UNKNOWN':'图片来源异常'}
     reason='、'.join(dict.fromkeys(labels.get(code,labels['ACTION_UNKNOWN']) for code in sorted(reasons)))
     notice=f'{len(products)} 件商品{reason}，影响 {len(pairs)} 对图片筛选；程序已停止这些图片的自动重试'
-    action='已完成结果和断点已保留。无需重复启动或更改规则；请联系维护者处理图片来源，修复后继续本任务。'
+    action='已完成结果和断点已保留。无需重复启动或更改规则；请联系维护者检查图片下载与解码，修复后继续本任务。'
     metrics.update(image_action_required=True,image_action_products=len(products),image_action_assets=len(assets),
                    image_action_pairs=len(pairs),image_action_reasons=reasons,image_action_notice=notice,
                    image_action_next_step=action,manual_action_required=True,状态=notice,建议动作=action)

@@ -177,6 +177,22 @@ def test_login_recovery_budget_survives_restart_and_profile_change(login_budget_
     assert (f.output() / 'automatic_recovery.json').read_bytes() == before
 
 
+def test_replacement_stop_preserves_exhausted_login_and_query(login_budget_setup, monkeypatch):
+    f=login_budget_setup
+    def stopped(*args, **kwargs):
+        write(f.worker, {'status':'HUMAN_ACTION_REQUIRED','current_query':'mouse',
+            'query_status':'STOPPED_LOGIN_REQUIRED','recovery_budget_exhausted':True,
+            'output':str(f.output()),'unique_goods':0})
+        raise pipeline.WorkerStopRequested()
+    monkeypatch.setattr(pipeline, 'run_collector', stopped)
+    with pytest.raises(RuntimeError, match='incomplete'):
+        f.run()
+    worker=json.loads(f.worker.read_text('utf-8'))
+    assert worker['status']=='PAUSED_FOR_ENVIRONMENT_REPLACEMENT'
+    assert worker['recovery_budget_exhausted'] and worker['query_status']=='STOPPED_LOGIN_REQUIRED'
+    assert worker['current_query']=='mouse' and worker['output']==str(f.output())
+
+
 def test_login_recovery_budget_resets_only_after_real_goods_progress(login_budget_setup):
     f = login_budget_setup
     f.seed()

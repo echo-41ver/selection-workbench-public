@@ -9,6 +9,20 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import resume_worker_binding as binding
 
 
+def test_driver_repair_does_not_erase_exhausted_site_recovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
+    manifest=tmp_path/'sessions.json';manifest.write_text('{"task_key":"task"}')
+    monkeypatch.setattr(binding.r, 'SESSIONS', manifest)
+    folder=tmp_path/'runs/task/temu/supervisors';folder.mkdir(parents=True)
+    path=folder/'worker-01-new.json'
+    path.write_text(json.dumps({'status':'HUMAN_ACTION_REQUIRED',
+        'query_status':'STOPPED_LOGIN_REQUIRED','recovery_budget_exhausted':True,
+        'manual_action_required':True,'unique_goods':0}))
+    before=path.read_bytes()
+    binding.mark_rebound_worker({'name':'worker-01-new'})
+    assert path.read_bytes()==before
+
+
 def test_invalid_session_requires_explicit_driver_error(tmp_path,monkeypatch):
     monkeypatch.setattr(binding.r,'ROOT',tmp_path)
     (tmp_path/'sid').write_text('test-session')

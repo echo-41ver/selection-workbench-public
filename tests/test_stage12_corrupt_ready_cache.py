@@ -90,6 +90,34 @@ def test_download_requires_full_decode(tmp_path, broken_jpeg, monkeypatch):
         engine.close()
 
 
+def test_complete_jpeg_with_observed_cdn_trailer_is_recovered_without_pixel_changes(tmp_path, monkeypatch):
+    valid=jpeg_bytes();original=valid[:-1]+b'\x65'
+    engine=IncrementalStage12(tmp_path/'run', vectorizer=DecodingVectorizer())
+    monkeypatch.setattr(engine._image_transport, 'read', lambda *_a, **_k: original)
+    try:
+        data=engine._download_image_bytes({'platform':'TEMU','main_image_url':'https://t.test/image'})
+        assert data==valid
+        preserved=list(engine.cache.glob('*.original-jpeg'))
+        assert len(preserved)==1 and preserved[0].read_bytes()==original
+        receipt=json.loads(preserved[0].with_suffix('.recovery.json').read_text('utf8'))
+        assert receipt['changed_bytes']==1 and receipt['full_decode_passed']
+        with Image.open(io.BytesIO(data)) as image:image.load()
+    finally:
+        engine.close()
+
+
+def test_jpeg_trailer_recovery_still_rejects_an_invalid_header(tmp_path, monkeypatch):
+    invalid=b'\xff\xd8'+b'not an image'*20+b'\xff\x65'
+    engine=IncrementalStage12(tmp_path/'run', vectorizer=DecodingVectorizer())
+    monkeypatch.setattr(engine._image_transport, 'read', lambda *_a, **_k: invalid)
+    try:
+        with pytest.raises(RuntimeError, match='invalid image'):
+            engine._download_image_bytes({'platform':'TEMU','main_image_url':'https://t.test/image'})
+        assert not list(engine.cache.glob('*.recovery.json'))
+    finally:
+        engine.close()
+
+
 def test_restart_repairs_only_decode_failed_pairs_and_keeps_history(tmp_path, broken_jpeg, monkeypatch):
     engine, key, old_path = seeded_run(tmp_path, broken_jpeg, monkeypatch)
     with engine.con:

@@ -802,7 +802,10 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                 try:
                     return owned_worker(session, items, lease, worker_number)
                 except WorkerStopRequested:
-                    write_worker_state(session["name"], {"status": "PAUSED_FOR_ENVIRONMENT_REPLACEMENT", "browser_preserved": True})
+                    previous = supervisor_root / f"{session['name']}.json"
+                    state = json.loads(previous.read_text('utf-8')) if previous.exists() else {}
+                    write_worker_state(session["name"], {**state,
+                        "status": "PAUSED_FOR_ENVIRONMENT_REPLACEMENT", "browser_preserved": True})
                     return False
         except WorkerStopRequested:
             return False

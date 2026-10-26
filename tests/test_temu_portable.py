@@ -244,8 +244,15 @@ def test_local_rebind_failure_preserves_open_browser(tmp_path,monkeypatch,error)
     assert journal['phase']=='BIND_FAILED' and 'local_binding_recovered' not in journal
 
 
-def test_profile_restart_waits_for_inactive_api_and_actual_process_exit(tmp_path, monkeypatch):
+@pytest.mark.parametrize('profile_arguments', [
+    ['--user-data-dir=C:/profiles/new_flower'],
+    ['--user-data-dir', r'C:\.ADSPOWER_GLOBAL\cache\new_machine_flower'],
+])
+def test_profile_restart_waits_for_inactive_api_and_actual_process_exit(tmp_path, monkeypatch, profile_arguments):
+    from selection_automation import profile_single_use
+    actual_running_profile=profile_single_use.running_profile
     r,events,sessions=replacement_fixture(tmp_path,monkeypatch)
+    monkeypatch.setattr(profile_single_use, 'running_profile', actual_running_profile)
     import psutil
     states=iter(['Active','Inactive','Inactive']);processes=iter([True,True,False]);polls=[]
     def api(base,path,**kwargs):
@@ -255,7 +262,7 @@ def test_profile_restart_waits_for_inactive_api_and_actual_process_exit(tmp_path
         return {'data':{}}
     def processes_now(*args):
         alive=next(processes)
-        return [SimpleNamespace(info={'name':'FlowerBrowser.exe','cmdline':['--user-data-dir=C:/profiles/new_flower']})] if alive else []
+        return [SimpleNamespace(info={'name':'FlowerBrowser.exe','cmdline':profile_arguments})] if alive else []
     monkeypatch.setattr(psutil,'process_iter',processes_now)
     monkeypatch.setattr(r.time,'sleep',lambda _:None)
     r.stop_profile_and_wait('local','new',api=api)

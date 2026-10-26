@@ -835,7 +835,7 @@ class IncrementalStage12:
         return ref, digest(ref)
 
     def _download_image_bytes(self, product: dict[str, Any]) -> bytes:
-        ref, _ = self._image_identity(product)
+        ref, image_key = self._image_identity(product)
         if product.get("local_image_path"):
             data = Path(ref).read_bytes()
         else:
@@ -850,7 +850,24 @@ class IncrementalStage12:
             data = self._image_transport.read(ref,proxy=proxy)
         if len(data) < 100:
             raise RuntimeError(f"image too small: {len(data)} bytes")
-        self._validate_image_bytes(data)
+        try:
+            self._validate_image_bytes(data)
+        except RuntimeError as error:
+            # Observed CDN JPEGs have a complete pixel stream but end in FF65
+            # instead of FFD9. Correct only that trailer, then fully decode it.
+            # Do not enable truncated-image loading or repair arbitrary damage.
+            if not (data.startswith(b'\xff\xd8') and data.endswith(b'\xff\x65')):
+                raise
+            corrected = data[:-1] + b'\xd9'
+            self._validate_image_bytes(corrected)
+            original = self.cache / f'{image_key}.original-jpeg'
+            original.write_bytes(data)
+            original.with_suffix('.recovery.json').write_text(json.dumps({
+                'original': str(original), 'original_decode_error': str(error),
+                'correction': 'JPEG_TERMINAL_FF65_TO_FFD9', 'changed_bytes': 1,
+                'full_decode_passed': True, 'updated_at': utcnow(),
+            }, ensure_ascii=False, indent=2), encoding='utf-8')
+            data = corrected
         return data
 
     @staticmethod
@@ -897,6 +914,15 @@ class IncrementalStage12:
                 if image['image_key'] in active:
                     self.image_retry.legacy(image['image_key'],image['source_ref'],active[image['image_key']],
                         image['retry_count'],image['last_error'] or 'unknown historical image failure')
+                    queued = self.image_retry.get(image['image_key'])
+                    if (queued['status']=='ACTION_REQUIRED'
+                            and 'broken data stream' in str(queued['last_error'])
+                            and not self.con.execute("SELECT 1 FROM image_retry_history WHERE image_key=? AND event='JPEG_TRAILER_COMPATIBILITY_RECHECK'",
+                                (image['image_key'],)).fetchone()):
+                        self.con.execute("UPDATE image_retry_queue SET status='RETRY',next_due=?,lease_until=NULL WHERE image_key=?",
+                            (self.image_retry.clock(),image['image_key']))
+                        self.image_retry._event(image['image_key'],queued['attempts'],
+                            'JPEG_TRAILER_COMPATIBILITY_RECHECK',queued['last_classification'],queued['last_error'])
                     if self.image_retry.get(image['image_key'])['status']=='RETRY':
                         self._wake_image_pairs(image['image_key'],target_status='WAIT_IMAGE_RETRY')
 
@@ -1040,8 +1066,8 @@ class IncrementalStage12:
                     status='FAILED',retry_count=images.retry_count+1,last_error=excluded.last_error,updated_at=excluded.updated_at""",
                     (image_key, ref, None, None, "FAILED", retry_count + 1, str(exc), utcnow()))
                 self.image_retry.finish(image_key,exc)
-                if image_key in self._corrupt_cache_assets and self.image_retry.get(image_key)['status']=='ACTION_REQUIRED':
-                    self._wake_image_pairs(image_key,target_status='FAILED_IMAGE_ACTION')
+                if self.image_retry.get(image_key)['status']=='ACTION_REQUIRED':
+                    self._wake_image_pairs(image_key,target_status='FAILED_IMAGE_ACTION',decode_failures_only=True)
                 errors[image_key]=self.image_retry.deferred(image_key)
             self._inc("image_downloaded", len(successes))
         return errors, time.monotonic() - started

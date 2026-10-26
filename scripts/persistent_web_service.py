@@ -177,8 +177,13 @@ def collection_host(port, category, *, paid=False, preserve_prepared=True):
         failures+=1
         delay=min(60,5*(2**min(failures-1,4)))
         (category.parent/'supervisor_recovery.json').write_text(json.dumps({
-            'launch_mode':'WINDOWS_TASK_SCHEDULER','attempts':failures,'retry_seconds':delay,
+            'launch_mode':'WINDOWS_TASK_SCHEDULER','attempts':failures,'retry_seconds':delay if failures<3 else None,
             'last_exit_code':result.returncode,'updated_at':time.time(),'checkpoints_preserved':True}),encoding='utf-8')
+        if failures >= 3:
+            state.update(状态='自动恢复已停止，原断点已保留',需人工介入=True,
+                建议动作='请在工作台查看当前失败原因；处理后点击“重试准备环境”或“开始 / 继续采集”。')
+            (category.parent/'status.json').write_text(json.dumps(state,ensure_ascii=False),encoding='utf-8')
+            return result.returncode
         time.sleep(delay)
 
 

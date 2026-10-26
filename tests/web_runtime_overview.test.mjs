@@ -48,7 +48,7 @@ test('recorded unfinished layer counts state the remaining work without claiming
 
 test('terminal image-source failures surface in the overview and attention without claiming a batch is pending',()=>{
  const {nodes,context}=setup();
- const notice='1 件商品图片来源损坏，影响 10 对图片筛选；程序已停止这些图片的自动重试';
+ const notice='1 件商品图片当前无法完整解码，影响 10 对图片筛选；程序已停止这些图片的自动重试';
  context.data={active:true,details:{阶段:{stage2:{completed:52770,total:52780,remaining:10,failed:10,waiting:0,
   image_action_required:true,image_action_products:1,image_action_assets:1,image_action_pairs:10,
   manual_action_required:true,状态:notice,建议动作:'已完成结果和断点已保留。请联系维护者处理图片来源，修复后继续本任务。'}}}};

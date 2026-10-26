@@ -70,6 +70,23 @@ def test_fresh_start_crash_reuses_task_profiles_on_retry(tmp_path,monkeypatch):
  assert '--preserve-prepared' not in calls[0] and '--preserve-prepared' in calls[1]
 
 
+def test_independent_collection_host_stops_identical_failures_and_keeps_checkpoint(tmp_path, monkeypatch):
+ monkeypatch.setattr(persistent,'ROOT',tmp_path);monkeypatch.setattr(persistent,'configure_environment',lambda _:None)
+ category=tmp_path/'runs/task/category.json';category.parent.mkdir(parents=True);category.write_text('{}')
+ checkpoint=category.parent/'checkpoint.json';checkpoint.write_text('{"goods":243}')
+ (category.parent/'status.json').write_text(json.dumps({'状态':'失败','原因':'准备环境失败','阶段':{'bootstrap':{'状态':'启动准备失败'}}}))
+ calls=[];waits=[]
+ monkeypatch.setattr(persistent.subprocess,'run',lambda command,**kwargs:calls.append(command) or SimpleNamespace(returncode=1))
+ monkeypatch.setattr(persistent.time,'sleep',lambda seconds:waits.append(seconds))
+ assert persistent.collection_host(8765,category)==1
+ assert len(calls)==3 and waits==[5,10]
+ state=json.loads((category.parent/'status.json').read_text())
+ assert state['需人工介入'] and state['原因']=='准备环境失败' and '已停止' in state['状态']
+ assert state['阶段']['bootstrap']['状态']=='启动准备失败'
+ assert json.loads((category.parent/'supervisor_recovery.json').read_text())['retry_seconds'] is None
+ assert checkpoint.read_text()=='{"goods":243}'
+
+
 def test_repaired_binding_clears_only_its_lane_and_preserves_goods(tmp_path,monkeypatch):
  monkeypatch.setattr(binding.r,'ROOT',tmp_path);manifest=tmp_path/'config/sessions.json';manifest.parent.mkdir();manifest.write_text(json.dumps({'task_key':'task'}));monkeypatch.setattr(binding.r,'SESSIONS',manifest)
  folder=tmp_path/'runs/task/temu/supervisors';folder.mkdir(parents=True);path=folder/'worker-02-new.json';path.write_text(json.dumps({'status':'BINDING_FAILED','unique_goods':82,'current_query':'keyboard'}));other=folder/'worker-01-new.json';other.write_text('{"status":"RUNNING"}');before=other.read_bytes()

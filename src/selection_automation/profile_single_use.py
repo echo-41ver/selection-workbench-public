@@ -17,7 +17,8 @@ def running_profile(profile_id):
                 value = (arg.split('=', 1)[1] if arg.startswith('--user-data-dir=') else
                          args[index + 1] if arg == '--user-data-dir' and index + 1 < len(args) else None)
                 if value:
-                    if Path(value.strip('"')).name.startswith(profile_id + '_'):
+                    folder = value.strip('"').replace('\\', '/').rsplit('/', 1)[-1]
+                    if folder == profile_id or folder.startswith(profile_id + '_'):
                         return True
         except (psutil.Error, OSError):
             continue

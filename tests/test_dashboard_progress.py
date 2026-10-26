@@ -187,7 +187,8 @@ def test_terminal_current_image_source_is_actionable_without_counting_failure_as
     assert row['manual_action_required'] is True
     assert (row['image_action_products'],row['image_action_assets'],row['image_action_pairs'])==(1,1,10)
     assert row['image_action_reasons']=={'ACTION_INVALID_IMAGE':1}
-    assert '1 件商品' in row['状态'] and '图片来源损坏' in row['状态'] and '10 对' in row['状态']
+    assert '1 件商品' in row['状态'] and '图片当前无法完整解码' in row['状态'] and '10 对' in row['状态']
+    assert '来源损坏' not in row['状态']
     assert '停止' in row['状态'] and '自动重试' in row['状态']
     assert '维护' in row['建议动作'] and '日志' not in row['建议动作']
     assert (tmp_path/'stage12.sqlite3').read_bytes()==before
