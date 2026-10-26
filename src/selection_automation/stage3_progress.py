@@ -277,9 +277,10 @@ def snapshot(base, category, *, history=True, on_phase=None):
     base = Path(base)
     def phase(name,**counts):
         if on_phase:on_phase(name,counts)
+    queue=candidates(candidate_path(base))
     phase('读取已保存的Codex复核')
     from .codex_visual_review import load_reviews, supersedes_api, preferred_api_result
-    codex_reviews = load_reviews(base, by_revision=True, category=category)
+    codex_reviews = load_reviews(base, by_revision=True, category=category, current_pairs=queue)
     review_pairs = {identity[:2] for identity in codex_reviews}
     codex_counts = {'SAME':0,'SIMILAR':0,'DIFFERENT':0,'UNKNOWN':0}
     cached = {}
@@ -307,7 +308,6 @@ def snapshot(base, category, *, history=True, on_phase=None):
     parallel = concurrency(stage)
     seen = set()
     phase('读取当前候选文件')
-    queue=candidates(candidate_path(base))
     try: vision_context = VisionRevisionContext(category)
     except (OSError, KeyError, ValueError, TypeError): vision_context = None
     phase('逐对核验当前图片与结果版本',source_candidates=len(queue))

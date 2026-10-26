@@ -186,7 +186,8 @@ def run(args, candidate_path):
         getattr(args, 'candidates', candidate_path), root=ROOT,
         required=args.results.parent.name.casefold() == 'stage123')
     from selection_automation.codex_visual_review import load_reviews
-    codex_reviews = load_reviews(args.results.parent.parent, by_revision=True)
+    codex_reviews = load_reviews(args.results.parent.parent, by_revision=True, category=cat,
+                                current_pairs=rows(candidate_path))
     cached = result_index(args.results)
     authorization=retry_authorizations(args.results.with_name('request_intents.jsonl'),args.results)
     schema_retry=authorization.get('schema_retry')

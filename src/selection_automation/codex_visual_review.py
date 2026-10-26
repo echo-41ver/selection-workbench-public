@@ -63,15 +63,34 @@ def usable_review(category, row):
     return True
 
 
-def load_reviews(base, expected=None, *, by_revision=False, category=None):
+def load_reviews(base, expected=None, *, by_revision=False, category=None, current_pairs=()):
     result = {}
     ranks = {}
+    current = {(row['asin'],row['goods_id']):row for row in current_pairs}
+    originals = {}
+    if category and current:
+        # Saved manifests bind the actual paid input. A price/sales refresh may
+        # reuse its facts only when current image bytes and questions still hash
+        # to that original revision; never rewrite a result or billing record.
+        from .visual_text_evidence import price_sales_only_change
+        from .vision import compatible_vision_keys, VisionRevisionContext
+        originals = {(row['asin'],row['goods_id'],row['vision_revision_key']):row
+                     for path in (Path(base)/'stage123/codex_pool/jobs').glob('*/manifest.jsonl')
+                     for row in read_jsonl(path)}
     for path in review_paths(base):
         modified = path.stat().st_mtime
         for row in read_jsonl(path):
             pair = (row.get('asin'), row.get('goods_id'))
             if row.get('review_source') != SOURCE or row.get('review_status') not in {'SAME','SIMILAR', 'DIFFERENT', 'UNKNOWN'}:
                 raise ValueError('invalid normalized Codex review')
+            prior = originals.get((*pair,row.get('vision_revision_key')))
+            if prior and pair in current and price_sales_only_change(prior,current[pair]):
+                context = VisionRevisionContext(category)
+                bound = {**prior, **{side+'_image_path':current[pair][side+'_image_path'] for side in ('amazon','temu')}}
+                if row['vision_revision_key'] in compatible_vision_keys(category,bound,context=context):
+                    row = {**row,'vision_revision_key':compatible_vision_keys(category,current[pair],context=context)[0],
+                           'reused_from_vision_revision_key':row['vision_revision_key'],
+                           'reuse_basis':'PRICE_SALES_ONLY_ORIGINAL_IMAGES_AND_RULES_MATCH'}
             if expected is None or row.get('vision_revision_key') in expected.get(pair, set()):
                 identity = (*pair,row.get('vision_revision_key')) if by_revision else pair
                 classified = row.get('classified_at')

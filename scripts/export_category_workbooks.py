@@ -549,7 +549,9 @@ def export_snapshot(category_path, kind):
     image_sources = {}
     queue_counts=Counter()
     vision_context = VisionRevisionContext(cat)
+    current_pairs=[]
     for row in jsonl(frozen/f'layer3_candidates_{key}.jsonl'):
+        current_pairs.append(row)
         queue_counts['paid' if admitted(cat,row) else 'review'] += 1
         for side in ('amazon', 'temu'):
             if row.get(f'{side}_image_url') and row.get(f'{side}_image_path'):
@@ -565,7 +567,7 @@ def export_snapshot(category_path, kind):
             elif row.get('api_status')=='failed': failures[identity]=row
     modules=cat['stage3']['modules']; labels=cat['stage3'].get('module_labels',{})
     from selection_automation.codex_visual_review import load_reviews, checked_facts, supersedes_api
-    codex_reviews = load_reviews(base, expected)
+    codex_reviews = load_reviews(base, expected, category=cat, current_pairs=current_pairs)
     for pair, review in codex_reviews.items():
         if pair in results and supersedes_api(cat, review, results[pair]):
             results.pop(pair)

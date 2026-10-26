@@ -390,9 +390,11 @@ def build_report(root, category, *, as_of=None):
         if row['query']==(frontend.get('primary_category_query') or primary_query)),None)
     frozen = base/'stage123/export_frozen'
     candidates = {}
+    current_pairs = []
     try: vision_context = VisionRevisionContext(category)
     except (OSError, KeyError, ValueError, TypeError): vision_context = None
     for row in jsonl(frozen/f'layer3_candidates_{key}.jsonl'):
+        current_pairs.append(row)
         try: candidates[(row['asin'], row['goods_id'])] = set(compatible_vision_keys(category, row, context=vision_context))
         except (OSError, KeyError, ValueError): pass
     from .jsonl_records import read_jsonl
@@ -403,7 +405,7 @@ def build_report(root, category, *, as_of=None):
         identity = (row.get('asin'), row.get('goods_id'))
         if row.get('api_status') == 'success' and row.get('vision_revision_key') in candidates.get(identity, set()):
             results[identity] = preferred_api_result(category, results.get(identity), row)
-    reviews = load_reviews(base, candidates, category=category)
+    reviews = load_reviews(base, candidates, category=category, current_pairs=current_pairs)
     for pair, review in reviews.items():
         if pair in results and supersedes_api(category, review, results[pair]):
             results.pop(pair)

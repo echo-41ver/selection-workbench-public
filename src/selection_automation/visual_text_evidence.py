@@ -1,6 +1,7 @@
 """Existing recorded product text, explicitly untrusted and bound to its side."""
 import json
 import re
+from copy import deepcopy
 
 _BUSINESS_LABEL = re.compile(r'review|rating|rank|price|sales|sold|stock|warranty|upc|global trade|评分|评论|销量|价格|促销', re.I)
 
@@ -40,3 +41,22 @@ def used_product_text(pair):
     if not any(values.values()):return None
     return {side:({k:v for k,v in evidence.items() if k!='provenance'} if evidence else None)
             for side,evidence in values.items()}
+
+
+def price_sales_only_change(previous, current):
+    """Keep every design/specification field; ignore only whole price/sales lines."""
+    left, right = (deepcopy(used_product_text(pair)) for pair in (previous,current))
+    if left == right or left is None or right is None:
+        return False
+    for text in (left,right):
+        for evidence in text.values():
+            fields = (evidence or {}).get('recorded_fields',{})
+            card = fields.get('card_text')
+            if not isinstance(card,str):
+                continue
+            lines = card.splitlines()
+            fields['card_text'] = '\n'.join(line for index,line in enumerate(lines)
+                if not re.fullmatch(r'(?:Original price\s+)?\$\s*[\d,.]+|[\d,.]+[KM]?\+?\s*sold|sold',line.strip(),re.I)
+                and not (re.fullmatch(r'[\d,.]+[KM]?\+?',line.strip(),re.I)
+                         and index+1<len(lines) and lines[index+1].strip().lower()=='sold'))
+    return left == right

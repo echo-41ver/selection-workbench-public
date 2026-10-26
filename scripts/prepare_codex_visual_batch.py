@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 from selection_automation.category_config import load_category
-from selection_automation.codex_visual_review import SOURCE, checked_facts, normalize_review
+from selection_automation.codex_visual_review import checked_facts, normalize_review, load_reviews
 from selection_automation.stage3_admission import admitted, threshold
 from selection_automation.vision import VisionRevisionContext, compatible_vision_keys
 
@@ -77,18 +77,13 @@ def _existing_current_results(category, base: Path, current_keys, payload_by_pai
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             completed.add(pair)
-    review_dir = base / 'stage123' / 'codex_reviews'
-    for path in sorted(review_dir.glob('*.jsonl')) if review_dir.is_dir() else ():
-        for _, row in _jsonl(path) or ():
-            pair = (row.get('asin'), row.get('goods_id'))
-            if (row.get('review_source') == SOURCE and row.get('review_status') in {'SAME','SIMILAR', 'DIFFERENT', 'UNKNOWN'}
-                    and compatible(pair, row.get('vision_revision_key'))):
-                try:
-                    bound = {**payload_by_pair[pair], 'vision_revision_key': row['vision_revision_key']}
-                    normalize_review(category, row, bound, row.get('task_id') or 'existing')
-                except (OSError, ValueError, KeyError, TypeError):
-                    continue
-                completed.add(pair)
+    for pair,row in load_reviews(base,current_keys,category=category,current_pairs=payload_by_pair.values()).items():
+        try:
+            bound = {**payload_by_pair[pair], 'vision_revision_key': row['vision_revision_key']}
+            normalize_review(category, row, bound, row.get('task_id') or 'existing')
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        completed.add(pair)
     return completed
 
 
