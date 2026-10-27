@@ -388,6 +388,28 @@ def test_restored_history_requires_complete_retired_source_data(tmp_path, monkey
     assert completed_checkpoint(run.root, run.base, run.cat) is None
 
 
+def test_restored_complete_history_initializes_fresh_install_identity_without_bootstrap(tmp_path, monkeypatch):
+    import watch_temu_union
+    real_identity=selection.identity
+    run=LocalRun(tmp_path,monkeypatch)
+    retired_checkpoint(run)
+    (run.root/'runtime/profile_retirement/receipt.json').unlink()
+    (run.root/'runtime/machine.json').unlink()
+    selection.save(run.root/'runtime/web-console/state.json', {
+        'category_key':run.cat['category_key'], 'explicitly_restored':True})
+    monkeypatch.setattr(selection,'identity',real_identity)
+    monkeypatch.setattr(watch_temu_union,'watch_health',lambda base:{'状态':'已更新','阻断':False})
+    def stop_after_resume():
+        assert selection.read(run.base/'status.json')['阶段']['bootstrap']['状态']=='采集已完成，仅续接汇总、分析和导出'
+        run.command('stop')
+    run.on_sleep=stop_after_resume
+    selection.request_start(run.category,run.cat,run.base,False,background=False)
+    selection.supervise(run.category,False)
+    assert selection.read(run.root/'runtime/machine.json')['id']
+    assert not (run.root/'config/sessions.json').exists()
+    assert not ({'bootstrap','binding_recovery','amazon','worker-01','cleanup'} & {row['name'] for row in run.spawns})
+
+
 @pytest.mark.parametrize('broken', ['unfinished_plan','unfinished_pass','missing_pass','new_query',
                                   'amazon_details','amazon_rank','amazon_listing','missing_source',
                                   'foreign_machine','foreign_task','foreign_receipt_path','wrong_deleted_profile',

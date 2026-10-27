@@ -1088,6 +1088,7 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                 return
             from company_setup import ensure_company
             ensure_company(start=False)
+            identity()
             from selection_automation.completed_collection import completed_checkpoint, unchanged
             analysis_resume=completed_checkpoint(ROOT,base,cat)
             if analysis_resume:
