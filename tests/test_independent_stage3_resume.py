@@ -83,6 +83,24 @@ def test_qualified_saved_facts_win_over_earlier_decision_only_success(tmp_path, 
     assert prepare_batch(path, skip_empty=True)['selected'] == 0
 
 
+@pytest.mark.parametrize('mode', ['multimodal_api', 'local_model'])
+def test_decision_checkpoint_cannot_complete_a_requested_full_visual_analysis(tmp_path, monkeypatch, mode):
+    cat, base, path, pair, result = saved_success(tmp_path, monkeypatch, mode='liquid_d1')
+    before = (base / 'stage123/results.jsonl').read_bytes()
+    apply(cat, settings({'mode': mode, 'protocol': 'responses', 'workers': 1,
+                         **({'base_url': 'http://127.0.0.1:18181/v1'} if mode == 'local_model' else {})}))
+    path.write_text(json.dumps(cat), encoding='utf-8')
+    current = snapshot(base, cat, history=False)
+    assert current['pending'] == 1 and current['completed'] == 0
+    assert result['vision_revision_key'] not in compatible_vision_keys(cat, pair)
+    assert (base / 'stage123/results.jsonl').read_bytes() == before
+    full = {**result, 'vision_revision_key': compatible_vision_keys(cat, pair)[0],
+            'visual_facts': facts(cat, 8, 6, complete=False)}
+    with (base / 'stage123/results.jsonl').open('a', encoding='utf-8') as stream:
+        stream.write(json.dumps(full) + '\n')
+    assert snapshot(base, cat, history=False)['pending'] == 0
+
+
 def test_valid_codex_unknown_is_already_complete_for_agent(tmp_path, monkeypatch):
     from selection_automation.codex_visual_review import import_reviews
     from test_codex_visual_review import fixture
