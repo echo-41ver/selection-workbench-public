@@ -40,7 +40,7 @@ def test_extracted_package_uses_and_checks_bundled_dependencies(corrupt):
         if corrupt:
             (assets / 'models/resnet50-11ad3fa6.pth').write_bytes(b'TEST_ONLY_CORRUPTED')
         files = builder.bundled_assets(source)
-        for name in ('install.ps1', 'scripts/deployment_guard.ps1', 'requirements.lock.txt',
+        for name in ('install.ps1', 'scripts/deployment_guard.ps1', 'scripts/setup_local_d1.ps1', 'requirements.lock.txt',
                      'package-lock.json', 'scripts/company_setup.py', 'web/index.html'):
             files[name] = (ROOT / name).read_bytes()
         package = base / 'fixture.zip'
@@ -56,6 +56,7 @@ function Has-VCRuntime { return $true }
 function Ensure-NetworkClient { }
 function Find-NodeToolchain { return [pscustomobject]@{Directory=$env:TEMP;Npm='TEST_ONLY_NPM';Npx='TEST_ONLY_NPX'} }
 function Get-CimInstance { return @() }
+function Get-NetTCPConnection { return @() }
 function Checked {
  param([string]$Exe,[string[]]$Arguments)
  [pscustomobject]@{exe=$Exe;arguments=@($Arguments)} | ConvertTo-Json -Compress | Add-Content -LiteralPath $env:COMMAND_LOG -Encoding UTF8

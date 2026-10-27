@@ -445,6 +445,8 @@ if (-not $SkipAdsPower) {
 $stage = '导入已确认的公司配置'
 if ($CompanyConfig) { Checked $python @('scripts/company_setup.py','--import-file',$CompanyConfig) }
 $stage = '运行准备检查'
+& (Join-Path $root 'scripts\setup_local_d1.ps1')
+if ($LASTEXITCODE -ne 0) { throw '本机 D1 服务准备失败，请使用一键导出诊断记录。' }
 Checked $python @('scripts/company_setup.py','--prepare-kernel')
 Checked $python @('scripts/generate_agent_config.py')
 Checked $python @('scripts/selection.py','doctor')

@@ -147,6 +147,7 @@ def test_actual_installer_flow_with_only_fake_commands(tmp_path, mode):
     import shutil
     (tmp_path / 'scripts').mkdir()
     shutil.copy2(ROOT / 'scripts/deployment_guard.ps1', tmp_path / 'scripts/deployment_guard.ps1')
+    shutil.copy2(ROOT / 'scripts/setup_local_d1.ps1', tmp_path / 'scripts/setup_local_d1.ps1')
     for relative in ['requirements.lock.txt', 'package-lock.json', 'scripts/company_setup.py', 'web/index.html']:
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,6 +178,7 @@ function Has-VCRuntime { return $true }
 function Ensure-NetworkClient { }
 function Find-NodeToolchain { return [pscustomobject]@{Directory=$env:TEMP;Npm='TEST_ONLY_NPM';Npx='TEST_ONLY_NPX'} }
 function Get-CimInstance { return @() }
+function Get-NetTCPConnection { return @() }
 function Checked {
  param([string]$Exe,[string[]]$Arguments)
  if ($Exe -eq 'TEST_ONLY_PYTHON') {
