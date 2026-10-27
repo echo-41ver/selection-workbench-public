@@ -273,6 +273,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
     if not authorized():return
     from selection_automation.stage3_provider import from_category, request_key, VisualClient
     provider=from_category(cat)
+    from selection_automation.local_d1 import native_endpoint
+    native_d1=native_endpoint(provider)
     if provider['mode']=='multimodal_api' and 'reasoning_effort' in provider:
         initial_effort=provider['reasoning_effort']
         if initial_effort!='default':
@@ -288,8 +290,6 @@ def consume(args, cat, fatal_file, key_identity, pending):
             raise SystemExit('API鉴权、余额或请求参数被拒绝，已暂停；请修正当前方案后继续')
         if not schema_retry:fatal_file.unlink()
     pending = chain([first], pending)
-    from selection_automation.stage3_provider import from_category, request_key, VisualClient
-    provider=from_category(cat)
     try: key=request_key(provider)
     except ValueError as exc: raise SystemExit(str(exc)) from None
     endpoint = provider['base_url']
@@ -344,7 +344,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
             else:
                 grid=cached_image_url(batch[0]['temu_image_path'])
                 content += [{'type':'input_image','image_url':grid,'detail':'high'}]
-            content += [evidence_block(row,'temu',identity) for identity,row in zip(ids,batch)]
+            content += [evidence_block(row,'temu','TEMU候选' if native_d1 and len(batch)==1 else identity)
+                        for identity,row in zip(ids,batch)]
             prompt, schema = protocol(cat, len(batch))
             if len(batch)>1:prompt+='\n本组图片只有 Amazon 基准原图和 TEMU 编号拼图；Cxx 标签位于每格上方，按标签与商品记录对应。逐格独立比较，不做候选互比。'
             if provider['protocol']=='decisions':
@@ -372,8 +373,9 @@ def consume(args, cat, fatal_file, key_identity, pending):
                     return
                 requests += 1
             if client_setup_error is not None:raise client_setup_error
-            prepared_data=(client.prepare(content,prompt,candidate_ids=ids) if provider['protocol']=='decisions' and len(batch)>1
-                           else client.prepare(content,prompt))
+            reference={'reference_id':batch[0]['asin']} if native_d1 else {}
+            prepared_data=(client.prepare(content,prompt,candidate_ids=ids,**reference) if provider['protocol']=='decisions' and len(batch)>1
+                           else client.prepare(content,prompt,**reference))
             if input_guard is not None and not input_guard.allows(batch):
                 return
             if schema_retry:
@@ -572,6 +574,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 limits=Limits(max_connections=capacity,max_keepalive_connections=min(capacity,256))))
             from selection_automation.match_criteria import enabled
             options={'criteria':cat['match_criteria']} if enabled(cat) else {}
+            if native_d1:options['identity_policy']=stage.get('identity_policy')
             client=resources.enter_context(VisualClient(provider,transport,key,api_timeout,**options))
         except Exception as exc:
             # Preserve local NO_CHARGE bookkeeping, without a sent intent.

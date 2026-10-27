@@ -239,7 +239,7 @@ def test_native_decision_questions_and_score_are_split_by_layer(products):
     from selection_automation.stage3_provider import VisualClient,settings,decision_score
     cat=configured(products);provider=settings({'mode':'liquid_d1','model':'d1'})
     cat['stage3']['provider']=provider
-    client=VisualClient.__new__(VisualClient);client.provider=provider;client.criteria=cat['match_criteria']
+    client=VisualClient(provider,None,'',30,criteria=cat['match_criteria'])
     content=[{'type':'input_image','image_url':'data:image/png;base64,A'},{'type':'input_image','image_url':'data:image/png;base64,B'}]
     data=client.prepare(content,'比较')
     questions=json.loads(data)['questions']

@@ -61,7 +61,13 @@ def parse_visual_response(text: str, *, allow_preamble: bool = False) -> dict:
 def protocol(category: dict, count: int) -> tuple[str, dict]:
     if isinstance(category.get('stage3',{}).get('provider'),dict) and category['stage3']['provider'].get('protocol')=='decisions':
         from .stage3_provider import decision_instructions
-        return decision_instructions(category),{'decision_protocol_version':'product-choice-v2'}
+        contract={'decision_protocol_version':'product-choice-v2'}
+        from .local_d1 import native_endpoint,IDENTITY_CONDITIONS
+        from .match_criteria import automatic_identity_conditions
+        if native_endpoint(category['stage3']['provider']) and automatic_identity_conditions(category):
+            contract['automatic_identity_conditions']=IDENTITY_CONDITIONS
+            contract['reference_observations_revision']=category['match_criteria'].get('revision')
+        return decision_instructions(category),contract
     from .match_criteria import enabled
     if enabled(category):
         from .compact_visual import protocol as compact_protocol

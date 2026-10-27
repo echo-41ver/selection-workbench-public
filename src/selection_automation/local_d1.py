@@ -18,6 +18,7 @@ MAX_QUESTIONS = 10
 MAX_IMAGE_BASE64 = 8_000_000
 MAX_IMAGE_PIXELS = 16_000_000
 PRESENTATION = 'local-d1-amazon-left-temu-right-png-v1'
+IDENTITY_CONDITIONS = 'native-identity-conditions-v2-single-reference'
 IMAGE_BASE64_LIMIT_CODE = 'LOCAL_D1_IMAGE_BASE64_LIMIT'
 IMAGE_BASE64_LIMIT_REASON = '双图 PNG 超过本机 D1 的 image_base64 长度限制；未压缩删减、未发送请求'
 IMAGE_BASE64_LIMIT_MESSAGE = ('图片过大，超出本机 D1 接收上限，已暂停；本次未发送请求，没有远程费用。'
@@ -89,8 +90,8 @@ def discover(base, get_json):
 
 
 def question_batch_limit(category):
-    from .match_criteria import selected
-    per_pair = 1 + len(selected(category, 'visual'))
+    from .match_criteria import selected,automatic_identity_conditions
+    per_pair = 1 + len(selected(category, 'visual')) + len(automatic_identity_conditions(category))
     if per_pair > MAX_QUESTIONS:
         raise LocalD1InputError(f'本机 D1 每次最多 {MAX_QUESTIONS} 题；单个商品对需要 {per_pair} 题。'
                                 '已保留全部规则，未发送请求；请选择能承载完整规则的分析方案。')

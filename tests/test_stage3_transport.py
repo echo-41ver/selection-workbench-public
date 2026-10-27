@@ -76,3 +76,40 @@ def test_local_service_sends_no_preflight_inference(monkeypatch):
     with transport.create_transport({'mode': 'local_model', 'base_url': 'http://127.0.0.1:11434/v1'}, timeout=600, limits=None) as selected:
         assert selected is created[0]
     assert not calls
+
+
+def test_native_d1_survives_server_closing_a_reused_connection():
+    import socket
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from httpx2 import Limits
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+
+        def do_GET(self):
+            if getattr(self, 'served', False):
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
+            self.served = True
+            self.send_response(200)
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            self.wfile.write(b'OK')
+
+        def log_message(self, *args):
+            pass
+
+    with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f'http://127.0.0.1:{server.server_port}'
+        provider = {'mode': 'local_model', 'protocol': 'decisions', 'base_url': base+'/v1/decide'}
+        try:
+            with transport.create_transport(provider, timeout=3, limits=Limits(max_connections=1)) as client:
+                assert client.get(base+'/health').text == 'OK'
+                assert client.get(base+'/health').text == 'OK'
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)

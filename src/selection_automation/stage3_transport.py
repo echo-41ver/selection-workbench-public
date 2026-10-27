@@ -18,9 +18,14 @@ def transport_options(provider):
 @contextmanager
 def create_transport(provider, *, timeout, limits):
     from openai import DefaultHttpxClient
-    from httpx2 import HTTPError, Timeout
+    from httpx2 import HTTPError, Limits, Timeout
 
     options = transport_options(provider)
+    if provider['mode'] == 'local_model':
+        from .local_d1 import native_endpoint
+        if native_endpoint(provider):
+            # The Windows D1 server can reset a previously used HTTP connection.
+            limits = Limits(max_connections=limits.max_connections, max_keepalive_connections=0)
     client = DefaultHttpxClient(**options, timeout=timeout, limits=limits)
     if provider['mode'] == 'local_model':
         with client:

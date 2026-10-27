@@ -40,10 +40,123 @@ def content():
             {'type': 'input_image', 'image_url': image_url('blue', (420, 300))}]
 
 
+@pytest.mark.parametrize('mode, includes_policy', [('auto', True), ('selected', False)])
+def test_native_wire_preserves_auto_identity_rules_and_explicit_selection_boundary(mode, includes_policy):
+    from selection_automation.stage3_provider import decision_instructions
+    rule = '明确透明、半透明、不透明互斥为身份冲突；不凭光照猜测透明度'
+    category = {'category_name_zh': '浴帘', 'stage3': {'identity_policy': {
+        'product_scope': '单件浴帘帘体，不含杆和挂钩',
+        'features': [{'id': 'body_transparency', 'label': '主体透明度',
+                      'role': 'identity', 'evidence': 'both', 'rule': rule}]}},
+        'match_criteria': {'schema_version': 'amazon-match-criteria-v1',
+                           'enabled': True, 'visual_mode': mode, 'items': []}}
+    client = VisualClient(provider(), None, '', 30, criteria=category['match_criteria'])
+    payload = json.loads(client.prepare(content(), decision_instructions(category)))
+    instructions = payload['questions']['same_product']['instructions']
+    assert (rule in instructions) is includes_policy
+    assert ('单件浴帘帘体，不含杆和挂钩' in instructions) is includes_policy
+
+
 def criteria(count):
     return {'schema_version': 'amazon-match-criteria-v1', 'enabled': True, 'items': [
         {'id': f'condition_{i}', 'selected': True, 'kind': 'visual', 'label': f'条件{i}',
          'rule': f'完整视觉规则{i}不得删除'} for i in range(count)]}
+
+
+def automatic_category():
+    return {'category_name_zh':'浴帘','stage3':{'provider':provider(),'modules':{'body':100},
+        'identity_policy':{'product_scope':'浴帘帘体','features':[
+            {'id':'body_pattern','label':'主体图案','role':'identity','evidence':'image',
+             'scope':'实际帘面','rule':'实际印花图案与布局一致；广告字和背景不算印花',
+             'required_visual':True},
+            {'id':'allowed_color','label':'允许颜色变化','role':'variant','evidence':'image',
+             'scope':'主体表面','rule':'仅颜色可以改变','required_visual':False}]}},
+        'match_criteria':{'schema_version':'amazon-match-criteria-v1','enabled':True,
+            'visual_mode':'auto','revision':'reference-facts-v1','items':[
+                {'id':'visual_pattern','kind':'visual','selected':False,'label':'图案',
+                 'dimension':'pattern_content','observations':[
+                     {'asin':'A1','value':'帘面无印花','image':True},
+                     {'asin':'A2','value':'另一商品的花朵印花','image':True}]}]}}
+
+
+def test_automatic_native_wire_uses_only_this_asins_reviewed_facts_and_identity_rules():
+    from selection_automation.stage3_provider import decision_instructions
+    category=automatic_category()
+    client=VisualClient(provider(),None,'',30,criteria=category['match_criteria'],
+                        identity_policy=category['stage3']['identity_policy'])
+    payload=json.loads(client.prepare(content(),decision_instructions(category),reference_id='A1'))
+    assert set(payload['questions'])=={'same_product','same_product__condition__body_pattern'}
+    reference=payload['state']['amazon_image_observations']
+    assert reference['asin']=='A1' and reference['facts']==[
+        {'dimension':'pattern_content','label':'图案','value':'帘面无印花'}]
+    assert '参考事实' in reference['source']
+    assert '实际帘面' in payload['questions']['same_product__condition__body_pattern']['instructions']
+    assert '完整视觉规则' not in payload['questions']['same_product']['criteria']['same']
+    category['match_criteria']['visual_mode']='selected'
+    selected_client=VisualClient(provider(),None,'',30,criteria=category['match_criteria'],
+                                 identity_policy=category['stage3']['identity_policy'])
+    selected_payload=json.loads(selected_client.prepare(content(),'仅明确勾选项',reference_id='A1'))
+    assert set(selected_payload['questions'])=={'same_product'}
+
+
+@pytest.mark.parametrize('probability,state',[(.94,'不同款'),(.897,'待补充证据')])
+def test_automatic_identity_conflict_resolves_without_lowering_probability_threshold(probability,state):
+    category=automatic_category()
+    facts={'decision_api':{'choice':'different','probabilities':{'same':.2,'different':.45,'similar':.35},
+        'conditions':{'body_pattern':{'choice':'different','probabilities':
+            {'same':(1-probability)/2,'different':probability,'unknown':(1-probability)/2}}}}}
+    result=decision_score(category,facts)
+    assert result['state']==state
+    assert category['stage3']['provider']['confidence']==.9
+    if state=='不同款':
+        assert result['hard_conflicts']==['body_pattern']
+        assert result['overall_confidence']==pytest.approx(.94)
+        assert '主体图案' in result['reason']
+
+
+def test_automatic_positive_does_not_overrule_an_unresolved_required_identity_feature():
+    category=automatic_category()
+    facts={'decision_api':{'choice':'same','probabilities':{'same':.96,'different':.02,'similar':.02},
+        'conditions':{'body_pattern':{'choice':'unknown','probabilities':
+            {'same':.2,'different':.2,'unknown':.6}}}}}
+    assert decision_score(category,facts)['state']=='待补充证据'
+
+
+def test_native_preflight_counts_all_automatic_identity_conditions():
+    category=automatic_category()
+    feature=category['stage3']['identity_policy']['features'][0]
+    category['stage3']['identity_policy']['features']=[{**feature,'id':f'f{i}'} for i in range(10)]
+    with pytest.raises(d1.LocalD1InputError,match='单个商品对需要 11 题'):
+        d1.question_batch_limit(category)
+
+
+def test_automatic_native_reply_preserves_feature_evidence_and_one_request_usage():
+    category=automatic_category();sent=[]
+    class Transport:
+        def post(self,address,**request):
+            sent.append(json.loads(request['content']))
+            return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'answers':{
+                'same_product':{'choice':'different','probabilities':{'same':.2,'different':.45,'similar':.35}},
+                'same_product__condition__body_pattern':{'choice':'different','probabilities':
+                    {'same':.02,'different':.94,'unknown':.04}}},'usage':{'input_tokens':1234,'output_tokens':0}})
+    client=VisualClient(provider(),Transport(),'',30,criteria=category['match_criteria'],
+                        identity_policy=category['stage3']['identity_policy'])
+    data=client.prepare(content(),'完整品类规则',reference_id='A1')
+    response=client.create(input=[{'content':content()}],instructions='完整品类规则',_prepared_data=data)
+    facts=json.loads(response.output_text)['decision_facts']
+    assert len(sent)==1 and response.usage.model_dump()=={'input_tokens':1234,'output_tokens':0}
+    assert decision_score(category,facts)['state']=='不同款'
+    assert facts['decision_api']['conditions']['body_pattern']['probabilities']['different']==.94
+
+
+def test_native_automatic_evidence_has_a_distinct_checkpoint_contract():
+    from selection_automation.vision import protocol
+    category=automatic_category()
+    contract=protocol(category,1)[1]
+    assert contract['automatic_identity_conditions']=='native-identity-conditions-v2-single-reference'
+    assert contract['reference_observations_revision']=='reference-facts-v1'
+    category['stage3']['provider']=settings({'mode':'liquid_d1','model':'d1'})
+    assert protocol(category,1)[1]=={'decision_protocol_version':'product-choice-v2'}
 
 
 def test_native_discovery_requires_health_and_exact_openapi_without_inference():
@@ -219,6 +332,7 @@ def test_native_consumer_keeps_original_pairs_and_reuses_paid_checkpoint(tmp_pat
                 assert image.crop((0, 48, 400, 288)).getextrema() == ((255, 255), (0, 0), (0, 0))
                 assert image.crop((416, 48, 836, 348)).getextrema() == ((0, 0), (0, 0), (255, 255))
             records = payload['state']['records']
+            assert records[-1].startswith('TEMU候选 商品记录')
             record = json.loads(records[-1].split('\n', 1)[1])
             calls.append(record['product_id'])
             return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {

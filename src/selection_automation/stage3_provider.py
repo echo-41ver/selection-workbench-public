@@ -205,11 +205,14 @@ def decision_score(category, facts):
 
 def decision_instructions(category):
     from .match_criteria import enabled,comparison_prompt
-    if enabled(category):return comparison_prompt(category,native=True)
-    from .identity import PROMPT
     stage=category['stage3']
     policy={'品类':category.get('category_name_zh'), '整体身份规则':stage.get('identity_policy'),
             '允许变体':stage.get('variant_fields',[]),'补充规则':stage.get('prompt_override') or stage.get('prompt') or ''}
+    if enabled(category):
+        prompt=comparison_prompt(category,native=True)
+        return prompt+('\n品类规则：'+json.dumps(policy,ensure_ascii=False)
+                       if category['match_criteria'].get('visual_mode')=='auto' else '')
+    from .identity import PROMPT
     return (PROMPT+'\n当前采用三选一：same同款、similar相似款、different不同款。只比较这一个商品对。'
         '\n相似款指款式相近但尚不满足同一整体基础款；证据看不清或矛盾时不要给高置信度，程序将低概率结果保留待核验。'
         '\n品类规则：'+json.dumps(policy,ensure_ascii=False))
@@ -217,9 +220,14 @@ def decision_instructions(category):
 
 class VisualClient:
     """Keep the existing consumer's billing/retry contract across API protocols."""
-    def __init__(self, provider, transport, key, timeout,criteria=None):
+    def __init__(self, provider, transport, key, timeout,criteria=None,identity_policy=None):
         self.provider, self.transport, self.key = provider, transport, key
         self.criteria=criteria
+        from .local_d1 import native_endpoint
+        from .match_criteria import automatic_identity_conditions
+        self.automatic_conditions=(automatic_identity_conditions(
+            {'match_criteria':criteria,'stage3':{'identity_policy':identity_policy or {}}})
+            if native_endpoint(provider) else [])
         self.timeout_seconds=getattr(timeout,'read',timeout) or 600
         self.responses = self
         self.openai = None
@@ -306,7 +314,7 @@ class VisualClient:
         return SimpleNamespace(id=raw.get('id'), usage=SimpleNamespace(model_dump=lambda: usage), status='completed',
                                output_text=json.dumps(result), incomplete_details=None)
 
-    def prepare(self, content, instructions, candidate_ids=None):
+    def prepare(self, content, instructions, candidate_ids=None,reference_id=None):
         """Validate the complete native payload before recording a sent request."""
         if self.provider['protocol']!='decisions':return None
         images = [b['image_url'] for b in content if b['type'] == 'input_image']
@@ -325,19 +333,40 @@ class VisualClient:
             question=payload['questions']['same_product']
             payload['state'].update(image_2='TEMU 编号拼图',candidate_ids=candidate_ids)
             payload['questions']={identity:{**question,'instructions':instructions+'\n只比较图片1的 Amazon 与图片2中编号 '+identity+' 的候选，忽略其它格子。'} for identity in candidate_ids}
+        if self.automatic_conditions and reference_id is not None:
+            observations=[{'dimension':item['dimension'],'label':item['label'],'value':observation['value']}
+                          for item in self.criteria['items'] if item['kind']=='visual'
+                          for observation in item.get('observations',[])
+                          if observation.get('asin')==reference_id and observation.get('image')]
+            payload['state']['amazon_image_observations']={'asin':reference_id,'facts':observations,
+                'source':'本批Amazon实际主图已提取的参考事实，不是额外强制条件；仍以本次真实图片及品类身份规则为准。'}
         from .match_criteria import selected
         conditions=selected({'match_criteria':getattr(self,'criteria',None)},'visual')
-        if conditions:
+        if conditions or self.automatic_conditions:
             for identity,question in list(payload['questions'].items()):
-                question['criteria']={'same':'出售主体和已勾选身份条件一致，未选项差异不否决',
-                    'different':'出售主体或已选条件存在明确不同','similar':'证据不足以证明同一基础款'}
+                if conditions:
+                    question['criteria']={'same':'出售主体和已勾选身份条件一致，未选项差异不否决',
+                        'different':'出售主体或已选条件存在明确不同','similar':'证据不足以证明同一基础款'}
                 for condition in conditions:
                     payload['questions'][identity+'__condition__'+condition['id']]={'type':'choice',
                         'instructions':question['instructions']+'\n本题只核实已勾选条件：'+condition['label']+'。'+condition['rule'],
                         'criteria':{'same':'双方证据均清楚且该项一致','different':'双方证据均清楚且该项不同','unknown':'任一方未提供、不可读、被遮挡或不能可靠比较'}}
-        from .local_d1 import native_endpoint,prepare_payload
+                for feature in self.automatic_conditions:
+                    payload['questions'][identity+'__condition__'+feature['id']]={'type':'choice',
+                        'instructions':'参考已核对的Amazon实际主图事实，比较左侧Amazon与右侧TEMU出售主体的'+feature['label']+'。'
+                            +('只比较右侧编号 '+identity+' 的候选，忽略其他格子。' if candidate_ids else '')+
+                            '仅核实本条身份规则，不要求其他观察属性一致。忽略图片背景、广告字、赠品与光照。'
+                            '\n部位：'+feature['scope']+'\n本条完整规则：'+feature['rule'],
+                        'criteria':{'same':'双方的实际特征满足本条一致性规则。',
+                                    'different':'双方实际特征存在明确违反本条规则的差异。',
+                                    'unknown':'对应主体部位或其特征确实无法可靠判断。'}}
+        from .local_d1 import native_endpoint,prepare_payload,IDENTITY_CONDITIONS
         if native_endpoint(self.provider):
             payload,metadata=prepare_payload(payload,self.provider)
+            if self.automatic_conditions:
+                metadata.update(automatic_identity_conditions=IDENTITY_CONDITIONS,
+                    identity_feature_ids=[feature['id'] for feature in self.automatic_conditions],
+                    reference_asin=reference_id)
             self.last_prepare_metadata=metadata
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         if not native_endpoint(self.provider) and len(data) >= 4_500_000:

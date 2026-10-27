@@ -201,6 +201,12 @@ def enabled(category):
     return value.get('schema_version')==SCHEMA and value.get('enabled') is True
 
 
+def automatic_identity_conditions(category):
+    if not enabled(category) or category['match_criteria'].get('visual_mode')!='auto':return []
+    return [feature for feature in category.get('stage3',{}).get('identity_policy',{}).get('features',[])
+            if feature['role']=='identity' and feature['evidence'] in {'image','both'}]
+
+
 def attach(category,catalog):
     category['match_criteria']=catalog
     category['stage3']['match_criteria_revision']=catalog['revision']
@@ -403,7 +409,10 @@ def score(category,facts,result):
 def decision_conditions_score(category,facts,result):
     import math
     conditions=selected(category,'visual');answers=facts['decision_api'].get('conditions') or {}
-    if category['match_criteria'].get('visual_mode')=='auto' and not conditions:return result
+    auto=category['match_criteria'].get('visual_mode')=='auto'
+    if auto:
+        if not answers:return result
+        conditions=conditions+automatic_identity_conditions(category)
     threshold=category['stage3'].get('provider',{}).get('confidence',.9)
     hard=[];unknown=[];comparisons={}
     for condition in conditions:
@@ -418,8 +427,20 @@ def decision_conditions_score(category,facts,result):
         relation='DIFFERENT' if known and choice=='different' else 'SAME' if known and choice=='same' else 'UNKNOWN'
         comparisons[condition['id']]={'relation':relation,'probabilities':probabilities,'evidence_type':'决策 API 未返回逐属性文字事实'}
         if relation=='DIFFERENT':hard.append(condition['id'])
-        elif relation=='UNKNOWN':unknown.append(condition['id'])
+        elif relation=='UNKNOWN' and (not auto or condition.get('required_visual',True)):unknown.append(condition['id'])
     result=dict(result,condition_comparisons=comparisons,match_criteria_revision=category['match_criteria']['revision'])
+    if auto:
+        labels={condition['id']:condition['label'] for condition in conditions}
+        if hard:
+            confidence=max(comparisons[key]['probabilities']['different'] for key in hard)
+            result.update(state='不同款',reason='品类身份特征明确不同：'+'、'.join(
+                f"{labels[key]}（{comparisons[key]['probabilities']['different']:.1%}）" for key in hard)+
+                f'；确认门槛 {threshold:.0%}。原图与逐项模型概率已保留。',
+                hard_conflicts=hard,overall_confidence=confidence)
+        elif unknown and result['state'] not in {'不同款','相似款'}:
+            result.update(state='待补充证据',reason='模型尚未可靠判定必需身份项：'+'、'.join(labels[key] for key in unknown)+
+                          '；原图与已有事实已保留，不等于源图缺失。',uncertainties=unknown)
+        return result
     if hard:result.update(state='不同款',reason='已勾选条件明确不同：'+'、'.join(hard),hard_conflicts=hard)
     elif unknown or not any(item['kind']=='visual' for item in conditions):
         result.update(state='待补充证据',reason='已勾选条件尚未逐项确认，原返回和结果保留',uncertainties=unknown)
