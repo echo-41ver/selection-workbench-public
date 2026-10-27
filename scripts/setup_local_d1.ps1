@@ -21,8 +21,8 @@ if ($selectionConfig.auto_map.AutoModel -ne 'modeling_d1.D1Model' -or
     -not (Test-Path -LiteralPath (Join-Path $selectionD1Root 'runtime.py') -PathType Leaf)) {
     throw 'D1 安装布局不符，未修改服务。'
 }
-$selectionCurrent = [IO.File]::ReadAllText($selectionApi)
-$selectionDesired = [IO.File]::ReadAllText($selectionTemplate)
+$selectionCurrent = [IO.File]::ReadAllText($selectionApi).Replace("`r`n", "`n")
+$selectionDesired = [IO.File]::ReadAllText($selectionTemplate).Replace("`r`n", "`n")
 if ($selectionCurrent -cne $selectionDesired -and
     (Get-FileHash -LiteralPath $selectionApi -Algorithm SHA256).Hash.ToLowerInvariant() -ne
     '12d5304fb3dae69095f3cc9a7174f460f60a7885c01b27f400af9958cb7722f8') {

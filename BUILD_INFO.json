@@ -1,6 +1,6 @@
 {
-  "commit": "158608a8f20021f2d378c675d6f8ab0ce382d7e0",
-  "built_at_utc": "2026-10-27T10:37:20.647178+00:00",
   "channel": "public",
-  "contains_company_credentials": false
+  "contains_company_credentials": false,
+  "commit": "8494d507f0ef2edf116f6071cd47db911aa59b84",
+  "built_at_utc": "2026-10-27T11:39:46.082168+00:00"
 }
