@@ -1,4 +1,4 @@
-"""Verify an owned, retired collection checkpoint before analysis-only resume."""
+"""Verify retired collection data before analysis-only resume."""
 import hashlib
 import json
 from pathlib import Path
@@ -22,8 +22,9 @@ def _digest(path):
 def completed_checkpoint(root, run, category):
     """Return evidence only when no original collector or browser is needed.
 
-    Browser cleanup deliberately removes sessions.json. Its installation-owned
-    retirement receipt is identity evidence, never a manifest to restore or bind.
+    Browser cleanup deliberately removes sessions.json. Its retirement receipt
+    is evidence, never a manifest to restore or bind. Explicitly restored history
+    may use its completed task-local retirement records after a reinstall.
     Any incomplete/changed checkpoint continues through normal strict recovery.
     """
     try:
@@ -96,11 +97,24 @@ def _completed_checkpoint(root, run, category):
         for record in archived.get('records', []):
             if Path(record.get('path', '')).resolve() == manifest_path:
                 candidates.append((receipt, record.get('manifest', {})))
+    retired_workers = []
     for identity_path, manifest in candidates:
         workers = manifest.get('workers')
         if (manifest.get('machine_id') != machine or manifest.get('task_key') != key
                 or not isinstance(workers, list) or len(workers) != category_worker_count(category)):
             continue
+        retired_workers.append((identity_path, workers))
+    restore_path = root/'runtime/web-console/state.json'
+    restore = _read(restore_path)
+    if restore.get('category_key') == key and restore.get('explicitly_restored') is True:
+        names = {state.get('owner') for job in jobs for state in job['sort_passes'].values()}
+        if (len(names) == category_worker_count(category)
+                and all(isinstance(name, str) and re.fullmatch(r'worker-\d{2}(?:-new)?', name) for name in names)):
+            # These are task data, not authorization to start or modify a browser.
+            retired_workers.append((restore_path, [
+                {'name':name, 'profile_id':_read(run/'temu/supervisors'/f'{name}.json').get('deleted_profile_id')}
+                for name in sorted(names)]))
+    for identity_path, workers in retired_workers:
         names = [worker.get('name', '') for worker in workers]
         if (len(set(names)) != len(names)
                 or any(not re.fullmatch(r'worker-\d{2}(?:-new)?', name) for name in names)

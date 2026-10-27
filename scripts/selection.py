@@ -1089,7 +1089,7 @@ def supervise(category_path, paid,*,preserve_prepared=False):
             from company_setup import ensure_company
             ensure_company(start=False)
             from selection_automation.completed_collection import completed_checkpoint, unchanged
-            analysis_resume=completed_checkpoint(ROOT,base,cat) if preserve_prepared else None
+            analysis_resume=completed_checkpoint(ROOT,base,cat)
             if analysis_resume:
                 # Successful collection cleanup may have removed its manifest.
                 # Keep retired browsers retired; only real downstream work resumes.

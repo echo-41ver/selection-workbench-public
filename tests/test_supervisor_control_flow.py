@@ -336,11 +336,16 @@ def retired_checkpoint(run):
     return manifest
 
 
-def test_retired_complete_collection_resumes_downstream_and_stops_without_browser_recreation(tmp_path, monkeypatch):
+@pytest.mark.parametrize('restored_data_only', [False, True])
+def test_retired_complete_collection_resumes_downstream_and_stops_without_browser_recreation(tmp_path, monkeypatch, restored_data_only):
     from selection_automation.completed_collection import completed_checkpoint, unchanged
     import watch_temu_union
     run = LocalRun(tmp_path, monkeypatch)
     retired_checkpoint(run)
+    if restored_data_only:
+        (run.root/'runtime/profile_retirement/receipt.json').unlink()
+        selection.save(run.root/'runtime/web-console/state.json', {
+            'category_key':run.cat['category_key'], 'explicitly_restored':True})
     monkeypatch.setattr(watch_temu_union,'watch_health',lambda base:{'状态':'已更新','阻断':False})
     proof = completed_checkpoint(run.root, run.base, run.cat)
     assert proof and unchanged(proof)
@@ -356,13 +361,31 @@ def test_retired_complete_collection_resumes_downstream_and_stops_without_browse
     run.on_sleep = stop_after_real_loop
     # Execute the actual supervisor control flow twice across the same checkpoint.
     for _ in range(2):
-        selection.request_start(run.category, run.cat, run.base, False, background=False, preserve_prepared=True)
-        selection.supervise(run.category, False, preserve_prepared=True)
+        selection.request_start(run.category, run.cat, run.base, False, background=False, preserve_prepared=not restored_data_only)
+        selection.supervise(run.category, False, preserve_prepared=not restored_data_only)
         assert selection.read(run.base/'status.json')['状态'] == '已停止'
         assert not selection.live_owner()
         assert not (run.root/'config/sessions.json').exists()
         assert all(Path(path).read_bytes() == data for path, data in before.items())
     assert not ({'bootstrap','binding_recovery','amazon','worker-01','cleanup','stage3'} & {item['name'] for item in run.spawns})
+
+
+@pytest.mark.parametrize('missing', ['explicit_restore', 'retired_worker', 'deleted_profile', 'source'])
+def test_restored_history_requires_complete_retired_source_data(tmp_path, monkeypatch, missing):
+    from selection_automation.completed_collection import completed_checkpoint
+    run = LocalRun(tmp_path, monkeypatch)
+    retired_checkpoint(run)
+    (run.root/'runtime/profile_retirement/receipt.json').unlink()
+    selection.save(run.root/'runtime/web-console/state.json', {
+        'category_key':run.cat['category_key'], 'explicitly_restored':missing!='explicit_restore'})
+    if missing == 'source':
+        (run.base/'temu/workers/worker-01/fixture/products.jsonl').unlink()
+    elif missing in {'retired_worker', 'deleted_profile'}:
+        path=run.base/'temu/supervisors/worker-01.json'
+        state=selection.read(path)
+        state['environment_cleanup' if missing=='retired_worker' else 'deleted_profile_id']=None
+        selection.save(path,state)
+    assert completed_checkpoint(run.root, run.base, run.cat) is None
 
 
 @pytest.mark.parametrize('broken', ['unfinished_plan','unfinished_pass','missing_pass','new_query',
