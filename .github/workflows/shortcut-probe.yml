@@ -9,11 +9,13 @@ jobs:
       - name: Compare real shell shortcut save cases
         shell: powershell
         run: |
+          [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
           $root=Join-Path $env:RUNNER_TEMP 'shortcut-probe'
           New-Item -ItemType Directory -Path $root -Force | Out-Null
           [pscustomobject]@{culture=[cultureinfo]::CurrentCulture.Name;codepage=[Text.Encoding]::Default.CodePage;desktop=[Environment]::GetFolderPath('DesktopDirectory','DoNotVerify')} | ConvertTo-Json -Compress
           $shell=New-Object -ComObject WScript.Shell
-          foreach($name in @('workbench.lnk','选品工作台.lnk')){
+          $unicodeName=([string][char]0x9009+[char]0x54c1+[char]0x5de5+[char]0x4f5c+[char]0x53f0+'.lnk')
+          foreach($name in @('workbench.lnk',$unicodeName)){
             $path=Join-Path $root $name
             try {
               $link=$shell.CreateShortcut($path)
