@@ -178,8 +178,11 @@ def test_live_switch_drains_before_replacing_config_and_preserves_checkpoint(tmp
     monkeypatch.setattr(console,'stage3_snapshot',lambda key:{'total':12,'pending':12})
     alive=[True];monkeypatch.setattr(progress,'controller_alive',lambda base:alive[0])
     monkeypatch.setattr(web,'codex_review_control',lambda base:{'running':False})
-    done=threading.Event();started=[]
-    monkeypatch.setattr(console,'launch_stage3_controller',lambda *args:(started.append(args),done.set()))
+    done=threading.Event();started=[];control_at_launch=[]
+    def launch(*args):
+        control_at_launch.append(read_control(base/'stage123'))
+        started.append(args);done.set()
+    monkeypatch.setattr(console,'launch_stage3_controller',launch)
     result=console.start_stage3({'provider':target})
     assert result['switch_pending'] and read_control(base/'stage123')['switch_pending']
     assert web.selection.read(base/'category.json')['stage3']['model']=='TEST_MODEL_ONE'
@@ -188,6 +191,7 @@ def test_live_switch_drains_before_replacing_config_and_preserves_checkpoint(tmp
     saved=web.selection.read(base/'category.json')
     assert saved['stage3']['model']=='TEST_MODEL_TWO'
     assert any(stage.get('model')=='TEST_MODEL_ONE' for stage in saved['stage3_checkpoint_sources'])
+    assert control_at_launch[0]['pending_provider'] is None
     assert not read_control(base/'stage123')['switch_pending']
     assert 'TEST_ONLY_KEY' not in json.dumps(saved)
 

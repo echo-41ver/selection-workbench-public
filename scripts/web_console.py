@@ -1784,7 +1784,8 @@ class Console:
                         update_control(folder,paused=True,switch_pending=False,switch_error='断点已保存；当前任务已改变，请在原任务继续');return
                     try:
                         self.start_stage3({'provider':provider},configure_only=configure_only)
-                        update_control(folder,switch_pending=False,pending_provider=None,paused=bool(configure_only));return
+                        if configure_only:update_control(folder,switch_pending=False,pending_provider=None,paused=True)
+                        return
                     except ConsoleError as error:
                         if error.code in {'PROGRESS_NOT_READY','ALREADY_RUNNING'}:time.sleep(2);continue
                         update_control(folder,paused=True,switch_pending=False,switch_error=error.message);return
@@ -1962,7 +1963,7 @@ class Console:
             if configure_only:
                 return {'ok':True,'provider':provider,'message':'第三层方案已保存；API Key 已在本机加密保存，尚未启动分析'}
             (folder/'STOP').unlink(missing_ok=True)
-            update_control(folder,paused=False,switch_pending=False,switch_cancelled=False,switch_error=None)
+            update_control(folder,paused=False,switch_pending=False,switch_cancelled=False,switch_error=None,pending_provider=None)
             if provider['mode']=='local_agent':
                 from selection_automation.stage3_runtime import resume_dispatch
                 resume_dispatch(folder,provider['agent_ids'])
