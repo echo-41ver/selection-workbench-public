@@ -19,8 +19,13 @@ def test_publication_entry_points_use_normal_windows_priority(tmp_path, monkeypa
         nice=priorities.append, create_time=lambda: 123))
     category = tmp_path / 'category.json'
     monkeypatch.setattr(sys, 'argv', ['publish_all', '--category', str(category)])
-    monkeypatch.setattr(publish_all, 'publish', lambda _: {'errors': {}})
+    published = []
+    def publish(path, *, kind):
+        published.append((path, kind))
+        return {'errors': {}}
+    monkeypatch.setattr(publish_all, 'publish', publish)
     publish_all.main()
+    assert published == [(category, None)]
 
     monkeypatch.setattr(watcher, 'ROOT', tmp_path)
     monkeypatch.setattr(watcher, 'read', lambda *args: {
