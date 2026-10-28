@@ -65,6 +65,9 @@ def refresh_saved_owner(root, saved, *, evidence=None, protocol_probe=None, chec
                 candidates.append({**listener,**{k:process[k] for k in ('pid','created','name')}})
     if len(candidates)!=1 or not check_owner(candidates[0]):return saved
     candidate=candidates[0]
+    for setting in evidence.get('system',{}).get('endpoints',[]):
+        if setting['port']==candidate['port'] and setting['host'] in {candidate['host'],'localhost'}:
+            candidate['declared_protocol']=setting.get('declared_protocol')
     observed=protocol_probe(candidate).get('protocol')
     if observed not in {saved.get('preproxy_protocol'),'MIXED'} or not check_owner(candidate):return saved
     updated={**saved,'local_proxy_owner':{k:candidate[k] for k in ('pid','created','name')}}

@@ -18,6 +18,15 @@ def test_only_same_verified_proxy_endpoint_can_refresh_pid(tmp_path,changed,prot
  assert result['proxy_host']==saved['proxy_host'] and result['preproxy_port']==7890
  assert (tmp_path/'runtime/secrets/proxyshare.settings.json').exists() is expected
 
+
+def test_restart_refresh_uses_system_http_declaration_like_discovery(tmp_path):
+ saved={'preproxy_host':'127.0.0.1','preproxy_port':7890,'preproxy_protocol':'HTTP','local_proxy_owner':{'pid':1,'created':1,'name':'clash-meta.exe'}}
+ evidence={'processes':[{'pid':2,'created':2,'name':'clash-meta.exe','listeners':[{'host':'127.0.0.1','port':7890,'declared_protocol':None}]}],
+           'system':{'endpoints':[{'host':'127.0.0.1','port':7890,'declared_protocol':'HTTP'}]}}
+ result=refresh_saved_owner(tmp_path,saved,evidence=evidence,check_owner=lambda _:True,
+     protocol_probe=lambda candidate:{'protocol':'MIXED' if candidate['declared_protocol']=='HTTP' else 'SOCKS5'})
+ assert result['local_proxy_owner']['pid']==2 and result['preproxy_protocol']=='HTTP'
+
 @pytest.mark.parametrize('stop',[False,True])
 def test_independent_host_retries_crash_but_honors_user_stop(tmp_path,monkeypatch,stop):
  monkeypatch.setattr(persistent,'ROOT',tmp_path);monkeypatch.setattr(persistent,'configure_environment',lambda _:None)
