@@ -27,3 +27,29 @@ jobs:
               [pscustomobject]@{name=$name;saved=$false;type=$_.Exception.GetType().FullName;message=$_.Exception.Message;hresult=$_.Exception.HResult;inner=[string]$_.Exception.InnerException} | ConvertTo-Json -Compress
             }
           }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pywin32==312
+      - name: Verify the Unicode shell interface with Chinese names and paths
+        shell: python
+        run: |
+          import os, json, pythoncom
+          from pathlib import Path
+          from win32com.shell import shell
+          name = ''.join(chr(x) for x in [0x9009,0x54c1,0x5de5,0x4f5c,0x53f0])
+          root = Path(os.environ['RUNNER_TEMP']) / 'native-shortcut-probe' / name
+          root.mkdir(parents=True)
+          target = root / 'start-web.cmd'
+          target.write_text('@echo off\nexit /b 0\n')
+          path = root / (name + '.lnk')
+          link = pythoncom.CoCreateInstance(shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink)
+          link.SetPath(str(target))
+          link.SetWorkingDirectory(str(root))
+          link.SetShowCmd(7)
+          link.QueryInterface(pythoncom.IID_IPersistFile).Save(str(path), 0)
+          loaded = pythoncom.CoCreateInstance(shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink)
+          loaded.QueryInterface(pythoncom.IID_IPersistFile).Load(str(path))
+          assert path.is_file() and loaded.GetPath(shell.SLGP_RAWPATH)[0] == str(target)
+          assert loaded.GetWorkingDirectory() == str(root)
+          print(json.dumps({'Unicode_shortcut_saved_and_reopened': True, 'target_and_directory_match': True}))
