@@ -33,11 +33,13 @@ def task(tmp_path, monkeypatch):
     folder = category.parent / 'market'
     folder.mkdir()
     calls = []
+    auth_state = {'servers': {}}
     def provider(**options):
         calls.append('provider')
         assert options['auth_state_path'] == tmp_path / 'runtime/market-auth/agent-auth.json'
-        return SimpleNamespace(client=SimpleNamespace(auth=SimpleNamespace(
-            state_path=tmp_path / 'fixture-auth.json', server_key='fixture-server')))
+        auth = SimpleNamespace(state_path=tmp_path / 'fixture-auth.json', server_key='fixture-server')
+        auth._mutate = lambda mutation: mutation(auth_state)[1]
+        return SimpleNamespace(client=SimpleNamespace(auth=auth))
     fresh = snapshot()
     fresh.update(queried_at='2026-10-23T13:13:10+00:00', records=[{'goodsId': '202', 'catIds': [7]}])
     def collect(category, source, progress, **options):

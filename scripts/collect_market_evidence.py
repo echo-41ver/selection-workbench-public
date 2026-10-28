@@ -68,6 +68,9 @@ def run(category_path, force=False):
             # TEMU's residential browser route is configured independently.
             from geekbi_temu_mcp.auth import ActionRequired, GeekBIError
             provider=Provider(auth_state_path=ROOT/'runtime/market-auth/agent-auth.json')
+            if force:
+                from selection_automation.market_login import reset_company_login
+                reset_company_login(provider.client.auth)
             import sys, time
             from urllib.request import getproxies
             from urllib.parse import urlsplit

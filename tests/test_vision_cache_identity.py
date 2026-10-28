@@ -21,6 +21,28 @@ def fixture(tmp_path):
             'amazon_image_path': str(amazon), 'temu_image_path': str(temu)}
 
 
+def test_gui_local_provider_switch_accepts_legacy_string_checkpoint(tmp_path):
+    pair = fixture(tmp_path)
+    cat = copy.deepcopy(CAT)
+    previous = copy.deepcopy(cat['stage3'])
+    previous['provider'] = 'deepseek'
+    cat['stage3_checkpoint_sources'] = [previous]
+    cat['stage3']['provider'] = {'mode': 'local_model', 'protocol': 'decisions'}
+    keys = vision.compatible_vision_keys(cat, pair)
+    assert keys[0] == vision.vision_revision(cat, pair)
+    assert vision.vision_revision({**cat, 'stage3': previous}, pair) in keys
+
+
+def test_decision_checkpoint_is_not_reused_by_full_visual_provider(tmp_path):
+    pair = fixture(tmp_path)
+    cat = copy.deepcopy(CAT)
+    previous = copy.deepcopy(cat['stage3'])
+    previous['provider'] = {'mode': 'local_model', 'protocol': 'decisions'}
+    cat['stage3_checkpoint_sources'] = [previous]
+    cat['stage3']['provider'] = {'mode': 'multimodal_api', 'protocol': 'responses'}
+    assert vision.vision_revision({**cat, 'stage3': previous}, pair) not in vision.compatible_vision_keys(cat, pair)
+
+
 @pytest.mark.parametrize('side', ['amazon', 'temu'])
 def test_same_length_image_rewrite_with_original_mtime_changes_all_keys(tmp_path, side):
     pair = fixture(tmp_path)

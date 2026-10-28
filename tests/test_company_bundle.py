@@ -51,6 +51,31 @@ def test_provider_change_rejected_before_import(tmp_path):
     value=fixture();value['deepseek']['base_url']='https://other.example'
     with pytest.raises(ValueError):import_bundle(tmp_path,value,store)
     assert not (tmp_path/'runtime').exists()
+
+def test_optional_geekbi_is_whitelisted_and_password_is_preserved():
+    value=fixture();value['geekbi']={'username':' TEST_ONLY_GEEKBI_USER ','password':' TEST_ONLY_GEEKBI_PASSWORD ','token':'MUST_NOT_EXPORT'}
+    saved=normalize(value)
+    assert saved['geekbi']=={'username':'TEST_ONLY_GEEKBI_USER','password':' TEST_ONLY_GEEKBI_PASSWORD '}
+    assert 'MUST_NOT_EXPORT' not in json.dumps(saved)
+    assert 'geekbi' not in normalize(fixture())
+
+@pytest.mark.parametrize('geekbi',[[],{}, {'username':'TEST_ONLY_GEEKBI_USER'}, {'password':'TEST_ONLY_GEEKBI_PASSWORD'}, {'username':'TEST_ONLY_GEEKBI_USER','password':' '}])
+def test_invalid_geekbi_rejected_before_any_write(tmp_path,geekbi):
+    value=fixture();value['geekbi']=geekbi;writes=[]
+    with pytest.raises(ValueError):import_bundle(tmp_path,value,lambda *a:writes.append(a))
+    assert not writes and not (tmp_path/'runtime').exists()
+
+def test_geekbi_bundle_import_uses_existing_current_user_company_cipher(tmp_path):
+    base=tmp_path/'base.zip';output=tmp_path/'company.zip'
+    with zipfile.ZipFile(base,'w') as archive:archive.writestr('BUILD_INFO.json',json.dumps({'channel':'internal','contains_company_credentials':False}))
+    config=fixture();config['geekbi']={'username':'TEST_ONLY_GEEKBI_USER','password':' TEST_ONLY_GEEKBI_PASSWORD '}
+    write_bundle(base,output,config)
+    with zipfile.ZipFile(output) as archive:value=json.loads(archive.read('company.local.json'))
+    target=tmp_path/'installed';import_bundle(target,value,store)
+    secret=target/'runtime/secrets/company.dpapi'
+    assert load(secret)['geekbi']==config['geekbi']
+    assert b'TEST_ONLY_GEEKBI_USER' not in secret.read_bytes() and b'TEST_ONLY_GEEKBI_PASSWORD' not in secret.read_bytes()
+    assert not (target/'runtime/secrets/geekbi.dpapi').exists()
 def test_mid_publication_failure_rolls_back_both_files(tmp_path,monkeypatch):
     root=tmp_path/'install';import_bundle(root,fixture(),store);folder=root/'runtime/secrets';before={name:(folder/name).read_bytes() for name in ('company.dpapi','deepseek.dpapi')}
     replace=os.replace;failed=[]

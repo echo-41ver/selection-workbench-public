@@ -159,6 +159,9 @@ def cleanup_ended_task(task_key, *, preparing_task=None):
     from retain_proxy_connections import owned_chains,stop_owned
     manifest_path=ROOT/'config'/'sessions.json'
     manifest=read(manifest_path,{})
+    if not manifest:
+        manifest_path=ROOT/'runtime'/'bootstrap.json'
+        manifest=read(manifest_path,{})
     if not manifest or manifest.get('task_key')!=task_key:return False
     if manifest.get('machine_id')!=identity():raise RuntimeError('拒绝清理其他安装的环境')
     owner=live_owner()
@@ -238,10 +241,12 @@ def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,pre
     network_task=resume_task or new_task
     if resume_task and not preserve_task:
         new_task, resume_task = resume_task, None
+    ensure_adspower_api(company)
     if new_task:
         if not rebuilding:reject_retired_task_profiles(ROOT,new_task)
         from selection import identity,live_owner,read as task_read
-        manifest=task_read(ROOT/'config'/'sessions.json',{})
+        manifest=(task_read(ROOT/'config'/'sessions.json',{})
+                  or task_read(ROOT/'runtime'/'bootstrap.json',{}))
         previous=manifest.get('task_key') if manifest.get('machine_id')==identity() else None
         if previous and previous!=new_task:
             status=task_read(ROOT/'runs'/previous/'status.json',{}).get('状态','')
@@ -263,7 +268,6 @@ def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,pre
     else:
         transport,route=prepare(ROOT,company,read,save)
     print(json.dumps({'network_readiness':route},ensure_ascii=False),flush=True)
-    ensure_adspower_api(company)
     from selection_automation.adspower_kernel import ensure_kernel
     ensure_kernel(base,api_call,ROOT)
     from selection_automation.flower_background import install_defaults

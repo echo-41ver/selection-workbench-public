@@ -58,6 +58,12 @@ def normalize(value,require_model=False):
         if not isinstance(decision,dict) or decision.get('base_url',D1_URL)!=D1_URL or decision.get('model','d1')!='d1':
             raise ValueError('Invalid Liquid D1 configuration')
         out['liquid_d1']={'key':validate_key(decision.get('key')),'base_url':D1_URL,'model':'d1'}
+    geekbi=value.get('geekbi')
+    if geekbi is not None:
+        if not isinstance(geekbi,dict):raise ValueError('Invalid geekbi configuration')
+        username=required(geekbi.get('username'),'geekbi.username')
+        required(geekbi.get('password'),'geekbi.password')
+        out['geekbi']={'username':username,'password':geekbi['password']}
     return out
 
 def import_bundle(root,value,store):

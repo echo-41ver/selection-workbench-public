@@ -458,11 +458,14 @@ def compatible_vision_keys(category: dict, pair: dict, *, context=None) -> tuple
         keys.append(_legacy_vision_revision(category,pair,images,context))
     # Only an explicit runtime provider change grants checkpoint reuse. Rules,
     # recorded specifications and both original image digests must still match.
+    current_provider = category['stage3'].get('provider')
+    current_provider = current_provider if isinstance(current_provider, dict) else {}
     for stage in category.get('stage3_checkpoint_sources',[]):
         # A decision-only checkpoint cannot supply the evidence requested by a
         # full visual API. Keep its original results, but use the new contract.
-        current_provider = category['stage3'].get('provider', {})
-        if (stage.get('provider', {}).get('protocol') == 'decisions'
+        previous_provider = stage.get('provider')
+        previous_provider = previous_provider if isinstance(previous_provider, dict) else {}
+        if (previous_provider.get('protocol') == 'decisions'
                 and current_provider.get('mode') in {'multimodal_api', 'local_model'}
                 and current_provider.get('protocol') != 'decisions'):
             continue

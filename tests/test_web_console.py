@@ -401,6 +401,7 @@ def test_resume_uses_current_saved_task_and_never_regenerates_or_enables_paid_an
     base=tmp_path/'runs/current';base.mkdir(parents=True)
     web.selection.save(base/'category.json',{'category_key':'current','category_name_zh':'遥控器','execution_mode':'collection'})
     web.selection.save(tmp_path/'runtime/last_run.json',{'category_key':'current'})
+    web.selection.save(tmp_path/'runtime/machine.json',{'id':'fixture-machine'})
     web.selection.save(tmp_path/'config/sessions.json',{'task_key':'current','machine_id':'fixture-machine'})
     data=base/'temu/products.jsonl';data.parent.mkdir();data.write_text('existing-data')
     monkeypatch.setattr(console,'owner',lambda:None)
@@ -551,7 +552,8 @@ def test_live_console_port_cannot_be_shared_by_another_server():
     finally:server.server_close()
 
 
-def test_market_refresh_runs_python_without_paid_vision_and_exposes_status(tmp_path,monkeypatch):
+@pytest.mark.parametrize('body,forced', [({},True), ({'automatic':True},False)])
+def test_market_refresh_runs_python_without_paid_vision_and_exposes_status(tmp_path,monkeypatch,body,forced):
     console=web.Console(tmp_path);console.key='market_fixture'
     monkeypatch.setattr(console,'owner',lambda:{'category_key':'market_fixture'})
     base=tmp_path/'runs/market_fixture';base.mkdir(parents=True)
@@ -564,9 +566,10 @@ def test_market_refresh_runs_python_without_paid_vision_and_exposes_status(tmp_p
         else:finished.set()
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(console,'invoke',invoke)
-    assert console.refresh_market({})['ok']
+    assert console.refresh_market(body)['ok']
     assert finished.wait(3)
     assert [Path(c[0]).name for c in calls]==['collect_market_evidence.py','publish_all.py']
+    assert ('--force' in calls[0]) is forced
     assert console.status()['market_status']['status']=='COMPLETE'
     assert console.status()['stage3_control']['enabled'] is False
 

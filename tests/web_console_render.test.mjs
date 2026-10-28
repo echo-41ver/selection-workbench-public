@@ -401,3 +401,16 @@ test('partial raw total and source line preserve the same known lower bound and 
  assert.match(get('collection-total-label').textContent,/旧任务未记录/);
  assert.equal('aria-valuenow' in track,false);assert.equal('aria-valuemax' in track,false);
 });
+
+
+test('repeated publication failures show one current notice and recovery removes it',()=>{
+ const line=helperHtml.split('\n').find(line=>line.startsWith('function renderBusiness('));
+ const box={children:[],append(node){this.children.push(node);}};
+ const context=vm.createContext({$:()=>box,document:{createElement:()=>({})},
+  renderSelectionSummary(){box.children=[];},businessRenderKey:''});
+ vm.runInContext(line,context);
+ for(let i=0;i<5;i++)vm.runInContext("renderBusiness({},undefined,false,'publication failed')",context);
+ assert.equal(box.children.length,1);assert.equal(box.children[0].textContent,'publication failed');
+ vm.runInContext('renderBusiness({},undefined,false,null)',context);
+ assert.equal(box.children.length,0);
+});

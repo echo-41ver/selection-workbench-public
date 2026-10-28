@@ -194,7 +194,7 @@ def test_same_task_continuation_reuses_active_route_and_creates_new_profiles(tmp
     sessions,events,_=continuation_fixture(tmp_path,monkeypatch)
     with ProxyActivityLease(tmp_path,1,purpose='manual_verification'):
         company.ensure_company(True,worker_count=1,**{task_argument:'task'})
-    assert events==['reuse','api','stop-old','delete-old','create-new','verify-new']
+    assert events==['api','reuse','stop-old','delete-old','create-new','verify-new']
     assert json.loads(sessions.read_text())['workers'][0]['profile_id']=='new'
 
 
@@ -203,7 +203,7 @@ def test_changed_owner_on_continuation_refuses_before_retiring_or_creating_profi
     with ProxyActivityLease(tmp_path,1,purpose='manual_verification'):
         with pytest.raises(NetworkNotReady):
             company.ensure_company(True,worker_count=1,resume_task='task')
-    assert events==['reuse']
+    assert events==['api','reuse']
     assert json.loads(sessions.read_text())==original
 
 
@@ -220,5 +220,5 @@ def test_other_task_or_installation_cannot_reuse_active_route(tmp_path,monkeypat
     with ProxyActivityLease(tmp_path,1,purpose='manual_verification'):
         with pytest.raises(NetworkNotReady):
             company.ensure_company(True,worker_count=1,resume_task='task')
-    assert events==['prepare']
+    assert events==['api','prepare']
     assert json.loads(sessions.read_text())==original

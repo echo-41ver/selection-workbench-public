@@ -1443,7 +1443,7 @@ class Console:
         return {'ok':True,'filename':path.name,'updated_at':path.stat().st_mtime}
 
     def refresh_market(self,body):
-        if body: raise ConsoleError('INVALID_INPUT','市场数据刷新无需额外参数')
+        if body not in ({}, {'automatic': True}): raise ConsoleError('INVALID_INPUT','市场数据刷新参数无效')
         with self.lock:
             key,active=self.current_run_key()
             if self.busy or self.market_busy: raise ConsoleError('ALREADY_RUNNING','极鲸云正在读取，请等待本次完成',409)
@@ -1455,7 +1455,8 @@ class Console:
             def work():
                 try:
                     selection.save(category.parent/'market/status.json',{'status':'RUNNING','message':'正在检查已有授权并读取极鲸云市场数据'})
-                    self.invoke([str(self.root/'scripts/collect_market_evidence.py'),'--category',str(category),'--force'],timeout=600)
+                    self.invoke([str(self.root/'scripts/collect_market_evidence.py'),'--category',str(category),
+                                 *([] if body.get('automatic') else ['--force'])],timeout=600)
                     state=selection.read(category.parent/'market/status.json',{})
                     if state.get('status') in ('COMPLETE','PARTIAL'):
                         self.invoke([str(self.root/'scripts/publish_all.py'),'--category',str(category)],timeout=180)
@@ -2131,9 +2132,12 @@ class Console:
         try:
             if self.cancel.is_set():raise ConsoleError('CANCELLED','继续启动已取消，数据和断点已保留')
             self.record_resume_launch(base,job,'launching')
-            # A cleared installation has no old browsers to preserve. Normal
-            # preparation creates new environments while keeping the frozen run.
-            prepared=(self.root/'config/sessions.json').exists() or any((self.root/'runtime/profile_retirement').glob('*.json'))
+            from selection_automation.retired_collection import retired_task_receipt
+            manifest=selection.read(self.root/'config/sessions.json',{})
+            machine=selection.read(self.root/'runtime/machine.json',{}).get('id')
+            category=selection.read(base/'category.json',{})
+            prepared=bool(machine and manifest.get('task_key')==key and manifest.get('machine_id')==machine
+                          or retired_task_receipt(self.root,key,machine,category_worker_count(category)))
             result=self.invoke([str(self.root/'scripts/selection.py'),'start',*(['--preserve-prepared'] if prepared else []),
                                 '--category',str(base/'category.json')],timeout=90,cancellable=True)
             if self.cancel.is_set():raise ConsoleError('CANCELLED','继续启动已取消，数据和断点已保留')

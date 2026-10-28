@@ -18,6 +18,7 @@ def fixture_console(tmp_path,monkeypatch):
     base=tmp_path/'runs/original_task';base.mkdir(parents=True)
     web.selection.save(base/'category.json',{'category_key':'original_task','category_name_zh':'浴帘','execution_mode':'collection'})
     web.selection.save(base/'status.json',{'状态':'已停止'})
+    web.selection.save(tmp_path/'runtime/machine.json',{'id':'fixture-machine'})
     monkeypatch.setattr(console,'owner',lambda:None)
     return console,base
 
@@ -86,13 +87,34 @@ def test_failed_resume_persists_error_stops_cooperatively_and_preserves_billing(
     assert state['phase']==record['message'] and state['can_resume']
 
 
-@pytest.mark.parametrize('environment',['current','retired','cleared'])
+@pytest.mark.parametrize('environment',['current','retired','cleared','other_task_sessions',
+    'other_installation_sessions','unrelated_retirement','old_partial_bootstrap','same_task_partial_bootstrap'])
 def test_running_label_requires_registered_owner_and_keeps_original_task(tmp_path,monkeypatch,environment):
     console,base=fixture_console(tmp_path,monkeypatch)
-    if environment=='current':
-        web.selection.save(tmp_path/'config/sessions.json',{'task_key':'original_task','machine_id':'fixture-machine'})
+    if environment in ('current','other_task_sessions','other_installation_sessions'):
+        web.selection.save(tmp_path/'config/sessions.json',{
+            'task_key':'other_task' if environment=='other_task_sessions' else 'original_task',
+            'machine_id':'other-machine' if environment=='other_installation_sessions' else 'fixture-machine'})
     elif environment=='retired':
-        web.selection.save(tmp_path/'runtime/profile_retirement/receipt.json',{'new_task_key':'original_task','machine_id':'fixture-machine'})
+        workers=[{'name':f'worker-{number:02d}-new','profile_id':f'old-{number}'} for number in range(1,5)]
+        manifest={'schema_version':'temu-browser-sessions-v1','task_key':'original_task',
+                  'machine_id':'fixture-machine','used':True,'worker_count':4,'workers':workers}
+        web.selection.save(tmp_path/'runtime/profile_retirement/receipt.json',{'new_task_key':'original_task',
+            'machine_id':'fixture-machine','deleted':[worker['profile_id'] for worker in workers],
+            'records':[{'path':str(tmp_path/'config/sessions.json'),'manifest':manifest}]})
+    elif environment in ('unrelated_retirement','old_partial_bootstrap','same_task_partial_bootstrap'):
+        journal={'task_key':'original_task' if environment=='same_task_partial_bootstrap' else 'old_task',
+                 'machine_id':'fixture-machine','used':environment!='same_task_partial_bootstrap',
+                 'workers':[{'name':'worker-01-new','profile_id':'pending-profile','bootstrap_status':'PROFILE_CREATED'}]}
+        if environment!='unrelated_retirement':
+            web.selection.save(tmp_path/'runtime/bootstrap.json',journal)
+        web.selection.save(tmp_path/'runtime/profile_retirement/receipt.json',{
+            'new_task_key':'original_task' if environment=='old_partial_bootstrap' else 'other_task',
+            'machine_id':'fixture-machine','deleted':[],
+            'records':[{'path':str(tmp_path/'runtime/bootstrap.json'),'manifest':journal}]})
+    amazon=base/'amazon/amazon_frontend_latest.json'
+    web.selection.save(amazon,{'status':'COMPLETE','records':[{'asin':'KEPT_SOURCE'}]})
+    frozen=(base/'category.json').read_bytes();snapshot=amazon.read_bytes()
     data=base/'real_input.jsonl';data.write_bytes(b'real saved checkpoint\n')
     calls=[]
     monkeypatch.setattr(console,'invoke',lambda argv,**kw:calls.append((argv,kw)) or SimpleNamespace(returncode=0))
@@ -102,10 +124,11 @@ def test_running_label_requires_registered_owner_and_keeps_original_task(tmp_pat
     record=web.selection.read(base/'resume_launch.json')
     assert not console.cancel.is_set() and queued['launch_pending']
     assert record['state']=='running' and record['owner']=={'pid':987,'created':12345}
-    assert calls[0][0][1:]==['start',*(['--preserve-prepared'] if environment!='cleared' else []),
+    assert calls[0][0][1:]==['start',*(['--preserve-prepared'] if environment in ('current','retired') else []),
                                 '--category',str(base/'category.json')]
     assert '--paid' not in calls[0][0] and not (base/'stage123/paid_enabled.json').exists()
     assert data.read_bytes()==b'real saved checkpoint\n'
+    assert (base/'category.json').read_bytes()==frozen and amazon.read_bytes()==snapshot
 
 
 def test_supervisor_terminal_failure_exposes_current_cause_after_owner_exits(tmp_path,monkeypatch):
