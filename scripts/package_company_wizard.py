@@ -1,5 +1,5 @@
 """Human-operated full internal bundle wizard. Never run during release builds."""
-import argparse,json,sys,zipfile,os,uuid,shutil
+import argparse,json,sys,zipfile,os,uuid,shutil,time
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
 from selection_automation.company_bundle import normalize, portable
@@ -29,7 +29,7 @@ def wizard(root,base,output,company_json=None):
     import tkinter as tk
     from tkinter import messagebox,filedialog
     window=tk.Tk();window.withdraw()
-    if not messagebox.askyesno('本人确认读取本机配置','将读取您选择的本机工作台中已保存的 AdsPower、代理、D1、DeepSeek 和 GeekBI 配置，并生成含真实密钥的内部包。\n只交给获准同事，禁止上传公开 GitHub。原配置和现有包不改。\n\n是否由您本人继续？',default='no',parent=window):return
+    if not messagebox.askyesno('本人确认读取本机配置','将读取您选择的本机工作台中已保存的 AdsPower、代理、D1、DeepSeek 和 GeekBI 配置（含接口授权凭证及有效期），并生成含真实密钥的内部包。\n只交给获准同事，禁止上传公开 GitHub。原配置和现有包不改。\n\n是否由您本人继续？',default='no',parent=window):return
     from selection_automation.secrets import load
     company={};model={};decision={};root=Path(root)
     for name in ('company','deepseek','liquid_d1'):
@@ -41,6 +41,7 @@ def wizard(root,base,output,company_json=None):
             if name=='company':company=value
             elif name=='deepseek':model=value
             else:decision=value
+    installed_username=(company.get('geekbi') or {}).get('username','').strip()
     if company_json:
         try:company=json.loads(Path(company_json).read_text(encoding='utf-8-sig'))
         except Exception:
@@ -66,9 +67,24 @@ def wizard(root,base,output,company_json=None):
             if 'preproxy_mode' in company:payload['preproxy_mode']=company['preproxy_mode']
             if 'local_proxy_endpoint' in company:payload['local_proxy_endpoint']=company['local_proxy_endpoint']
             if values['d1_key'].strip():payload['liquid_d1']={'key':values['d1_key'],'base_url':'https://api.liquid.ai/decisions/v1/systemone','model':'d1'}
-            if values['geekbi_username'].strip() or values['geekbi_password'].strip():payload['geekbi']={'username':values['geekbi_username'],'password':values['geekbi_password']}
+            if values['geekbi_username'].strip() or values['geekbi_password'].strip():
+                payload['geekbi']={'username':values['geekbi_username'],'password':values['geekbi_password']}
+                if values['geekbi_username'].strip()==geekbi.get('username','').strip():
+                    candidates=[(geekbi,'access_token','expires_at')]
+                    if installed_username and installed_username==geekbi.get('username','').strip():
+                        try:
+                            saved=json.loads((root/'runtime/market-auth/agent-auth.json').read_text(encoding='utf-8-sig')).get('servers',{}).get('https://openapi.geekbi.com',{})
+                        except (OSError,ValueError,AttributeError):saved={}
+                        candidates.append((saved,'accessToken','accessTokenExpiresAt'))
+                    for candidate,token_key,expiry_key in candidates:
+                        if not isinstance(candidate,dict):continue
+                        token=candidate.get(token_key);expiry=candidate.get(expiry_key)
+                        if (isinstance(token,str) and token.strip() and not any(ord(c)<32 for c in token)
+                                and type(expiry) is int and expiry>time.time()):
+                            payload['geekbi'].update(access_token=token,expires_at=expiry)
+                            break
             normalize(payload,require_model=True)
-            if not messagebox.askyesno('最终确认装入真实密钥','新包将含 AdsPower、代理、D1、DeepSeek 真实密钥，以及已填写的 GeekBI 账号密码。\n仅供获准同事内部使用，禁止公开上传。\n\n是否确认生成？',default='no',parent=window):return
+            if not messagebox.askyesno('最终确认装入真实密钥','新包将含 AdsPower、代理、D1、DeepSeek 真实密钥，以及已填写的 GeekBI 账号密码、接口授权凭证及有效期。\n仅供获准同事内部使用，禁止公开上传。\n\n是否确认生成？',default='no',parent=window):return
             created=write_bundle(base,output,payload)
             messagebox.showinfo('完成','完整内部包已生成：\n'+str(created)+'\n\n同事解压后双击 deploy.cmd，并在其电脑确认加密导入。',parent=window);window.destroy()
         except ValueError as error:messagebox.showerror('配置需完善',str(error),parent=window)

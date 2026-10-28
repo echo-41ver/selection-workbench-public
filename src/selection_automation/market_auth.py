@@ -2,6 +2,7 @@
 import time
 from copy import deepcopy
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 
 def use_installation_auth(client, state_path):
@@ -16,8 +17,16 @@ def use_installation_auth(client, state_path):
             return completed
 
         def request_json(self, url, timeout, **options):
+            current=self._mutate(lambda state:(False,state['servers'].get(self.server_key,{})))
+            retry_get=options.get('method','GET')=='GET' and token(current) and not current.get('pending')
             try:
-                return super().request_json(url, timeout, **options)
+                for attempt in range(2):
+                    try:
+                        return super().request_json(url, timeout, **options)
+                    except URLError as error:
+                        if not retry_get or attempt or isinstance(error,HTTPError):
+                            raise
+                        time.sleep(.3)
             except ActionRequired as error:
                 if error.action != 'AUTH_REQUIRED':
                     raise
@@ -35,11 +44,21 @@ def use_installation_auth(client, state_path):
     def token(row):
         return (isinstance(row,dict) and isinstance(row.get('accessToken'),str)
                 and bool(row['accessToken']) and type(row.get('accessTokenExpiresAt')) is int
-                and row['accessTokenExpiresAt']>now+30)
+                and row['accessTokenExpiresAt']>int(time.time())+30)
+    if local._mutate(lambda state:(False,token(state['servers'].get(local.server_key)))):
+        client.auth=local
+        return
+    authorized=None
+    secret=Path(state_path).resolve().parents[2]/'runtime/secrets/company.dpapi'
+    if local.server_key=='https://openapi.geekbi.com' and secret.is_file():
+        from .secrets import load
+        account=load(secret).get('geekbi') or {}
+        if account.get('expires_at',0)>now+30:
+            authorized={'accessToken':account['access_token'],'accessTokenExpiresAt':account['expires_at']}
     def read_shared(state):
         row=state.get('servers',{}).get(shared.server_key,{})
         return False,deepcopy(row) if token(row) else None
-    authorized=shared._mutate(read_shared)
+    if authorized is None:authorized=shared._mutate(read_shared)
     def initialize(state):
         current=state['servers'].get(local.server_key,{})
         if token(current) or authorized is None:

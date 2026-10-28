@@ -63,6 +63,14 @@ def run(category_path, force=False):
             return cached
         save(state_path,{'status':'RUNNING','message':'正在读取极鲸云上架与销量数据'})
         try:
+            if not os.environ.get('DEEPSEEK_API_KEY','').strip():
+                model_secret=ROOT/'runtime/secrets/deepseek.dpapi'
+                if model_secret.is_file():
+                    from selection_automation.secrets import load
+                    from selection_automation.company_bundle import apply_model_settings
+                    apply_model_settings(load(model_secret),os.environ)
+                    os.environ.update(SELECTION_RULES_BASE_URL=os.environ['OPENAI_BASE_URL'],
+                                      SELECTION_RULES_MODEL=os.environ['OPENAI_VISION_MODEL'])
             # Keep the provider's normal Windows/proxy route for saved account
             # authorization; forcing direct HTTPS can use a different exit.
             # TEMU's residential browser route is configured independently.
@@ -80,7 +88,7 @@ def run(category_path, force=False):
                 'pending_authorization':bool(cached_auth.get('pending')),
                 'network_routes':{k:{'host':urlsplit(v).hostname,'port':urlsplit(v).port} for k,v in getproxies().items() if k in ('http','https')}})
             result=collect(category,provider,lambda state:save(state_path,state),
-                           choose_categories=choose_categories if os.environ.get('DEEPSEEK_API_KEY') else None)
+                           choose_categories=choose_categories if os.environ.get('DEEPSEEK_API_KEY','').strip() else None)
             save(snapshot_path,result)
             save(state_path,{k:v for k,v in result.items() if k not in ('records','pages')})
             from watch_temu_union import publish_once

@@ -103,9 +103,10 @@ def collect(category, provider, progress=lambda value:None, *, now=None, max_pag
             selected=[r for r in queried['list'] if r.get('catId') in ids]
             selection_method='模型从提供方真实类目候选中匹配；详见完整类目路径'
     if not selected:
-        return {'status':'CATEGORY_UNSUPPORTED' if search_complete else 'CATEGORY_UNRESOLVED',
-                'message':('极鲸云未提供与本任务边界相符的可核验类目；本项数据暂不支持，采集与分析可继续' if search_complete
-                           else '极鲸云类目候选过多，尚未核实对应范围；采集与分析可继续'),
+        unresolved=bool(candidates or queried['list']) or not search_complete
+        return {'status':'CATEGORY_UNRESOLVED' if unresolved else 'CATEGORY_UNSUPPORTED',
+                'message':('极鲸云类目边界尚未完成核实；采集与分析可继续' if unresolved
+                           else '极鲸云未返回相关类目；本项数据暂不支持，采集与分析可继续'),
                 'source':'GEEKBI','queried_at':now.isoformat(),'category_key':category['category_key'],
                 'optional':True,'blocking':False,'category_queries':queries,
                 'category_candidates':[{'catId':r.get('catId'),'name':r.get('catName'),'link':r.get('linkUrl'),

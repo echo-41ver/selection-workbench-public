@@ -64,6 +64,11 @@ def normalize(value,require_model=False):
         username=required(geekbi.get('username'),'geekbi.username')
         required(geekbi.get('password'),'geekbi.password')
         out['geekbi']={'username':username,'password':geekbi['password']}
+        if 'access_token' in geekbi or 'expires_at' in geekbi:
+            access_token=required(geekbi.get('access_token'),'geekbi.access_token')
+            expires_at=geekbi.get('expires_at')
+            if type(expires_at) is not int or expires_at<=0:raise ValueError('Invalid geekbi.expires_at')
+            out['geekbi'].update(access_token=access_token,expires_at=expires_at)
     return out
 
 def import_bundle(root,value,store):

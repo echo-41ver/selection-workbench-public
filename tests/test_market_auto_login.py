@@ -41,6 +41,7 @@ def read_server(path):
 def sandbox(tmp_path, monkeypatch):
     import geekbi_temu_mcp.auth as sdk
     import selection_automation.market_login as login
+    import selection_automation.secrets as secrets
 
     def forbidden(*args, **kwargs):
         raise AssertionError('unexpected network, DPAPI read or browser launch')
@@ -49,6 +50,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(sdk, 'default_auth_path', lambda: tmp_path / 'shared.json')
     monkeypatch.setattr(sdk, 'urlopen', forbidden)
     monkeypatch.setattr(login, 'load', forbidden)
+    monkeypatch.setattr(secrets, 'load', forbidden)
     monkeypatch.setattr(login.subprocess, 'run', forbidden)
     return SimpleNamespace(root=tmp_path, local=tmp_path / 'runtime/market-auth/agent-auth.json',
                            sdk=sdk, login=login)
@@ -56,10 +58,13 @@ def sandbox(tmp_path, monkeypatch):
 
 @pytest.fixture
 def company(sandbox, monkeypatch):
+    import selection_automation.secrets as secrets
     secret = sandbox.root / 'runtime/secrets/company.dpapi'
     secret.parent.mkdir(parents=True)
     secret.touch()
-    monkeypatch.setattr(sandbox.login, 'load', lambda path: {'geekbi': dict(ACCOUNT)})
+    saved_company = lambda path: {'geekbi': dict(ACCOUNT)}
+    monkeypatch.setattr(sandbox.login, 'load', saved_company)
+    monkeypatch.setattr(secrets, 'load', saved_company)
     monkeypatch.setattr(sandbox.login, 'activate', lambda root, env: env)
     monkeypatch.setattr(sandbox.login.shutil, 'which', lambda *args, **kwargs: 'fixture-node')
     return sandbox

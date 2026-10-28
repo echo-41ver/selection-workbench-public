@@ -169,6 +169,55 @@ test('a rejected market refresh restores its prior expiry-aware state',async()=>
  assert.equal(links().length,0);assert.match(box.textContent,/已过期/);assert.doesNotMatch(box.textContent,/正在刷新/);
 });
 
+for(const terminal of ['FAILED','CATEGORY_UNSUPPORTED','COMPLETE']){
+ test(`the market reading notice clears only after a fresh ${terminal} result`,async()=>{
+  const {context,box,data}=marketFixture();const feedbackNodes=new Map(['feedback','global-feedback'].map(id=>[id,{textContent:''}]));
+  context.$=id=>id==='market-status'?box:feedbackNodes.get(id);
+  Object.assign(context,{AbortController,setTimeout:()=>1,clearTimeout(){},updateControls(){},poll:async()=>{},
+   fetch:async()=>({ok:true,json:async()=>({ok:true,message:'正在自动读取市场数据并更新网页与Excel'})})});
+  vm.runInContext(helperHtml.split('\n').find(line=>line.startsWith('function feedback('))+'\n'+
+   helperHtml.split('\n').find(line=>line.startsWith('async function action(')),context);
+  await vm.runInContext("action('/api/refresh-market',{})",context);
+  assert.match(feedbackNodes.get('global-feedback').textContent,/正在自动读取/);
+  context.lastStatus={...data,market_busy:true,market_status:{status:'RUNNING'}};
+  assert.equal(vm.runInContext('marketRefreshInProgress(lastStatus)',context),true);
+  assert.match(feedbackNodes.get('global-feedback').textContent,/正在自动读取/);
+  context.lastStatus={...data,status_sample:{sampled_at:11},market_status:{status:terminal}};
+  assert.equal(vm.runInContext('marketRefreshInProgress(lastStatus)',context),false);
+  assert.equal(feedbackNodes.get('global-feedback').textContent,'');
+  assert.equal(feedbackNodes.get('feedback').textContent,'');
+ });
+}
+
+test('a terminal market result preserves a newer unrelated notice',async()=>{
+ const {context,box,data}=marketFixture();const feedbackNodes=new Map(['feedback','global-feedback'].map(id=>[id,{textContent:''}]));
+ context.$=id=>id==='market-status'?box:feedbackNodes.get(id);
+ Object.assign(context,{AbortController,setTimeout:()=>1,clearTimeout(){},updateControls(){},poll:async()=>{},
+  fetch:async()=>({ok:true,json:async()=>({ok:true,message:'正在自动读取市场数据并更新网页与Excel'})})});
+ vm.runInContext(helperHtml.split('\n').find(line=>line.startsWith('function feedback('))+'\n'+
+  helperHtml.split('\n').find(line=>line.startsWith('async function action(')),context);
+ await vm.runInContext("action('/api/refresh-market',{})",context);
+ vm.runInContext("feedback('第三层分析已提交')",context);
+ context.lastStatus={...data,status_sample:{sampled_at:11},market_status:{status:'COMPLETE'}};
+ assert.equal(vm.runInContext('marketRefreshInProgress(lastStatus)',context),false);
+ assert.equal(feedbackNodes.get('global-feedback').textContent,'第三层分析已提交');
+ assert.equal(feedbackNodes.get('feedback').textContent,'第三层分析已提交');
+});
+
+test('an already-running market notice clears when that actual read terminates',async()=>{
+ const {context,box,data}=marketFixture();const feedbackNodes=new Map(['feedback','global-feedback'].map(id=>[id,{textContent:''}]));
+ context.$=id=>id==='market-status'?box:feedbackNodes.get(id);
+ Object.assign(context,{AbortController,setTimeout:()=>1,clearTimeout(){},updateControls(){},poll:async()=>{},
+  fetch:async()=>({ok:false,json:async()=>({error:{code:'ALREADY_RUNNING',message:'极鲸云正在读取，请等待本次完成'}})})});
+ vm.runInContext(helperHtml.split('\n').find(line=>line.startsWith('function feedback('))+'\n'+
+  helperHtml.split('\n').find(line=>line.startsWith('async function action(')),context);
+ await vm.runInContext("action('/api/refresh-market',{})",context);
+ assert.equal(feedbackNodes.get('global-feedback').textContent,'极鲸云正在读取，请等待本次完成');
+ context.lastStatus={...data,status_sample:{sampled_at:11},market_status:{status:'FAILED'}};
+ assert.equal(vm.runInContext('marketRefreshInProgress(lastStatus)',context),false);
+ assert.equal(feedbackNodes.get('global-feedback').textContent,'');
+});
+
 test('overall progress shows weighted count, hours and minutes, and paused lanes',()=>{
   const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
   const code=html.slice(html.indexOf('function renderCollectionTotal(data)'),html.indexOf('function render(data)'));

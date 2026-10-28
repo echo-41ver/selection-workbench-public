@@ -36,7 +36,7 @@ def test_repeated_page_stops_without_claiming_full_coverage():
 
 def test_fuzzy_category_is_not_silently_used():
     source=Source()
-    assert collect({**category(),'category_name_zh':'投影仪'},source,now=NOW)['status']=='CATEGORY_UNSUPPORTED'
+    assert collect({**category(),'category_name_zh':'投影仪'},source,now=NOW)['status']=='CATEGORY_UNRESOLVED'
     assert not source.calls
 
 
@@ -64,7 +64,7 @@ def test_alias_must_not_widen_to_parent_even_when_model_selects_it():
     source=Parents()
     result=collect({**category(),'category_name_zh':'电磁炉','temu':{'category_aliases':['厨房电器']}},source,now=NOW,
         choose_categories=lambda *args:{'cat_ids':[1],'confidence':1})
-    assert result['status']=='CATEGORY_UNSUPPORTED'
+    assert result['status']=='CATEGORY_UNRESOLVED'
     assert result['optional'] and result['blocking'] is False and not source.calls
     assert result['category_candidates'][0]['catId']==1
 
@@ -125,7 +125,7 @@ def test_verified_fuel_transfer_taxonomy_never_selects_engine_parts(correct_path
     cat={**category(),'category_name_zh':'便携式抽油泵／液体输送泵',
          'amazon':{'verification':{'heading':'Best Sellers in Barrel & Hand Fuel Pumps'}}}
     result=collect(cat,source,now=NOW)
-    assert result['status']==('COMPLETE' if correct_path else 'CATEGORY_UNSUPPORTED')
+    assert result['status']==('COMPLETE' if correct_path else 'CATEGORY_UNRESOLVED')
     assert len(source.calls)==int(correct_path)
 
 
@@ -133,9 +133,19 @@ def test_category_mapper_may_only_choose_real_high_confidence_ids():
     cat={**category(),'category_name_zh':'无线电钻'}
     for ids,confidence in [([999],1),([1],.5)]:
         result=collect(cat,Source(),now=NOW,choose_categories=lambda *a:{'cat_ids':ids,'confidence':confidence})
-        assert result['status']=='CATEGORY_UNSUPPORTED'
+        assert result['status']=='CATEGORY_UNRESOLVED'
     result=collect(cat,Source(),now=NOW,choose_categories=lambda *a:{'cat_ids':[1],'confidence':.95})
     assert result['status']=='COMPLETE' and result['categories'][0]['catId']==1
+
+
+def test_complete_empty_category_search_is_unsupported_without_model_request():
+    class Empty(Source):
+        def categories(self,query):return {'total':0,'list':[]}
+    source=Empty()
+    def forbidden(*args):raise AssertionError('no candidate requires no model request')
+    result=collect(category(),source,now=NOW,choose_categories=forbidden)
+    assert result['status']=='CATEGORY_UNSUPPORTED' and result['category_candidates']==[]
+    assert not source.calls
 
 
 def snapshot(rates=(.3,.4), sales=(90,10)):

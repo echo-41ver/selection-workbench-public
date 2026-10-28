@@ -65,16 +65,30 @@ def test_invalid_geekbi_rejected_before_any_write(tmp_path,geekbi):
     with pytest.raises(ValueError):import_bundle(tmp_path,value,lambda *a:writes.append(a))
     assert not writes and not (tmp_path/'runtime').exists()
 
+@pytest.mark.parametrize('authorization',[
+    {'access_token':'TEST_ONLY_GEEKBI_TOKEN'}, {'expires_at':4102444800},
+    {'access_token':'','expires_at':4102444800}, {'access_token':'TEST_ONLY_GEEKBI_TOKEN\n','expires_at':4102444800},
+    {'access_token':'TEST_ONLY_GEEKBI_TOKEN','expires_at':True}, {'access_token':'TEST_ONLY_GEEKBI_TOKEN','expires_at':1.5},
+    {'access_token':'TEST_ONLY_GEEKBI_TOKEN','expires_at':'4102444800'}, {'access_token':'TEST_ONLY_GEEKBI_TOKEN','expires_at':0},
+])
+def test_geekbi_authorization_pair_is_validated_before_any_write(tmp_path,authorization):
+    value=fixture();value['geekbi']={'username':'TEST_ONLY_GEEKBI_USER','password':'TEST_ONLY_GEEKBI_PASSWORD',**authorization};writes=[]
+    with pytest.raises(ValueError) as caught:import_bundle(tmp_path,value,lambda *a:writes.append(a))
+    assert 'TEST_ONLY_GEEKBI_TOKEN' not in str(caught.value)
+    assert not writes and not (tmp_path/'runtime').exists()
+
 def test_geekbi_bundle_import_uses_existing_current_user_company_cipher(tmp_path):
     base=tmp_path/'base.zip';output=tmp_path/'company.zip'
     with zipfile.ZipFile(base,'w') as archive:archive.writestr('BUILD_INFO.json',json.dumps({'channel':'internal','contains_company_credentials':False}))
-    config=fixture();config['geekbi']={'username':'TEST_ONLY_GEEKBI_USER','password':' TEST_ONLY_GEEKBI_PASSWORD '}
+    config=fixture();config['geekbi']={'username':'TEST_ONLY_GEEKBI_USER','password':' TEST_ONLY_GEEKBI_PASSWORD ',
+                                    'access_token':'TEST_ONLY_GEEKBI_TOKEN','expires_at':4102444800}
     write_bundle(base,output,config)
     with zipfile.ZipFile(output) as archive:value=json.loads(archive.read('company.local.json'))
     target=tmp_path/'installed';import_bundle(target,value,store)
     secret=target/'runtime/secrets/company.dpapi'
     assert load(secret)['geekbi']==config['geekbi']
     assert b'TEST_ONLY_GEEKBI_USER' not in secret.read_bytes() and b'TEST_ONLY_GEEKBI_PASSWORD' not in secret.read_bytes()
+    assert b'TEST_ONLY_GEEKBI_TOKEN' not in secret.read_bytes()
     assert not (target/'runtime/secrets/geekbi.dpapi').exists()
 def test_mid_publication_failure_rolls_back_both_files(tmp_path,monkeypatch):
     root=tmp_path/'install';import_bundle(root,fixture(),store);folder=root/'runtime/secrets';before={name:(folder/name).read_bytes() for name in ('company.dpapi','deepseek.dpapi')}
