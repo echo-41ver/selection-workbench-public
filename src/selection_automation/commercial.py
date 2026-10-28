@@ -277,6 +277,12 @@ def report_signature(root, category):
                             'sales_sort': {key: check.get(key) for key in ('state','label','observed_at')}}
                 payload = json.dumps(evidence, sort_keys=True, ensure_ascii=False).encode()
                 size, version = len(payload), hashlib.sha256(payload).hexdigest()
+            elif path == base/'market/status.json':
+                state = read_json(path)
+                # Login polling changes its message/link, not product evidence.
+                evidence = state if state.get('status') in ('COMPLETE','PARTIAL') else {'status':'NOT_READY'}
+                payload = json.dumps(evidence, sort_keys=True, ensure_ascii=False).encode()
+                size, version = len(payload), hashlib.sha256(payload).hexdigest()
             elif path.suffix == '.py' or (path.name == 'products.jsonl' and size <= 65536):
                 version = hashlib.sha256(path.read_bytes()).hexdigest()
             elif size == 0:
@@ -297,6 +303,8 @@ def current_report(root, category):
     path = Path(root)/'runs'/category['category_key']/'commercial_report.json'
     report = read_json(path)
     if report and report.get('evidence_signature') == report_signature(root,category):
+        if 'market' in report:
+            report['market']['provider_status'] = read_json(path.parent/'market/status.json')
         # A long-lived analysis process can write a fresh report using an older
         # display formatter. Refresh only presentation from the frozen source.
         from .selection_delivery import collected_parameters

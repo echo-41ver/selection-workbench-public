@@ -260,6 +260,30 @@ def test_signature_ignores_heartbeat_and_identical_small_product_rewrites(tmp_pa
     assert report_signature(tmp_path,cat)!=second
 
 
+def test_pending_market_login_updates_display_without_rebuilding_product_analysis(tmp_path, monkeypatch):
+    from selection_automation import commercial
+    cat=category();base=tmp_path/'runs/fixture';state=base/'market/status.json'
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({'status':'ACTION_REQUIRED','jumpUrl':'https://example.test/first','updated_at':'first'}))
+    builds=[]
+    def build(root, category):
+        builds.append(True)
+        return {'evidence_signature':commercial.report_signature(root,category),
+                'market':{'provider_status':json.loads(state.read_text())}}
+    monkeypatch.setattr(commercial,'build_report',build)
+    commercial.current_report(tmp_path,cat)
+    state.write_text(json.dumps({'status':'RUNNING','message':'checking authorization','updated_at':'later'}))
+    current=commercial.current_report(tmp_path,cat)
+    assert len(builds)==1
+    assert current['market']['provider_status']['status']=='RUNNING'
+    state.write_text(json.dumps({'status':'ACTION_REQUIRED','jumpUrl':'https://example.test/new-link','updated_at':'latest'}))
+    assert commercial.current_report(tmp_path,cat)['market']['provider_status']['status']=='ACTION_REQUIRED'
+    assert len(builds)==1
+    state.write_text(json.dumps({'status':'COMPLETE','queried_at':'now','records':1}))
+    commercial.current_report(tmp_path,cat)
+    assert len(builds)==2
+
+
 def test_only_current_successful_unknown_pairs_enter_published_review_evidence(tmp_path,monkeypatch):
     from selection_automation import commercial
     cat=category();base=tmp_path/'runs/fixture';frozen=base/'stage123/export_frozen'
