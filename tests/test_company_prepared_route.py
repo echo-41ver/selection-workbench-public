@@ -41,6 +41,24 @@ def test_changed_route_is_refused_without_adoption(tmp_path,change):
     assert saved["preproxy_port"]==7890
 
 
+def test_new_task_refreshes_restarted_same_proxy_before_selection(tmp_path,monkeypatch):
+    import selection_automation.local_proxy_prepare as routes
+    saved,config,read=route_fixture(tmp_path)
+    current={'pid':456,'created':200,'name':'clash-meta.exe'}
+    refreshed={**saved,'local_proxy_owner':current}
+    events=[];writes={}
+    check_owner=lambda owner:owner['pid']==456
+    monkeypatch.setattr(routes,'owned',check_owner)
+    monkeypatch.setattr(routes,'refresh_saved_owner',lambda root,value:events.append(value) or refreshed)
+    transport,status=prepare(tmp_path,config,read,lambda path,value:writes.update({path.name:value}),
+        business_active=lambda _:False,check_owner=check_owner,
+        observation=lambda:{'candidates':[{'host':'127.0.0.1','port':7890,'protocol':'SOCKS5',**current}]})
+    assert events==[saved]
+    assert transport['local_proxy_owner']==current
+    assert transport['preproxy_port']==7890 and status['selected_mode']=='SOCKS5'
+    assert writes['proxyshare.settings.json']['proxy_host']==saved['proxy_host']
+
+
 @pytest.mark.parametrize("task,machine,used,ready,expected",[
     ("task","machine",False,True,True),("other","machine",False,True,False),
     ("task","other",False,True,False),("task","machine",True,True,True),

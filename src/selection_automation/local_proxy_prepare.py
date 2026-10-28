@@ -25,6 +25,8 @@ def prepare(root,company,read,save,*,observation=discover,business_active=collec
         choice=next_choice or read(root/'runtime/local-proxy-choice.json',{})
         if choice:company={**company,'local_proxy_endpoint':choice}
         saved=read(root/'runtime/secrets/proxyshare.settings.json',{})
+        if not verify_saved(saved,check_owner) and check_owner is owned:
+            saved=refresh_saved_owner(root,saved)
         try:
             transport,status=select_transport(company,local_discovery=observation,saved=saved)
             if business_active(root) or not verify_saved(transport,check_owner):
