@@ -1,0 +1,27 @@
+name: Diagnose Windows shortcut save
+on:
+  push:
+    branches: [diagnose/windows-shortcut-save-20261029]
+jobs:
+  shortcut:
+    runs-on: windows-latest
+    steps:
+      - name: Compare real shell shortcut save cases
+        shell: powershell
+        run: |
+          $root=Join-Path $env:RUNNER_TEMP 'shortcut-probe'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          [pscustomobject]@{culture=[cultureinfo]::CurrentCulture.Name;codepage=[Text.Encoding]::Default.CodePage;desktop=[Environment]::GetFolderPath('DesktopDirectory','DoNotVerify')} | ConvertTo-Json -Compress
+          $shell=New-Object -ComObject WScript.Shell
+          foreach($name in @('workbench.lnk','选品工作台.lnk')){
+            $path=Join-Path $root $name
+            try {
+              $link=$shell.CreateShortcut($path)
+              $link.TargetPath=Join-Path $env:WINDIR 'explorer.exe'
+              $link.WorkingDirectory=$env:WINDIR
+              $link.Save()
+              [pscustomobject]@{name=$name;saved=(Test-Path -LiteralPath $path);target=$link.TargetPath} | ConvertTo-Json -Compress
+            } catch {
+              [pscustomobject]@{name=$name;saved=$false;type=$_.Exception.GetType().FullName;message=$_.Exception.Message;hresult=$_.Exception.HResult;inner=[string]$_.Exception.InnerException} | ConvertTo-Json -Compress
+            }
+          }
