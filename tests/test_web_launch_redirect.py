@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import venv
 
 import pytest
 
@@ -70,3 +71,19 @@ def test_without_local_config_uses_own_root(tmp_path):
     result = run_script(probe)
     assert result.returncode == 0, result.stderr.decode(errors='replace')
     assert result.stdout.decode('utf-8-sig').strip() == str(source)
+
+
+def test_unready_proxy_still_opens_workbench_without_claiming_readiness(tmp_path):
+    root = fixture_root(tmp_path, 'proxy not started')
+    venv.EnvBuilder(with_pip=False).create(root / '.venv')
+    (root / 'scripts/ensure_node_runtime.py').write_text('raise SystemExit(0)\n')
+    (root / 'scripts/verify_deployment.py').write_text(
+        'print(\'{"ready": false, "parity_ready": false, "missing": ["proxy not started"]}\')\n'
+        'raise SystemExit(1)\n')
+    (root / 'scripts/restart_web.py').write_text(
+        'from pathlib import Path\n'
+        'Path("web-entry-invoked").write_text("started")\n')
+    result = run_script(root / 'start-web.ps1', '-NoBrowser')
+    assert result.returncode == 0, result.stderr.decode(errors='replace')
+    assert (root / 'web-entry-invoked').read_text() == 'started'
+    assert b'"parity_ready": false' in result.stdout

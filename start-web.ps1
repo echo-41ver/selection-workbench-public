@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Python 环境
 & $python (Join-Path $root 'scripts\ensure_node_runtime.py')
 if ($LASTEXITCODE -ne 0) { throw '网页采集依赖未就绪；请按上方提示修复后重试' }
 & $python (Join-Path $root 'scripts\verify_deployment.py')
-if ($LASTEXITCODE -ne 0) { throw '完整选品流程尚未就绪；请按上方提示修复后重试' }
+if ($LASTEXITCODE -ne 0) { Write-Warning '完整选品环境暂未就绪；正在打开工作台查看当前网络与配置。恢复后可直接继续，历史结果仍可访问。' }
 $arguments = @((Join-Path $root 'scripts\restart_web.py'),'--ensure-running','--port',[string]$Port)
 if (-not $NoBrowser) { $arguments += '--open-browser' }
 & $python @arguments
