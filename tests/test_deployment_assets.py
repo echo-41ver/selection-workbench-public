@@ -59,6 +59,10 @@ function Get-CimInstance { return @() }
 function Get-NetTCPConnection { return @() }
 function Checked {
  param([string]$Exe,[string[]]$Arguments)
+ if ($Arguments.Count -eq 4 -and $Arguments[0] -eq '-c') {
+  & $env:TEST_REAL_PYTHON @Arguments
+  if ($LASTEXITCODE -ne 0) { throw 'Real shortcut creation failed' }
+ }
  [pscustomobject]@{exe=$Exe;arguments=@($Arguments)} | ConvertTo-Json -Compress | Add-Content -LiteralPath $env:COMMAND_LOG -Encoding UTF8
  if ($Exe -eq 'TEST_ONLY_NPM') { throw 'Unexpected online npm install' }
  if ($Arguments -contains 'pip' -and $Arguments -notcontains '--no-index') { throw 'Unexpected online pip install' }
@@ -83,7 +87,7 @@ function Checked {
         log = base / 'commands.jsonl'
         result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                                  '-File', str(script), '-SkipAdsPower', '-SkipProxyClient'],
-                                env={**os.environ, 'COMMAND_LOG': str(log)}, capture_output=True, timeout=30)
+                                env={**os.environ, 'COMMAND_LOG': str(log), 'TEST_REAL_PYTHON': sys.executable}, capture_output=True, timeout=30)
         diagnostic = (result.stdout + result.stderr).decode('utf-8', errors='replace')
         commands = [json.loads(line) for line in log.read_text(encoding='utf-8-sig').splitlines()] if log.exists() else []
         pip_calls = [call for call in commands if 'pip' in call['arguments']]

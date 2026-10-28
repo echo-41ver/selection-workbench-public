@@ -181,6 +181,10 @@ function Get-CimInstance { return @() }
 function Get-NetTCPConnection { return @() }
 function Checked {
  param([string]$Exe,[string[]]$Arguments)
+ if ($Arguments.Count -eq 4 -and $Arguments[0] -eq '-c') {
+  & $env:TEST_REAL_PYTHON @Arguments
+  if ($LASTEXITCODE -ne 0) { throw 'Real shortcut creation failed' }
+ }
  if ($Exe -eq 'TEST_ONLY_PYTHON') {
   $directory=Join-Path $root '.venv\Scripts'
   New-Item -ItemType Directory -Path $directory -Force | Out-Null
@@ -202,7 +206,7 @@ function Checked {
     (tmp_path / 'install.ps1').write_text(install.replace(anchor, anchor + '\n' + injected), encoding='utf-8-sig')
     result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                              '-File', str(tmp_path / 'install.ps1'), '-SkipAdsPower', '-SkipModelDownload'],
-                            cwd=tmp_path, env={**os.environ, 'TEST_MODE': mode}, capture_output=True, timeout=30)
+                            cwd=tmp_path, env={**os.environ, 'TEST_MODE': mode, 'TEST_REAL_PYTHON': sys.executable}, capture_output=True, timeout=30)
     assert result.returncode == (0 if mode == 'success' else 1), result.stderr
     assert (tmp_path / 'TEST_ONLY_CONFIRM_CALLED').exists()
     assert (tmp_path / 'runs/retained/before.txt').read_text() == 'ORIGINAL'
@@ -214,12 +218,13 @@ function Checked {
         status = json.loads((tmp_path / 'runtime/install-status.json').read_text(encoding='utf-8'))
         assert status['project_environment_rolled_back'] is True
     if mode == 'success':
-        shortcut = json.loads(ps(r'''
-$link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $env:TEST_DESKTOP '选品工作台.lnk'))
-@{target=$link.TargetPath;working_directory=$link.WorkingDirectory} | ConvertTo-Json -Compress
-''', tmp_path, TEST_DESKTOP=str(desktop)))
+        import pythoncom
+        from win32com.shell import shell
         assert (desktop / '选品工作台.lnk').is_file()
-        assert shortcut == {'target': str(tmp_path / 'start-web.cmd'), 'working_directory': str(tmp_path)}
+        shortcut = pythoncom.CoCreateInstance(shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink)
+        shortcut.QueryInterface(pythoncom.IID_IPersistFile).Load(str(desktop / '选品工作台.lnk'))
+        assert shortcut.GetPath(shell.SLGP_RAWPATH)[0] == str(tmp_path / 'start-web.cmd')
+        assert shortcut.GetWorkingDirectory() == str(tmp_path)
         assert not (tmp_path / '.venv/before.txt').exists()
         assert secret.read_bytes() == b'TEST_ONLY_NEW_CIPHER'
         assert json.loads((tmp_path / 'runtime/install-status.json').read_text(encoding='utf-8'))['succeeded'] is True

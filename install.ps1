@@ -458,12 +458,18 @@ $stage = '创建桌面快捷方式'
 $desktopPath = [Environment]::GetFolderPath('DesktopDirectory', 'DoNotVerify')
 New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
 $shortcutPath = Join-Path $desktopPath '选品工作台.lnk'
-$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
-$shortcut.TargetPath = Join-Path $root 'start-web.cmd'
-$shortcut.WorkingDirectory = $root
-$shortcut.Description = '启动选品工作台并打开网页'
-$shortcut.WindowStyle = 7
-$shortcut.Save()
+$shortcutCode = @'
+import sys, pythoncom
+from pathlib import Path
+from win32com.shell import shell
+link = pythoncom.CoCreateInstance(shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink)
+link.SetPath(str(Path(sys.argv[1]) / 'start-web.cmd'))
+link.SetWorkingDirectory(sys.argv[1])
+link.SetDescription('启动选品工作台并打开网页')
+link.SetShowCmd(7)
+link.QueryInterface(pythoncom.IID_IPersistFile).Save(sys.argv[2], 0)
+'@
+Checked $python @('-c', $shortcutCode, $root, $shortcutPath)
 Write-DeploymentStatus -Root $root -Stage '完成' -Succeeded $true -RolledBack $false
 Write-Output '部署检查通过，桌面“选品工作台”快捷方式已创建，以后双击即可打开。公司配置已按当前 Windows 用户加密；AdsPower 通过公司密钥连接。选择本机 Agent 时使用该机自己的账号。'
 } catch {
