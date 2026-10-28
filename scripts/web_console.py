@@ -1390,9 +1390,19 @@ class Console:
                   base / 'stage12_config.json')
         if not category.is_file() or not source.is_file():
             return
+        if kind in ('layer12', 'layer123') and self.excel_workbook(kind):
+            from watch_stage3_excel import signature, source_paths, database_paths
+            state = selection.read(base / 'publish_state.json', {})
+            # Published inputs and DB files are unchanged: do not scan the
+            # whole SQLite database again just to open its finished workbook.
+            if (not state.get('errors') and not state.get('pending_views', {}).get('layer123')
+                    and state.get('stage3_excel') == signature(source_paths(category.absolute(), base.absolute()))
+                    and state.get('stage3_excel_database_files') == signature(database_paths(base))):
+                return
         try:
             result = subprocess.run([sys.executable, str(self.root / 'scripts' / 'publish_all.py'),
-                                     '--category', str(category)], cwd=self.root,
+                                     '--category', str(category), '--kind',
+                                     'layer123' if kind == 'layer12' else kind], cwd=self.root,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                     timeout=180, check=False)
         except (OSError, subprocess.TimeoutExpired):

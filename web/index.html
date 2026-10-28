@@ -796,8 +796,8 @@ async function openExcel(kind){
  const notify=(message,error=false)=>{status.textContent=message;feedback(message,error);};
  excelOpening.add(kind);button.disabled=true;button.textContent='正在打开…';
  download.href='/api/excel/'+kind;download.hidden=false;
- notify('正在打开已发布的 Excel '+when+'，请等待本机表格程序加载。');
- const timer=setTimeout(()=>controller.abort(),45000);
+ notify('正在打开当前任务的 Excel '+when+'；数据有更新时会先更新表格，请勿重复点击。');
+ const timer=setTimeout(()=>controller.abort(),195000);
  try{
   const response=await fetch('/api/open-excel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind}),cache:'no-store',signal:controller.signal});
   const data=await response.json();

@@ -18,9 +18,12 @@ let lastStatus={excel_files:{layer123:{available:true,filename:'最新.xlsx',upd
 const feedback=()=>{};
 let resolveRequest,requests=0;
 let fetch=async()=>{requests++;return new Promise(resolve=>{resolveRequest=resolve;});};
+const nativeTimer=setTimeout,openTimeouts=[];
+setTimeout=(callback,milliseconds)=>{openTimeouts.push(milliseconds);return nativeTimer(callback,milliseconds);};
 CODE
 (async()=>{
  const pending=openExcel('layer123');
+ if(openTimeouts[0]<180000||openTimeouts[0]>210000)throw Error('UI timeout must allow the bounded backend update');
  if(!$('excel-open-status').textContent.includes('正在打开')||!$('excel-open-status').textContent.includes('文件更新于'))throw Error('no immediate feedback');
  if($('excel-download').hidden||$('excel-download').href!=='/api/excel/layer123')throw Error('no download fallback');
  excelButtons(lastStatus);

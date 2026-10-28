@@ -21,8 +21,16 @@ HEARTBEAT_INTERVAL=10
 def snapshot_signature(paths: list[Path]) -> str:
     digest = hashlib.sha256()
     for path in paths:
-        stat = path.stat()
         digest.update(str(path).encode("utf-8"))
+        if path.name == 'category.json':
+            category = json.loads(path.read_text('utf-8-sig'))
+            # Only collection rules affect the union; changing the analysis
+            # provider or concurrency cannot invalidate completed collection.
+            rules = {key: category[key] for key in ('category_name_zh', 'category_name_en',
+                     'category_aliases', 'rule_authoring_format', 'temu', 'stage1') if key in category}
+            digest.update(json.dumps(rules, sort_keys=True, ensure_ascii=False).encode('utf-8'))
+            continue
+        stat = path.stat()
         digest.update(str(stat.st_size).encode("ascii"))
         digest.update(str(stat.st_mtime_ns).encode("ascii"))
     return digest.hexdigest()

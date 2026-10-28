@@ -44,7 +44,8 @@ def signature(paths):
     ).encode()).hexdigest()
 
 
-def publish(category_path):
+def publish(category_path, *, kind=None):
+    requested_kind = kind
     from export_category_workbooks import export
     from selection_workflow.excel_delivery import retry_fixed_view
     cat = read(category_path)
@@ -59,10 +60,15 @@ def publish(category_path):
         deliveries = dict(prior.get('deliveries', {}))
         pending.pop('layer12',None)
         deliveries.pop('layer12',None)
-        errors = {}
+        errors = dict(prior.get('errors', {})) if requested_kind else {}
+        if requested_kind:
+            for name in ('commercial', requested_kind, 'analysis' if requested_kind == 'layer123' else requested_kind):
+                errors.pop(name, None)
 
         # Retry a locked view even when the source signature has not changed.
         for kind, item in list(pending.items()):
+            if requested_kind and kind != requested_kind:
+                continue
             retried = retry_fixed_view(Path(item['数据源工作簿']), Path(item['固定查看副本']))
             deliveries[kind] = {**deliveries.get(kind, {}), **retried}
             if retried['固定查看副本已更新']:
@@ -95,11 +101,12 @@ def publish(category_path):
         frozen = base / 'stage123' / 'export_frozen'
         codex_paths = sorted((base / 'stage123/codex_reviews').glob('*.jsonl'))
         codex_available = any(path.stat().st_size for path in codex_paths)
-        database_available=bool(db and db.exists())
+        database_available=bool(db and db.exists() and requested_kind in (None, 'layer123'))
         if database_available:
             from selection_automation.selection_delivery import delivery_source_paths
             paid_marker=base/'stage123'/'paid_enabled.json'
             vision_results=base/'stage123'/'results.jsonl'
+            database_files_before = signature([db,db.with_name(db.name+'-wal')])
             database_before = database_signature([db,db.with_name(db.name+'-wal')])
             before = database_before + signature([
                                 paid_marker, vision_results,
@@ -135,6 +142,8 @@ def publish(category_path):
         common += [business_path, ROOT / 'src/selection_workflow/commercial_excel.py']
         for kind, path in [('amazon', base / 'amazon' / 'amazon_frontend_latest.json'),
                            ('temu', base / 'temu' / 'union' / 'products.jsonl')]:
+            if requested_kind and kind != requested_kind:
+                continue
             if path.exists():
                 dependencies = [base / 'temu' / 'union' / 'summary.json', *(base/'temu/workers').glob('*/*/products.jsonl')] if kind == 'temu' else []
                 data_signature = signature([path, *dependencies, *common])
@@ -158,6 +167,7 @@ def publish(category_path):
                     # Capture inputs BEFORE export: later arrivals must stay dirty.
                     current['stage3_excel'] = stage3_before
                     current['stage3_excel_database'] = stage3_database_before
+                    current['stage3_excel_database_files'] = database_files_before
                     current['stage3_excel_updated_at'] = time.time()
                 current['analysis'] = before
             except Exception as exc:
@@ -170,13 +180,14 @@ def publish(category_path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--category', type=Path, required=True)
+    p.add_argument('--kind', choices=('amazon', 'temu', 'layer123'))
     args = p.parse_args()
     try:
         import psutil
         psutil.Process().nice(psutil.NORMAL_PRIORITY_CLASS if os.name == 'nt' else 10)
     except (ImportError, OSError):
         pass
-    state = publish(args.category)
+    state = publish(args.category, kind=args.kind)
     if state['errors']:
         raise SystemExit(json.dumps(state['errors'], ensure_ascii=False))
 

@@ -148,6 +148,27 @@ def publisher_fixture(tmp_path, monkeypatch):
     return category, base
 
 
+def test_open_result_refresh_does_not_export_other_workbooks_or_clear_their_errors(tmp_path, monkeypatch):
+    category, base = publisher_fixture(tmp_path, monkeypatch)
+    database = base / 'stage12/stage12.sqlite3'
+    database.parent.mkdir()
+    database.write_bytes(b'offline database fixture')
+    (base / 'stage12_config.json').write_text(json.dumps({'output_dir': str(database.parent)}))
+    (base / 'temu/union').mkdir(parents=True)
+    (base / 'temu/union/products.jsonl').write_text('{}\n')
+    publisher.save(base / 'publish_state.json', {'deliveries': {'amazon': {'kept': True}},
+                                               'errors': {'temu': 'TEST_ONLY_EXISTING_FAILURE'}})
+    from selection_automation import commercial
+    monkeypatch.setattr(commercial, 'build_report', lambda *args: {})
+    monkeypatch.setattr(publisher.subprocess, 'run', lambda *a, **kw: None)
+    exported = []
+    monkeypatch.setattr(exporter, 'export', lambda path, kind: exported.append(kind) or {'固定查看副本已更新': True})
+    state = publisher.publish(category, kind='layer123')
+    assert exported == ['layer123']
+    assert state['deliveries']['amazon'] == {'kept': True}
+    assert state['errors'] == {'temu': 'TEST_ONLY_EXISTING_FAILURE'}
+
+
 def test_all_delivery_copies_fail_without_committing_success_and_retry(tmp_path, monkeypatch):
     category, base = publisher_fixture(tmp_path, monkeypatch)
     original = excel_delivery._atomic_copy

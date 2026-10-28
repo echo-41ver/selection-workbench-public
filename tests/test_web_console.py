@@ -795,6 +795,7 @@ def test_finished_run_excel_button_checks_publication_before_opening_existing_fi
     called=[]
     def publish(command,**kwargs):
         called.append(command)
+        assert command[command.index('--kind')+1]=='amazon'
         latest.write_bytes(b'new')
         return type('Result',(),{'returncode':0})()
     monkeypatch.setattr(web.subprocess,'run',publish)
@@ -802,6 +803,30 @@ def test_finished_run_excel_button_checks_publication_before_opening_existing_fi
     assert console.open_excel('amazon')['ok']
     assert Path(opened[0])!=old and Path(opened[0]).read_bytes()==latest.read_bytes()==b'new'
     assert len(called)==1
+
+
+@pytest.mark.parametrize('changed', [None, 'database', 'results'])
+def test_unchanged_published_excel_opens_without_rescanning_database(tmp_path, monkeypatch, changed):
+    from watch_stage3_excel import signature, source_paths, database_paths
+    console=web.Console(tmp_path);console.key='drill_run'
+    monkeypatch.setattr(console,'owner',lambda:None)
+    base=tmp_path/'runs/drill_run';excel=base/'excel';excel.mkdir(parents=True)
+    category=base/'category.json'
+    web.selection.save(category,{'category_key':'drill_run','category_name_zh':'电钻'})
+    database=base/'stage12/stage12.sqlite3';database.parent.mkdir();database.write_bytes(b'published database')
+    web.selection.save(base/'stage12_config.json',{'output_dir':str(database.parent)})
+    (base/'stage123').mkdir();(base/'stage123/paid_enabled.json').write_text('{}')
+    result=base/'stage123/results.jsonl';result.write_text('{}\n')
+    (excel/'电钻_选品结果.xlsx').write_bytes(b'published workbook')
+    web.selection.save(base/'publish_state.json',{
+        'stage3_excel':signature(source_paths(category,base)),
+        'stage3_excel_database_files':signature(database_paths(base))})
+    if changed=='database':database.write_bytes(b'new database contents')
+    if changed=='results':result.write_text('{}\n{}\n')
+    calls=[]
+    monkeypatch.setattr(web.subprocess,'run',lambda *a,**k:calls.append(a) or SimpleNamespace(returncode=0))
+    console.refresh_excel('layer123')
+    assert len(calls)==(1 if changed else 0)
 
 
 def test_excel_http_download_and_open_only_allow_current_task(tmp_path,monkeypatch):

@@ -179,6 +179,7 @@ def publish(category_path):
                 deliveries['layer123'].pop('固定查看副本错误', None)
                 pending.pop('layer123', None)
         db_paths = database_paths(base)
+        db_files_before = signature(db_paths)
         db_signature = database_signature(db_paths)
         frozen = base / 'stage123/export_frozen'
         summary = frozen / f'layer12_summary_{key}.json'
@@ -212,6 +213,7 @@ def publish(category_path):
             # Capture BEFORE export so results arriving during its two-minute build remain dirty.
             current['stage3_excel'] = before
             current['stage3_excel_database'] = db_signature
+            current['stage3_excel_database_files'] = db_files_before
             current['stage3_excel_updated_at'] = time.time()
         errors.pop('stage3_excel', None)
         current.update(deliveries=deliveries, pending_views=pending, errors=errors)

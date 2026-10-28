@@ -166,6 +166,7 @@ def test_normal_excel_entry_publishes_current_content_and_isolates_the_visible_t
     def publish(args, **kwargs):
         assert Path(args[1]).name == 'publish_all.py'
         assert Path(args[args.index('--category') + 1]) == path
+        assert args[args.index('--kind') + 1] == 'layer123'
         delivered = exporter.export(path, 'layer123')
         web.selection.save(base / 'publish_state.json', {'deliveries': {'layer123': delivered}})
         return SimpleNamespace(returncode=0)

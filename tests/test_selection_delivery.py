@@ -109,6 +109,28 @@ def test_strict_threshold_and_unfinished_evidence(tmp_path):
     assert data['products'][0]['amazon']['price']['min'] is None
 
 
+def test_saving_stage3_provider_keeps_completed_collection_current(tmp_path):
+    cat, report = setup(tmp_path)
+    base = tmp_path / 'runs/fixture'
+    original = (base / 'temu/union/products.jsonl').read_bytes()
+    apply(cat, settings({'mode': 'local_model', 'base_url': 'http://127.0.0.1:8000/v1',
+                         'model': 'test-only', 'workers': 3, 'concurrency_mode': 'manual'}))
+    (base / 'category.json').write_text(json.dumps(cat), encoding='utf-8')
+    result = build_delivery(tmp_path, cat, report)
+    assert result['collection']['complete'] is True
+    assert [row['asin'] for row in result['products']] == ['A1']
+    assert (base / 'temu/union/products.jsonl').read_bytes() == original
+
+
+def test_changed_collection_rule_still_requires_union_republication(tmp_path):
+    cat, report = setup(tmp_path)
+    cat['temu'] = {'subject_filter': {'mode': 'TARGET_BODY_ONLY'}}
+    (tmp_path / 'runs/fixture/category.json').write_text(json.dumps(cat), encoding='utf-8')
+    result = build_delivery(tmp_path, cat, report)
+    assert result['collection']['complete'] is False
+    assert 'TEMU汇总尚未确认当前采集快照' in result['collection']['reason']
+
+
 @pytest.mark.parametrize('restored_change', ['timestamp', 'directory'])
 def test_history_restore_rebuilds_union_from_preserved_sources(tmp_path, monkeypatch, restored_change):
     import os
