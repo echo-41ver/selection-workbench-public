@@ -73,6 +73,10 @@ function Checked {
 '''
         script = target / 'install.ps1'
         original = script.read_text(encoding='utf-8-sig')
+        desktop = base / 'desktop-not-created'
+        desktop_lookup = "[Environment]::GetFolderPath('DesktopDirectory', 'DoNotVerify')"
+        assert original.count(desktop_lookup) == 1
+        original = original.replace(desktop_lookup, "'" + str(desktop).replace("'", "''") + "'")
         anchor = ". (Join-Path $root 'scripts\\deployment_guard.ps1')"
         assert original.count(anchor) == 1
         script.write_text(original.replace(anchor, anchor + '\n' + injected), encoding='utf-8-sig')
@@ -92,6 +96,7 @@ function Checked {
             assert status['project_environment_rolled_back'] is False
         else:
             assert result.returncode == 0, diagnostic
+            assert (desktop / '选品工作台.lnk').is_file()
             assert status['succeeded'] is True
             assert len(pip_calls) == 3
             assert all('--no-index' in call['arguments'] for call in pip_calls)

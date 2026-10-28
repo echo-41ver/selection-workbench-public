@@ -193,6 +193,10 @@ function Checked {
 }
 '''
     install = (ROOT / 'install.ps1').read_text(encoding='utf-8-sig')
+    desktop = tmp_path / 'desktop-not-created'
+    desktop_lookup = "[Environment]::GetFolderPath('DesktopDirectory', 'DoNotVerify')"
+    assert install.count(desktop_lookup) == 1
+    install = install.replace(desktop_lookup, "'" + str(desktop).replace("'", "''") + "'")
     anchor = ". (Join-Path $root 'scripts\\deployment_guard.ps1')"
     assert anchor in install
     (tmp_path / 'install.ps1').write_text(install.replace(anchor, anchor + '\n' + injected), encoding='utf-8-sig')
@@ -210,6 +214,12 @@ function Checked {
         status = json.loads((tmp_path / 'runtime/install-status.json').read_text(encoding='utf-8'))
         assert status['project_environment_rolled_back'] is True
     if mode == 'success':
+        shortcut = json.loads(ps(r'''
+$link = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $env:TEST_DESKTOP '选品工作台.lnk'))
+@{target=$link.TargetPath;working_directory=$link.WorkingDirectory} | ConvertTo-Json -Compress
+''', tmp_path, TEST_DESKTOP=str(desktop)))
+        assert (desktop / '选品工作台.lnk').is_file()
+        assert shortcut == {'target': str(tmp_path / 'start-web.cmd'), 'working_directory': str(tmp_path)}
         assert not (tmp_path / '.venv/before.txt').exists()
         assert secret.read_bytes() == b'TEST_ONLY_NEW_CIPHER'
         assert json.loads((tmp_path / 'runtime/install-status.json').read_text(encoding='utf-8'))['succeeded'] is True

@@ -455,7 +455,9 @@ Checked $python @('scripts/deployment_smoke.py')
 Checked $python @('scripts/connect_local_agents.py','--vision')
 Checked $python @('scripts/verify_deployment.py','--require-parity')
 $stage = '创建桌面快捷方式'
-$shortcutPath = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) '选品工作台.lnk'
+$desktopPath = [Environment]::GetFolderPath('DesktopDirectory', 'DoNotVerify')
+New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
+$shortcutPath = Join-Path $desktopPath '选品工作台.lnk'
 $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
 $shortcut.TargetPath = Join-Path $root 'start-web.cmd'
 $shortcut.WorkingDirectory = $root
