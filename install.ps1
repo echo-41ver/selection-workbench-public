@@ -454,8 +454,16 @@ Checked $python @('scripts/verify_deployment.py')
 Checked $python @('scripts/deployment_smoke.py')
 Checked $python @('scripts/connect_local_agents.py','--vision')
 Checked $python @('scripts/verify_deployment.py','--require-parity')
+$stage = '创建桌面快捷方式'
+$shortcutPath = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) '选品工作台.lnk'
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
+$shortcut.TargetPath = Join-Path $root 'start-web.cmd'
+$shortcut.WorkingDirectory = $root
+$shortcut.Description = '启动选品工作台并打开网页'
+$shortcut.WindowStyle = 7
+$shortcut.Save()
 Write-DeploymentStatus -Root $root -Stage '完成' -Succeeded $true -RolledBack $false
-Write-Output '部署检查通过，可以启动工作台。公司配置已按当前 Windows 用户加密；AdsPower 通过公司密钥连接。选择本机 Agent 时使用该机自己的账号。'
+Write-Output '部署检查通过，桌面“选品工作台”快捷方式已创建，以后双击即可打开。公司配置已按当前 Windows 用户加密；AdsPower 通过公司密钥连接。选择本机 Agent 时使用该机自己的账号。'
 } catch {
     $failure = @{ exception_type=$_.Exception.GetType().FullName; line=$_.InvocationInfo.ScriptLineNumber; category=$_.CategoryInfo.Category.ToString(); command=$script:DeploymentCommandFailure; stage=$stage }
     $support=Join-Path $root 'scripts\deployment_support.ps1'
