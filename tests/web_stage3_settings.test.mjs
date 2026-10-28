@@ -54,6 +54,75 @@ test('third-layer click submits a dedicated key and clears the input',()=>{
  let submitted;const context=vm.createContext({AbortController,setTimeout,clearTimeout,$:id=>nodes[id],stage3ProviderSettings:()=>({mode:'liquid_d1'}),stage3SettingsDirty:true,apiReasoningReady:()=>true,action:(path,body)=>submitted={path,body}});
  vm.runInContext(html.split('\n').find(x=>x.startsWith("$('start-stage3').addEventListener")),context);context.click();
  assert.equal(submitted.path,'/api/start-stage3');assert.equal(submitted.body.api_key,'TEST_ONLY_VISUAL_KEY');assert.equal(submitted.body.provider.mode,'liquid_d1');assert.equal(nodes['stage3-api-key'].value,'');
+ assert.equal(context.stage3SettingsDirty,true);
+});
+
+function saveView(){
+ const nodes=new Map(),requests=[],messages=[];
+ const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false,dataset:{},addEventListener(event,callback){this[event]=callback;}});return nodes.get(id);};
+ const local={mode:'local_model',base_url:'http://127.0.0.1:18181/v1/systemone',model:'d1-3b',protocol:'decisions',workers:1,confidence:.8,concurrency_mode:'manual',agent_ids:[],agent_models:{},agent_efforts:{}};
+ const context=vm.createContext({$:get,document:{querySelectorAll:()=>[]},AbortController,setTimeout:()=>1,clearTimeout(){},
+  busy:false,statusFresh:false,lastStatus:{category_key:'task',stage3_provider:local,live_sample:{age_seconds:0},stage3_control:{running:false,progress:{total:23}},stage3_runtime:{switch_pending:false}},
+  feedback:message=>messages.push(message),poll:async()=>vm.runInContext('stage3Button(lastStatus)',context),
+  fetch:(path,options)=>new Promise(resolve=>requests.push({path,options,resolve})),
+  updateControls:()=>vm.runInContext('stage3Button(lastStatus)',context)});
+ vm.runInContext(code,context);
+ vm.runInContext('renderAgentControls=()=>{};stage3ProviderFields=()=>{};renderAgentStatus=()=>{};refreshApiReasoning=()=>{};startLocalModelScan=()=>{};apiReasoningReady=()=>true',context);
+ const start=html.indexOf('function stage3Button(data)');
+ vm.runInContext(html.slice(start,html.indexOf(" if($('apply-stage3-concurrency'))",start))+'\n}',context);
+ vm.runInContext(html.split('\n').find(line=>line.startsWith('async function action(')),context);
+ vm.runInContext('const submitAction=action;action=(...args)=>(submission=submitAction(...args))',context);
+ vm.runInContext(html.split('\n').find(line=>line.startsWith("$('configure-stage3').addEventListener")),context);
+ vm.runInContext('stage3Button(lastStatus)',context);
+ for(const [id,value] of Object.entries({'stage3-mode':'multimodal_api','stage3-base-url':'https://api.deepseek.com','stage3-model':'deepseek-flash','stage3-protocol':'chat_completions','stage3-workers':'1','stage3-confidence':'80'}))get(id).value=value;
+ vm.runInContext('stage3SettingsDirty=true;stage3Button(lastStatus)',context);
+ const provider=JSON.parse(vm.runInContext('JSON.stringify(stage3ProviderSettings())',context));
+ return {context,get,requests,messages,provider,render(provider){context.lastStatus={...context.lastStatus,stage3_provider:provider};vm.runInContext('stage3Button(lastStatus)',context);}};
+}
+
+test('fresh live status permits configure POST while slow full statistics and old polls preserve edits until confirmation',async()=>{
+ const {context,get,requests,provider,render}=saveView();
+ assert.equal(get('configure-stage3').disabled,false);assert.equal(context.statusFresh,false);
+ get('configure-stage3').click();
+ assert.equal(requests.length,1);assert.equal(requests[0].path,'/api/configure-stage3');assert.equal(requests[0].options.method,'POST');
+ assert.deepEqual(JSON.parse(requests[0].options.body).provider,provider);
+ assert.equal(get('stage3-mode').value,'multimodal_api');assert.equal(vm.runInContext('stage3SettingsDirty',context),true);
+ // The POST and its follow-up poll can both observe the old LOCAL_D1 snapshot.
+ render(context.lastStatus.stage3_provider);assert.equal(get('stage3-mode').value,'multimodal_api');
+ requests[0].resolve({ok:true,json:async()=>({ok:true,provider,message:'saved'})});await context.submission;
+ assert.equal(get('stage3-mode').value,'multimodal_api');assert.equal(vm.runInContext('stage3SettingsDirty',context),true);
+ render(provider);assert.equal(vm.runInContext('stage3SettingsDirty',context),false);
+ render({...provider,workers:2});assert.equal(get('stage3-workers').value,2);
+});
+
+test('stale live status blocks configure consistently without discarding the unsubmitted form',async()=>{
+ const {context,get,requests}=saveView();
+ context.statusFresh=true;context.lastStatus.live_sample.age_seconds=11;
+ vm.runInContext('stage3Button(lastStatus)',context);assert.equal(get('configure-stage3').disabled,true);
+ get('configure-stage3').click();await context.submission;
+ assert.equal(requests.length,0);assert.equal(get('stage3-mode').value,'multimodal_api');assert.equal(vm.runInContext('stage3SettingsDirty',context),true);
+});
+
+test('failed configure retains the selected provider through the error follow-up poll',async()=>{
+ const {context,get,requests,messages,provider,render}=saveView();
+ get('configure-stage3').click();requests[0].resolve({ok:false,json:async()=>({error:{message:'fixture save failure'}})});await context.submission;
+ assert.deepEqual(messages,['fixture save failure']);assert.equal(context.busy,false);
+ render(provider);assert.equal(vm.runInContext('stage3SettingsDirty',context),true);
+ render({...provider,model:'saved-other-model'});assert.equal(get('stage3-model').value,'deepseek-flash');
+});
+
+test('a successful save cannot release newer edits made during the request',async()=>{
+ const {context,get,requests,provider,render}=saveView();
+ get('configure-stage3').click();get('stage3-model').value='new-unsaved-model';
+ requests[0].resolve({ok:true,json:async()=>({ok:true,provider})});await context.submission;
+ render(provider);assert.equal(get('stage3-model').value,'new-unsaved-model');assert.equal(vm.runInContext('stage3SettingsDirty',context),true);
+});
+
+test('an accepted pending switch keeps edits until its selected provider appears in status',async()=>{
+ const {context,get,requests,provider,render}=saveView();
+ get('configure-stage3').click();requests[0].resolve({ok:true,json:async()=>({ok:true,switch_pending:true})});await context.submission;
+ assert.equal(vm.runInContext('stage3SettingsDirty',context),true);assert.equal(get('stage3-mode').value,'multimodal_api');
+ render(provider);assert.equal(vm.runInContext('stage3SettingsDirty',context),false);
 });
 
 test('concurrency click submits only width and mode without model selection or API keys',()=>{
