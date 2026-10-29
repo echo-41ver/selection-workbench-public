@@ -7,6 +7,9 @@
     $value = [regex]::Replace($value, '(?i)([\w.-]*(?:token|secret|password|passwd|pwd|api.?key|private.?key|access.?key|authorization|cookie|credential|session)[\w.-]*["'']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|$)|''(?:\\.|[^''\\])*(?:''|$)|[^\s,;}]+)', '$1[REDACTED]')
     $value = [regex]::Replace($value, '(?i)(--(?:api[_-]?key|token|secret|password|passwd|pwd|cookie)[=\s]+)(?:"(?:\\.|[^"\\])*(?:"|$)|''(?:\\.|[^''\\])*(?:''|$)|\S+)', '$1[REDACTED]')
     $value = [regex]::Replace($value, '\?[^\s"''<>]+', '?[REDACTED QUERY]')
+    $value = [regex]::Replace($value, '(?i)([A-Z]:\\Users\\)[^\\\s"'']+', '$1[USER]')
+    $value = [regex]::Replace($value, '(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b', '[REDACTED EMAIL]')
+    $value = [regex]::Replace($value, '(?<!\d)1[3-9]\d{9}(?!\d)', '[REDACTED PHONE]')
     return [regex]::Replace($value, '(?<![A-Za-z0-9])[A-Za-z0-9_+/=-]{40,}(?![A-Za-z0-9])', '[REDACTED OPAQUE VALUE]')
 }
 
@@ -23,6 +26,27 @@ function Test-DeploymentSupportPath([string]$Root, [string]$Path) {
         $cursor=$parent
     }
     return $true
+}
+
+function Protect-DeploymentSupportRecord($Value) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return Protect-DeploymentSupportText $Value }
+    if ($Value -is [System.Collections.IDictionary] -or $Value -is [PSCustomObject]) {
+        $clean = [ordered]@{}
+        $keys = if ($Value -is [System.Collections.IDictionary]) { $Value.Keys } else { $Value.PSObject.Properties.Name }
+        foreach ($key in $keys) {
+            $item = $Value.$key
+            if ($key -match '(?i)password|passwd|^pwd$|secret|credential|authorization|cookie|api.?key|access.?key|private.?key|^key$|token|username|phone|mobile|email|login.?code|ticket|request_body|response_body|raw_response|^headers$|^messages$|^prompt$|base64|b64_json' -and ($item -isnot [ValueType] -or $key -match '(?i)phone|mobile')) {
+                $clean[$key] = '[REDACTED]'
+            } else { $clean[$key] = Protect-DeploymentSupportRecord $item }
+        }
+        return $clean
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $clean = @($Value | ForEach-Object { Protect-DeploymentSupportRecord $_ })
+        return ,$clean
+    }
+    return $Value
 }
 
 function Read-DeploymentSupportRecord([string]$Path) {
@@ -79,9 +103,9 @@ function Export-DeploymentDiagnostics([string]$Root, [string]$OutputPath) {
         }
         $entryRoot = Join-Path $Root 'runtime\deployment-entry'
         if ([IO.Directory]::Exists($entryRoot) -and (Test-DeploymentSupportPath $Root $entryRoot)) {
-            $attempts = @(Get-ChildItem -LiteralPath $entryRoot -Directory | Where-Object { $_.Name -match '^[a-f0-9]{32}$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 3)
+            $attempts = @(Get-ChildItem -LiteralPath $entryRoot -Directory | Where-Object { $_.Name -match '^[a-f0-9]{32}$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) })
             foreach ($attempt in $attempts) {
-                $files += Get-ChildItem -LiteralPath $attempt.FullName -File | Where-Object { $_.Name -match '^(?:(?:install|start-web|worker)\.)?(?:stdout|stderr)\.log$|^(?:result|parent-error|parent-timeout)\.json$' }
+                $files += Get-ChildItem -LiteralPath $attempt.FullName -File | Where-Object { $_.Name -match '^(?:(?:install|start-web|worker)\.)?(?:stdout|stderr)\.log$|^(?:result|phase|dispatch|worker-started|parent-error|parent-timeout)\.json$' }
             }
         }
         # Binding failures retain their actual native stderr here. Include only
@@ -95,26 +119,106 @@ function Export-DeploymentDiagnostics([string]$Root, [string]$OutputPath) {
                 if ([IO.File]::Exists($stdout)) { $files += Get-Item -LiteralPath $stdout }
             }
         }
+        # Export only diagnostic records, never recursively copy runtime/config or browsers.
+        foreach ($part in @('installer-logs','web-console','model-parse-diagnostics')) {
+            $directory = Join-Path $Root ('runtime\' + $part)
+            if (-not ([IO.Directory]::Exists($directory) -and (Test-DeploymentSupportPath $Root $directory))) { continue }
+            $files += Get-ChildItem -LiteralPath $directory -File | Where-Object {
+                $_.Name -match '^(?:process-|service-|launch-|host-recovery-|amazon-listing-error-|amazon-category-search-error-).+\.(?:json|jsonl|log)$' -or
+                $_.Name -match '^category-[a-f0-9]{32}(?:\.progress|\.amazon\.json\.checkpoint)?\.json$' -or
+                ($part -eq 'installer-logs' -and $_.Extension -eq '.log') -or
+                $_.Name -in @('state.json','pending-generation.json','resume-draft.json') -or
+                ($part -eq 'model-parse-diagnostics' -and $_.Extension -eq '.json')
+            }
+        }
+        $runs = @()
+        $runRoot = Join-Path $Root 'runs'
+        if ([IO.Directory]::Exists($runRoot) -and (Test-DeploymentSupportPath $Root $runRoot)) {
+            foreach ($run in Get-ChildItem -LiteralPath $runRoot -Directory) {
+                if (-not (Test-DeploymentSupportPath $Root $run.FullName)) { continue }
+                $statusPath = Join-Path $run.FullName 'status.json'
+                $status = if ([IO.File]::Exists($statusPath) -and (Get-Item -LiteralPath $statusPath).Length -gt 8MB) {
+                    @{diagnostic_status='状态文件超过 8 MiB，详见导出清单；不推断任务成功'}
+                } else { Protect-DeploymentSupportRecord (Read-DeploymentSupportRecord $statusPath) }
+                $artifacts = @()
+                foreach ($part in @('', 'logs', 'temu', 'stage12', 'stage123', 'market', 'excel')) {
+                    $directory = if ($part) { Join-Path $run.FullName $part } else { $run.FullName }
+                    if (-not ([IO.Directory]::Exists($directory) -and (Test-DeploymentSupportPath $Root $directory))) { continue }
+                    # Traverse only the collector tree; do not follow junctions.
+                    $pending = New-Object 'System.Collections.Generic.Queue[string]'
+                    $pending.Enqueue($directory)
+                    while ($pending.Count) {
+                        $current = $pending.Dequeue()
+                        foreach ($item in Get-ChildItem -LiteralPath $current -Force) {
+                            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+                            if ($item.PSIsContainer) {
+                                if ($part -eq 'temu') { $pending.Enqueue($item.FullName) }
+                                continue
+                            }
+                            $relative = $item.FullName.Substring($Root.TrimEnd('\').Length+1).Replace('\','/')
+                            if ($item.Extension -eq '.xlsx') { $artifacts += @{path=$relative; bytes=$item.Length; updated_at=$item.LastWriteTimeUtc.ToString('o')}; continue }
+                            if ($item.Name -match '(?i)secret|credential|cookie|company|auth\.json|sessions\.json|storage') { continue }
+                            if (($part -eq 'logs' -and $item.Extension -in @('.log','.jsonl')) -or
+                                ($part -eq 'stage123' -and $item.Extension -in @('.log','.jsonl')) -or
+                                $item.Name -match '^(?:status|category|runtime_version|resume_launch|supervisor_recovery|local_service_recovery|publish_state|cleanup_status|stage12_config|progress|dispatch|keyword_plan|summary|automatic_recovery|empty_search_checks|initial_products_retry|session_cooldown|browser_control_recovery|binding_recovery|stage12_watch_owner|controller|concurrency|runtime_control|paid_enabled|progress_reader_state|progress_reader_error|provider_blocked|excel_publisher|publication_manifest|export_manifest)\.json$' -or
+                                ($part -eq 'temu' -and $current -eq (Join-Path $directory 'supervisors') -and $item.Extension -eq '.json') -or
+                                $item.Name -eq 'STOP') { $files += $item }
+                        }
+                    }
+                }
+                $runs += @{task_id=$run.Name; status=$status; artifacts=$artifacts}
+            }
+        }
         $included = @()
-        foreach ($file in $files) {
+        $records = @()
+        foreach ($file in $files | Sort-Object FullName -Unique) {
             if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
             $full = [IO.Path]::GetFullPath($file.FullName)
             if (-not $full.StartsWith($Root.TrimEnd('\')+'\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Diagnostic source escaped program root.' }
             if (-not (Test-DeploymentSupportPath $Root $full)) { continue }
             $relative = $full.Substring($Root.TrimEnd('\').Length+1).Replace('\','/')
-            $content = Protect-DeploymentSupportText ((Get-Content -LiteralPath $full -Encoding UTF8 -Tail 500) -join "`n")
-            if ($content.Length -gt 524288) { $content = $content.Substring($content.Length-524288) }
+            $truncated = $file.Length -gt 8MB
+            if ($truncated -and $file.Extension -eq '.json') {
+                $records += @{path=$relative; source_bytes=$file.Length; omitted=$true; reason='JSON 超过 8 MiB；保留本机原始文件，未截断为无效断点'}
+                continue
+            }
+            try {
+                if ($truncated) { $raw = (Get-Content -LiteralPath $full -Encoding UTF8 -Tail 5000 -ErrorAction Stop) -join "`n" }
+                else {
+                    $reader = New-Object IO.StreamReader([IO.FileStream]::new($full,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)),[Text.Encoding]::UTF8)
+                    try { $raw = $reader.ReadToEnd() } finally { $reader.Dispose() }
+                }
+            } catch [IO.IOException], [UnauthorizedAccessException] {
+                $records += @{path=$relative; omitted=$true; reason=('读取失败：'+$_.Exception.GetType().Name)}
+                continue
+            }
+            $jsonFallback = $false
+            if ($file.Extension -in @('.json','.jsonl')) {
+                $lines = if ($file.Extension -eq '.jsonl') { @($raw -split '\r?\n' | Where-Object { $_.Trim() }) } else { @($raw) }
+                $content = (@(foreach ($line in $lines) {
+                    try { Protect-DeploymentSupportRecord (ConvertFrom-Json -InputObject $line -ErrorAction Stop) | ConvertTo-Json -Depth 100 -Compress }
+                    catch { $jsonFallback=$true; Protect-DeploymentSupportText $line }
+                })) -join "`n"
+            } else { $content = Protect-DeploymentSupportText $raw }
             $entry = $zip.CreateEntry($relative)
             $writer = New-Object IO.StreamWriter($entry.Open(), [Text.UTF8Encoding]::new($false))
             try { $writer.Write($content) } finally { $writer.Dispose() }
             $included += $relative
+            $records += @{path=$relative; source_bytes=$file.Length; updated_at=$file.LastWriteTimeUtc.ToString('o'); truncated=$truncated; json_parse_fallback=$jsonFallback}
         }
         $build = Read-DeploymentSupportRecord (Join-Path $Root 'BUILD_INFO.json')
         $commit = if ($build.commit -match '^[a-f0-9]{40}$') { $build.commit } else { $null }
-        $manifest = @{created_at=[DateTimeOffset]::Now.ToString('o'); commit=$commit; included=$included; excluded='公司配置、密钥存储、浏览器会话、运行商品数据和环境变量不进入诊断包。'; purpose='仅供维护者排查部署；用户无需查看技术日志。'}
+        $manifest = @{created_at=[DateTimeOffset]::Now.ToString('o'); commit=$commit; included=$included; records=$records; runs=$runs;
+            excluded='公司凭据、密钥存储、浏览器会话、原始商品图片/数据库/Excel 内容和环境变量不进入诊断包。';
+            purpose='部署及业务全流程诊断；状态为导出时快照，不代表所有环节已成功。脱敏断点仅供定位，不能用作含登录状态的恢复备份。'}
         $entry = $zip.CreateEntry('diagnostic-manifest.json')
         $writer = New-Object IO.StreamWriter($entry.Open(), [Text.UTF8Encoding]::new($false))
-        try { $writer.Write(($manifest | ConvertTo-Json -Depth 6)) } finally { $writer.Dispose() }
+        try { $writer.Write(($manifest | ConvertTo-Json -Depth 100)) } finally { $writer.Dispose() }
+        $entry = $zip.CreateEntry('先看这里.txt')
+        $writer = New-Object IO.StreamWriter($entry.Open(), [Text.UTF8Encoding]::new($false))
+        try {
+            $writer.Write("选品工作台 · 部署及业务全流程诊断`r`n版本：$commit`r`n导出时间：$($manifest.created_at)`r`n任务数：$($runs.Count)`r`n记录数：$($included.Count)`r`n`r`n安装、网页、采集、第一二层、第三层、导出与断点记录均按原相对路径归档。diagnostic-manifest.json 列出任务状态、Excel 产物及每个文件的时间与截取情况。`r`n超过 8 MiB 的日志仅包含末尾 5000 行；超过 8 MiB 的 JSON 明确记为未收集。`r`n未生成的记录表示未取得证据，不能认定通过。导出不启动、停止或重新分析任务；不产生模型调用费用。`r`n账号密码、令牌等自动脱敏；原始断点、商品数据与 Excel 仍保存在本机。将此 ZIP 交给维护者即可，无需自行查找其他文件夹。")
+        } finally { $writer.Dispose() }
     } finally { if ($zip) { $zip.Dispose() }; $stream.Dispose() }
     return [IO.Path]::GetFullPath($OutputPath)
 }

@@ -163,3 +163,81 @@ def test_redaction_consumes_escaped_quoted_secret_values(tmp_path):
     assert len(cleaned) == len(records)
     assert all(marker not in line and '[REDACTED]' in line for line in cleaned)
     assert all('failed' in line for line in cleaned[:4])
+
+
+def test_unified_export_covers_business_checkpoints_usage_and_artifact_inventory(tmp_path):
+    secret = 'TEST_ONLY_BUSINESS_SECRET'
+    files = {
+        'runtime/install-status.json': {'stage': '完成', 'succeeded': True},
+        'runtime/web-console/state.json': {'category_key': 'acceptance_1'},
+        'runtime/web-console/launch-test.json': {'state': 'launched'},
+        'runtime/web-console/category-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.progress.json': {'stage': 'rules_ready'},
+        'runtime/model-parse-diagnostics/test.json': {'error': 'invalid response'},
+        'runs/acceptance_1/status.json': {'状态': '第三层运行中', '成功': 3, '失败': 1},
+        'runs/acceptance_1/temu/workers/temu_1/query/progress.json': {'raw_collected_count': 12, 'next_page': 2, 'cookie': secret},
+        'runs/acceptance_1/stage12/summary.json': {'processed': 12, 'candidates': 3},
+        'runs/acceptance_1/stage123/controller.json': {'status': 'RUNNING'},
+        'runs/acceptance_1/market/status.json': {'status': 'COMPLETE'},
+        'runs/failed_2/status.json': {'状态': '启动失败', '原因': '网络超时'},
+    }
+    for name, record in files.items():
+        path = tmp_path/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record, ensure_ascii=False), encoding='utf-8')
+    logs = tmp_path/'runs/acceptance_1/logs'
+    logs.mkdir()
+    (logs/'supervisor.log').write_text('FIRST_EVENT\npassword='+secret+'\nLAST_EVENT\n', encoding='utf-8')
+    request = tmp_path/'runs/acceptance_1/stage123/requests.jsonl'
+    request.write_text(json.dumps({'ok': True, 'usage': {'input_tokens': 100, 'output_tokens': 25},
+        'request_body': {'api_key': secret}, 'cost': 0.01})+'\n', encoding='utf-8')
+    excel = tmp_path/'runs/acceptance_1/excel/result.xlsx'
+    excel.parent.mkdir()
+    excel.write_bytes(b'TEST_ONLY_PRIVATE_WORKBOOK_CONTENT')
+    for name in ('runtime/secrets/company.dpapi', 'runtime/market-auth/agent-auth.json',
+                 'runs/acceptance_1/temu/workers/temu_1/cookies.json'):
+        path = tmp_path/name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(secret, encoding='utf-8')
+    result = invoke(tmp_path, '$p=Export-DeploymentDiagnostics -Root $env:SUPPORT_ROOT\nWrite-Output $p\n')
+    assert result.returncode == 0, result.stderr
+    with zipfile.ZipFile(Path(result.stdout.strip().splitlines()[-1])) as archive:
+        assert set(files).issubset(archive.namelist())
+        text = '\n'.join(archive.read(n).decode('utf-8') for n in archive.namelist())
+        assert secret not in text and 'TEST_ONLY_PRIVATE_WORKBOOK_CONTENT' not in text
+        assert 'FIRST_EVENT' in text and 'LAST_EVENT' in text
+        checkpoint = json.loads(archive.read('runs/acceptance_1/temu/workers/temu_1/query/progress.json'))
+        assert checkpoint['next_page'] == 2 and checkpoint['cookie'] == '[REDACTED]'
+        ledger = json.loads(archive.read('runs/acceptance_1/stage123/requests.jsonl'))
+        assert ledger['usage'] == {'input_tokens': 100, 'output_tokens': 25}
+        assert ledger['cost'] == 0.01 and ledger['request_body'] == '[REDACTED]'
+        manifest = json.loads(archive.read('diagnostic-manifest.json'))
+        runs = {run['task_id']: run for run in manifest['runs']}
+        assert runs['failed_2']['status']['状态'] == '启动失败'
+        assert runs['acceptance_1']['artifacts'][0]['path'].endswith('result.xlsx')
+        assert '先看这里.txt' in archive.namelist()
+    assert json.loads((tmp_path/'runs/acceptance_1/temu/workers/temu_1/query/progress.json').read_text('utf-8'))['cookie'] == secret
+
+
+def test_large_checkpoint_is_reported_without_exporting_broken_json(tmp_path):
+    run = tmp_path/'runs/test'
+    run.mkdir(parents=True)
+    (run/'status.json').write_text(json.dumps({'payload': 'x'*(8*1024*1024)}), encoding='utf-8')
+    result = invoke(tmp_path, '$p=Export-DeploymentDiagnostics -Root $env:SUPPORT_ROOT\nWrite-Output $p\n')
+    assert result.returncode == 0, result.stderr
+    with zipfile.ZipFile(Path(result.stdout.strip().splitlines()[-1])) as archive:
+        manifest = json.loads(archive.read('diagnostic-manifest.json'))
+        record = next(r for r in manifest['records'] if r['path'] == 'runs/test/status.json')
+        assert record['omitted'] is True
+        assert 'runs/test/status.json' not in archive.namelist()
+
+
+def test_export_reads_web_log_while_service_is_still_writing(tmp_path):
+    log = tmp_path/'runtime/web-console/service-8765.log'
+    log.parent.mkdir(parents=True)
+    with log.open('ab') as writer:
+        writer.write(b'SERVICE_STILL_RUNNING\n')
+        writer.flush()
+        result = invoke(tmp_path, '$p=Export-DeploymentDiagnostics -Root $env:SUPPORT_ROOT\nWrite-Output $p\n')
+    assert result.returncode == 0, result.stderr
+    with zipfile.ZipFile(Path(result.stdout.strip().splitlines()[-1])) as archive:
+        assert b'SERVICE_STILL_RUNNING' in archive.read('runtime/web-console/service-8765.log')
