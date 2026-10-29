@@ -50,6 +50,7 @@ def watch(category_path):
             except OSError as exc:
                 print(f'Excel后台发布启动暂缓：{exc}', flush=True)
         maintain_publisher()
+        retry_local_errors = True
         try:
             while (folder/'paid_enabled.json').exists() and not (folder/'STOP').exists():
                 from selection_automation.schema_billing_retry import read_authorization
@@ -69,14 +70,16 @@ def watch(category_path):
                     state('分析暂停：请求费用记录无法对应，请核对用量',error=True); return
                 if not progress.get('runnable_pending', progress['pending']) and progress.get('billing_unknown_pairs'):
                     state(f"可运行候选已处理；{progress['billing_unknown_pairs']} 对费用待核对，未自动重发"); return
-                if not progress['pending']:
+                if not progress['pending'] and not (retry_local_errors and progress.get('failed')):
                     state('当前候选已处理，等待新增候选' if progress['total'] else '等待前两层产生候选')
                     time.sleep(2); continue
                 state('分析中')
                 launched_at=time.time()
                 child=subprocess.Popen([sys.executable,str(ROOT/'scripts/run_category_layer3.py'),
                     '--category',str(category_path),'--candidates',str(candidate_path(base)),
-                    '--results',str(folder/'results.jsonl'),'--independent'],cwd=ROOT)
+                    '--results',str(folder/'results.jsonl'),'--independent',
+                    *(['--retry-local-errors'] if retry_local_errors else [])],cwd=ROOT)
+                retry_local_errors = False
                 while True:
                     try:
                         returncode=child.wait(timeout=30)

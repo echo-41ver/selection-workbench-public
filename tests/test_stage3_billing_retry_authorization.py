@@ -121,6 +121,30 @@ def test_runner_uses_one_authorized_extra_attempt_then_skips_completed(tmp_path,
     assert attempts==[3]
 
 
+@pytest.mark.parametrize('billing,allow,expected', [
+    ('NO_CHARGE', True, [3]), ('NO_CHARGE', False, []),
+    ('KNOWN', True, []), ('UNKNOWN', True, []),
+])
+def test_web_continue_only_retries_unsent_local_failures(tmp_path, monkeypatch, billing, allow, expected):
+    category=tmp_path/'category.json'; category.write_text('{}')
+    candidate=tmp_path/'candidate.jsonl'; results=tmp_path/'results.jsonl'
+    row={'asin':'A','goods_id':'T','pair_revision':'p','amazon_image_path':'a','temu_image_path':'t'}
+    write(candidate,[row])
+    write(results,[{**row,'vision_revision_key':'key','attempt':2,'api_status':'failed','billing_state':billing}])
+    monkeypatch.setattr(runner,'load_category',lambda p:{'stage3':{}})
+    monkeypatch.setattr(runner,'compatible_vision_keys',lambda c,r:['key'])
+    attempts=[]
+    def consume(args,cat,fatal,key,pending):
+        for item in pending:
+            attempts.append(item['attempt'])
+            with results.open('a') as stream:
+                stream.write(json.dumps({**item,'api_status':'success'})+'\n')
+    monkeypatch.setattr(runner,'consume',consume)
+    args=SimpleNamespace(category=category,results=results,validate_only=False,max_pairs=0,retry_local_errors=allow)
+    runner.run(args,candidate); runner.run(args,candidate)
+    assert attempts==expected
+
+
 def test_authorized_retry_inflight_not_confused_with_original_failed_row(tmp_path,monkeypatch):
     folder=tmp_path/'stage123';folder.mkdir()
     intents,results,path,auth=fixture(folder)

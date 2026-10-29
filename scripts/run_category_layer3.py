@@ -135,7 +135,7 @@ def result_index(path):
         )
         if row.get('api_status') != 'success' and provider_blocked:
             attempt = max(0, attempt - 1)
-        cached[key] = {'api_status': row.get('api_status'), 'attempt': attempt}
+        cached[key] = {'api_status': row.get('api_status'), 'attempt': attempt, 'billing_state': row.get('billing_state')}
     return cached
 
 
@@ -165,6 +165,7 @@ def main():
     p.add_argument('--max-pairs', type=int, default=0)
     p.add_argument('--max-requests', type=int, default=0)
     p.add_argument('--independent', action='store_true')
+    p.add_argument('--retry-local-errors', action='store_true')
     args = p.parse_args()
     if not args.validate_only:
         cat = load_category(args.category)
@@ -182,6 +183,7 @@ def main():
 
 def run(args, candidate_path):
     cat = load_category(args.category)
+    retry_local_errors = getattr(args, 'retry_local_errors', False)
     args._current_input_guard = CurrentInputGuard(args.results.parent.parent,
         getattr(args, 'candidates', candidate_path), root=ROOT,
         required=args.results.parent.name.casefold() == 'stage123')
@@ -221,7 +223,7 @@ def run(args, candidate_path):
                 attempt=authorized_retry_attempt(authorization,pair,keys)
                 if attempt is None: continue
             else:
-                if int(prior.get('attempt',0))>=2:continue
+                if int(prior.get('attempt',0))>=2 and not (retry_local_errors and prior.get('billing_state')=='NO_CHARGE'):continue
                 attempt=int(prior.get('attempt',0))+1
             row['attempt'] = attempt
             yield row
