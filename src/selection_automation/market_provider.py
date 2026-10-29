@@ -34,7 +34,12 @@ def _category_terms(category):
     terms=[category['category_name_zh']]
     heading=category.get('amazon',{}).get('verification',{}).get('heading') or ''
     verified_name=re.fullmatch(r'Best Sellers in\s+(.+)',heading.strip(),re.I)
-    if verified_name:terms.append(verified_name.group(1))
+    if verified_name:
+        terms.append(verified_name.group(1))
+        if _category_name(verified_name.group(1))=='spatulas':
+            # 2026-10-29 极鲸云美国站实查：“锅铲”返回79条，含叶类目“厨房用铲”。
+            # 路径：家居、厨房用品 > 厨房和餐厅 > 厨房用具和小工具 > 烹饪用具 > 厨房用铲。
+            terms.extend(['锅铲','厨房用铲'])
     temu=category.get('temu') or {}
     for field in ('category_aliases','aliases','base_queries','include_terms'):
         values=temu.get(field) or []

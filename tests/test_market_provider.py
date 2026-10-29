@@ -116,6 +116,40 @@ def test_product_title_is_not_used_as_a_category_query():
     assert not source.calls
 
 
+@pytest.mark.parametrize('is_leaf',[True,False])
+@pytest.mark.parametrize('cat_id',[10002,73129])
+def test_verified_spatulas_chinese_names_select_only_live_leaf_id_from_79_candidates(is_leaf,cat_id):
+    class ChineseTaxonomy:
+        def __init__(self):self.queries=[];self.goods_calls=[]
+        def categories(self,query):
+            self.queries.append(query['keyword'])
+            if query['keyword']!='锅铲':return {'total':0,'list':[]}
+            # Verified target name/path, with synthetic unrelated rows to exercise the 79-row response.
+            target={'catId':cat_id,'catName':'厨房用铲','isLeaf':is_leaf,
+                    'parentCatItems':[{'catName':name} for name in [
+                        '家居、厨房用品','厨房和餐厅','厨房用具和小工具','烹饪用具','厨房用铲']]}
+            return {'total':79,'list':[{'catId':20000+i,'catName':f'无关工具{i}','isLeaf':True}
+                                      for i in range(78)]+[target]}
+        def goods(self,query):
+            self.goods_calls.append(query)
+            assert query['catIds']==[cat_id]
+            return {'total':1,'list':[{'goodsId':'retrieved-spatula','catIds':[cat_id]}]}
+    def choose(*args):
+        if is_leaf:raise AssertionError('verified exact leaf must not require paid category mapping')
+        return {'cat_ids':[cat_id],'confidence':1}
+    cat={**category(),'category_name_zh':'硅胶刮刀',
+         'amazon':{'verification':{'heading':'Best Sellers in Spatulas'}}}
+    source=ChineseTaxonomy();result=collect(cat,source,now=NOW,choose_categories=choose)
+    assert result['status']==('COMPLETE' if is_leaf else 'CATEGORY_UNRESOLVED')
+    assert source.queries==['硅胶刮刀','Spatulas','锅铲']+([] if is_leaf else ['厨房用铲'])
+    assert result['category_queries'][2]['returned']==79
+    assert len(source.goods_calls)==int(is_leaf)
+    assert [row['goodsId'] for row in result['records']]==(['retrieved-spatula'] if is_leaf else [])
+    if is_leaf:
+        assert result['categories'][0]['catId']==cat_id
+        assert result['categories'][0]['path']=='家居、厨房用品 > 厨房和餐厅 > 厨房用具和小工具 > 烹饪用具 > 厨房用铲'
+
+
 def test_exact_category_can_be_found_beyond_first_fuzzy_page():
     class Paged(Source):
         def categories(self,query):
