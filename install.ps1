@@ -384,14 +384,9 @@ if (Test-Path -LiteralPath $wheelhouse -PathType Container) {
     Checked $python @('-m','pip','install','--no-deps','-e',"${root}[test]")
 }
 Checked $python @('-c',"import torch, torchvision, PIL, psutil, openpyxl, xlsxwriter, websocket; print('Python dependencies loaded')")
-$bundledTools = Join-Path $assetRoot 'tools'
-if (Test-Path -LiteralPath $bundledTools -PathType Container) {
-    $runtimeTools = Join-Path $root 'runtime\tools'
-    New-Item -ItemType Directory -Force -Path $runtimeTools | Out-Null
-    foreach ($tool in Get-ChildItem -LiteralPath $bundledTools -Directory) {
-        Copy-Item -LiteralPath $tool.FullName -Destination $runtimeTools -Recurse -Force
-    }
-}
+# local-runtime.ps1 already exposes the verified bundled tools on this process's PATH.
+# Copying them again can overwrite DLLs loaded by the deployment PowerShell host.
+$stage = '准备浏览器组件'
 $bundledModules = Join-Path $assetRoot 'node_modules'
 if (Test-Path -LiteralPath (Join-Path $bundledModules 'playwright\package.json') -PathType Leaf) {
     $targetModules = Join-Path $root 'node_modules'
