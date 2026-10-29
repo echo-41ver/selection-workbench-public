@@ -140,7 +140,14 @@ def discover(evidence=None,check_owner=owned,protocol_probe=probe,clock=time.mon
         if any(port not in {c['port'] for c in proc.get('listeners',[])} for port in proc.get('declared_ports',[])):
             warnings.append('客户端配置端口与实际监听不符')
     if len(candidates)>MAX_CANDIDATES:
-        return {'status':'TOO_MANY_CANDIDATES','candidates':[],'warnings':warnings}
+        # Other tools may expose many proxy ports. The current Windows proxy
+        # still identifies a bounded, explicit route without probing them all.
+        candidates=[c for c in candidates if any(s['port']==c['port'] and
+            s['host'] in {c['host'],'localhost'} for s in system.get('endpoints',[]))]
+        if not candidates or len(candidates)>MAX_CANDIDATES:
+            return {'status':'TOO_MANY_CANDIDATES','candidates':[],'warnings':warnings,
+                    'running_client_count':len(evidence.get('processes',[]))}
+        warnings.append('本机代理监听较多，仅核验当前系统代理指定的客户端端口')
     ready=[];deadline=clock()+8
     for candidate in sorted(candidates,key=lambda c:(not bool(c.get('declared_protocol')),c['pid'],c['port'])):
         if clock()>=deadline:return {'status':'DISCOVERY_TIMEOUT','candidates':[],'warnings':warnings}
@@ -168,7 +175,9 @@ def choose(discovery,requested='AUTO',preferred=None):
         choices=[{**c,'host':preferred['host']} for c in choices if preferred['host'] in c.get('host_aliases',[c['host']]) and c['port']==preferred['port']]
     if discovery.get('status') in {'TOO_MANY_CANDIDATES','DISCOVERY_TIMEOUT'}:choices=[]
     if len(choices)!=1:
-        reason=('发现多个本机代理出口，请明确选择；未自动换出口。' if len(choices)>1 else
+        reason=('本机代理监听端口过多，且没有可核验的系统代理端口；请明确选择本机出口。' if discovery.get('status')=='TOO_MANY_CANDIDATES' else
+                '本机代理协议探测超时；请检查客户端状态后重试。' if discovery.get('status')=='DISCOVERY_TIMEOUT' else
+                '发现多个本机代理出口，请明确选择；未自动换出口。' if len(choices)>1 else
                 '仅检测到 TUN VPN，沿用现有系统路由但目标未验证；未编造代理端口。' if discovery.get('status')=='TUN_ONLY' else
                 '未检测到运行中的本机代理客户端；如已安装请先启动。未悄悄回退直连。' if not discovery.get('running_client_count') else
                 '客户端已运行但未确认兼容代理端口；请检查监听协议与端口，未悄悄回退直连。')

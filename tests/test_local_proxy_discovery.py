@@ -61,6 +61,28 @@ def test_bound_no_port_scan_when_too_many_candidates():
     c=client();c['listeners']=[{'host':'127.0.0.1','port':40000+i} for i in range(13)]
     data=discover(evidence(c),check_owner=lambda c:pytest.fail('too many'),protocol_probe=lambda c:pytest.fail('too many'))
     assert data['status']=='TOO_MANY_CANDIDATES'
+    with pytest.raises(NetworkNotReady, match='监听端口过多'):
+        choose(data)
+
+
+def test_many_other_proxy_ports_do_not_hide_current_system_proxy():
+    other=client(pid=2076,name='mihomo.exe')
+    other['listeners']=[{'host':'127.0.0.1','port':7910+i} for i in range(11)]
+    active=client(7890,pid=30172)
+    active['listeners'].append({'host':'127.0.0.1','port':9090})
+    observed=evidence(other,active,system={'endpoints':[
+        {'host':'127.0.0.1','port':7890,'declared_protocol':'HTTP'}]})
+    probed=[]
+    def handshake(candidate):
+        probed.append(candidate['port'])
+        return {'protocol':'MIXED','authentication_required':False}
+    result=discover(observed,check_owner=lambda c:True,protocol_probe=handshake)
+    selected=choose(result)
+    assert probed==[7890]
+    assert selected['preproxy_port']==7890
+    assert selected['preproxy_protocol']=='HTTP'
+    assert selected['local_proxy_owner']['pid']==30172
+    assert result['target_access']=='UNVERIFIED'
 
 def test_direct_has_priority_and_never_discovers():
     settings,status=select_transport(company(preproxy_mode='DIRECT'),local_discovery=lambda:pytest.fail('no discovery'))
