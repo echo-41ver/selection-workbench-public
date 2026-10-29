@@ -120,7 +120,7 @@ function Export-DeploymentDiagnostics([string]$Root, [string]$OutputPath) {
             }
         }
         # Export only diagnostic records, never recursively copy runtime/config or browsers.
-        foreach ($part in @('installer-logs','web-console','model-parse-diagnostics')) {
+        foreach ($part in @('installer-logs','web-console','model-parse-diagnostics','model-call-evidence')) {
             $directory = Join-Path $Root ('runtime\' + $part)
             if (-not ([IO.Directory]::Exists($directory) -and (Test-DeploymentSupportPath $Root $directory))) { continue }
             $files += Get-ChildItem -LiteralPath $directory -File | Where-Object {
@@ -128,7 +128,8 @@ function Export-DeploymentDiagnostics([string]$Root, [string]$OutputPath) {
                 $_.Name -match '^category-[a-f0-9]{32}(?:\.progress|\.amazon\.json\.checkpoint)?\.json$' -or
                 ($part -eq 'installer-logs' -and $_.Extension -eq '.log') -or
                 $_.Name -in @('state.json','pending-generation.json','resume-draft.json') -or
-                ($part -eq 'model-parse-diagnostics' -and $_.Extension -eq '.json')
+                ($part -eq 'model-parse-diagnostics' -and $_.Extension -eq '.json') -or
+                ($part -eq 'model-call-evidence' -and $_.Name -match '^[a-f0-9]{32}\.json$')
             }
         }
         $runs = @()

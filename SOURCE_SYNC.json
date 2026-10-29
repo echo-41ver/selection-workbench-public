@@ -1,5 +1,5 @@
 {
-  "source_commit": "19757b575e8387706dca7583de326fcee82162e7",
+  "source_commit": "ec4b1ed1f1568455118df2b1135b0494b34afd84",
   "full_deployment_base": "6146f0ce4727d0e79ea3ab97ca34dfcdb05e9e4c",
-  "incremental_release_url": "https://github.com/echo-41ver/selection-workbench-private/releases/tag/incremental-update-19757b5"
+  "release_url": "https://github.com/echo-41ver/selection-workbench-private/releases/tag/full-deployment-ec4b1ed"
 }

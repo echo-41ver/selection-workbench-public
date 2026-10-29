@@ -173,6 +173,7 @@ def test_unified_export_covers_business_checkpoints_usage_and_artifact_inventory
         'runtime/web-console/launch-test.json': {'state': 'launched'},
         'runtime/web-console/category-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.progress.json': {'stage': 'rules_ready'},
         'runtime/model-parse-diagnostics/test.json': {'error': 'invalid response'},
+        'runtime/model-call-evidence/' + 'c'*32 + '.json': {'outcome': 'completed', 'usage': {'total_tokens': 254}, 'billing_state': 'UNKNOWN', 'amount': None, 'api_key': secret},
         'runs/acceptance_1/status.json': {'状态': '第三层运行中', '成功': 3, '失败': 1},
         'runs/acceptance_1/temu/workers/temu_1/query/progress.json': {'raw_collected_count': 12, 'next_page': 2, 'cookie': secret},
         'runs/acceptance_1/stage12/summary.json': {'processed': 12, 'candidates': 3},
@@ -194,6 +195,7 @@ def test_unified_export_covers_business_checkpoints_usage_and_artifact_inventory
     excel.parent.mkdir()
     excel.write_bytes(b'TEST_ONLY_PRIVATE_WORKBOOK_CONTENT')
     for name in ('runtime/secrets/company.dpapi', 'runtime/market-auth/agent-auth.json',
+                 'runtime/model-call-evidence/company.local.json',
                  'runs/acceptance_1/temu/workers/temu_1/cookies.json'):
         path = tmp_path/name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,6 +212,10 @@ def test_unified_export_covers_business_checkpoints_usage_and_artifact_inventory
         ledger = json.loads(archive.read('runs/acceptance_1/stage123/requests.jsonl'))
         assert ledger['usage'] == {'input_tokens': 100, 'output_tokens': 25}
         assert ledger['cost'] == 0.01 and ledger['request_body'] == '[REDACTED]'
+        rule_ledger = json.loads(archive.read('runtime/model-call-evidence/' + 'c'*32 + '.json'))
+        assert rule_ledger['usage'] == {'total_tokens': 254}
+        assert rule_ledger['outcome'] == 'completed' and rule_ledger['amount'] is None
+        assert rule_ledger['api_key'] == '[REDACTED]'
         manifest = json.loads(archive.read('diagnostic-manifest.json'))
         runs = {run['task_id']: run for run in manifest['runs']}
         assert runs['failed_2']['status']['状态'] == '启动失败'
