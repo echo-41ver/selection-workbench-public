@@ -154,13 +154,15 @@ time.sleep(60)
 
 @pytest.mark.parametrize('exit_code', [0, 7])
 def test_correct_answer_still_requires_real_native_zero(tmp_path, monkeypatch, exit_code):
+    # This case checks the real exit code, not subsecond Windows scheduling.
+    # The separate timeout/finalization cases retain their short deadlines.
     row, job = _real_probe(tmp_path, monkeypatch, '''
 import json, pathlib, sys
 sys.stdin.read()
 digits = json.loads(pathlib.Path('probe-expectation.json').read_text())['digits']
 pathlib.Path('vision-probe.txt').write_text(digits)
 sys.exit(%d)
-''' % exit_code)
+''' % exit_code, timeout=2)
     assert row['connected'] is (exit_code == 0)
     execution = json.loads((job / 'probe-execution.json').read_text())
     assert execution['native_exit_code'] == exit_code
