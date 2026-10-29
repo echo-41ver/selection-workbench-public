@@ -69,6 +69,42 @@ def test_alias_must_not_widen_to_parent_even_when_model_selects_it():
     assert result['category_candidates'][0]['catId']==1
 
 
+@pytest.mark.parametrize('name,is_leaf', [('Spatulas',True),('Spatulas',False),('Spatula Accessories',True)])
+def test_verified_amazon_heading_queries_real_category_without_widening(name,is_leaf):
+    class HeadingSource:
+        def __init__(self):self.queries=[];self.goods_calls=[]
+        def categories(self,query):
+            self.queries.append(query['keyword'])
+            return {'total':1,'list':[{'catId':81,'catNameEn':name,'catName':'\u522e\u5200','isLeaf':is_leaf}]} if query['keyword']=='Spatulas' else {
+                'total':0,'list':[]}
+        def goods(self,query):
+            self.goods_calls.append(query)
+            assert query['catIds']==[81]
+            return {'total':1,'list':[{'goodsId':'live-product','catIds':[81]}]}
+    def forbidden(*args):raise AssertionError('heading discovery must not require model mapping')
+    source=HeadingSource()
+    cat={**category(),'category_name_zh':'\u7845\u80f6\u522e\u5200','temu':{'category_aliases':['silicone spatula']},
+         'amazon':{'verification':{'heading':'Best Sellers in Spatulas','title':'Amazon Best Sellers: Best Spatulas'}}}
+    result=collect(cat,source,now=NOW,choose_categories=forbidden if name=='Spatulas' and is_leaf else None)
+    matched=name=='Spatulas' and is_leaf
+    assert result['status']==('COMPLETE' if matched else 'CATEGORY_UNRESOLVED')
+    assert source.queries[:2]==['\u7845\u80f6\u522e\u5200','Spatulas']
+    assert len(source.goods_calls)==int(matched)
+    assert [row['goodsId'] for row in result['records']]==(['live-product'] if matched else [])
+
+
+def test_product_title_is_not_used_as_a_category_query():
+    class Empty(Source):
+        def __init__(self):super().__init__();self.queries=[]
+        def categories(self,query):
+            self.queries.append(query['keyword']);return {'total':0,'list':[]}
+    source=Empty()
+    cat={**category(),'amazon':{'verification':{'heading':'Silicone Spatula Product','title':'Best Sellers in Spatulas'}}}
+    result=collect(cat,source,now=NOW)
+    assert result['status']=='CATEGORY_UNSUPPORTED' and source.queries==['\u7535\u94bb']
+    assert not source.calls
+
+
 def test_exact_category_can_be_found_beyond_first_fuzzy_page():
     class Paged(Source):
         def categories(self,query):

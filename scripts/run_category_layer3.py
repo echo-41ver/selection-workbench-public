@@ -338,14 +338,15 @@ def consume(args, cat, fatal_file, key_identity, pending):
         try:
             from selection_automation.visual_examples import example_content
             content = example_content(cat,[p for row in batch for p in [row['amazon_image_path'],row['temu_image_path']]])
-            content += [evidence_block(batch[0],'amazon','Amazon基准'), {'type': 'input_image', 'image_url': cached_image_url(batch[0]['amazon_image_path']), 'detail': 'high'}]
+            content += [evidence_block(batch[0],'amazon','Amazon基准（输出 a 仅描述此 Amazon 图；t 仅描述当前 Cxx TEMU 候选；逐候选独立比较，不可交换来源）'), {'type': 'input_image', 'image_url': cached_image_url(batch[0]['amazon_image_path']), 'detail': 'high'}]
             if len(batch)>1:
                 grid,mapping=grid_data_url(batch)
                 content += [{'type':'input_text','text':'TEMU 编号拼图，各格只与 Amazon 比较：'+json.dumps([{k:item[k] for k in ('id','goods_id')} for item in mapping])},
                             {'type':'input_image','image_url':grid,'detail':'high'}]
             else:
                 grid=cached_image_url(batch[0]['temu_image_path'])
-                content += [{'type':'input_image','image_url':grid,'detail':'high'}]
+                content += [{'type':'input_text','text':'TEMU候选 C00 原图：输出 t 仅描述此 TEMU 图，a 仍描述 Amazon 基准。'},
+                            {'type':'input_image','image_url':grid,'detail':'high'}]
             content += [evidence_block(row,'temu','TEMU候选' if native_d1 and len(batch)==1 else identity)
                         for identity,row in zip(ids,batch)]
             prompt, schema = protocol(cat, len(batch))

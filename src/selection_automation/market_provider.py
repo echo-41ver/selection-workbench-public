@@ -32,6 +32,9 @@ def _category_name(value):
 
 def _category_terms(category):
     terms=[category['category_name_zh']]
+    heading=category.get('amazon',{}).get('verification',{}).get('heading') or ''
+    verified_name=re.fullmatch(r'Best Sellers in\s+(.+)',heading.strip(),re.I)
+    if verified_name:terms.append(verified_name.group(1))
     temu=category.get('temu') or {}
     for field in ('category_aliases','aliases','base_queries','include_terms'):
         values=temu.get(field) or []

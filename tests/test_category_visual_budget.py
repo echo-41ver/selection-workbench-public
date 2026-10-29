@@ -43,7 +43,8 @@ def test_runner_uses_sixty_four_workers_without_silent_clamping(offline_consumer
     assert widths==[64]
 
 
-def test_request_contains_one_amazon_record_and_each_bound_temu_record(tmp_path,monkeypatch):
+@pytest.mark.parametrize('count',[1,2])
+def test_request_contains_one_amazon_record_and_each_bound_temu_record(tmp_path,monkeypatch,count):
     calls=[]
     class Client:
         def __init__(self,**kw):self.responses=self
@@ -54,7 +55,7 @@ def test_request_contains_one_amazon_record_and_each_bound_temu_record(tmp_path,
             return SimpleNamespace(id='r',status='completed',output_text='{}',usage=None)
     monkeypatch.setenv('DEEPSEEK_API_KEY','offline')
     monkeypatch.setattr(openai,'OpenAI',Client)
-    monkeypatch.setattr(runner,'_data_url',lambda p:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'_data_url',lambda p:'data:image/png;base64,'+Path(p).name)
     monkeypatch.setattr(runner,'grid_data_url',grid)
     monkeypatch.setattr(runner,'protocol',lambda c,n:('fixture',{}))
     monkeypatch.setattr(runner,'decode',lambda c,raw,ids:{i:{'overall_confidence':.9} for i in ids})
@@ -62,14 +63,19 @@ def test_request_contains_one_amazon_record_and_each_bound_temu_record(tmp_path,
     cat={'stage3':{'modules':{'body':100},'batch_size':12,'max_concurrency':1}}
     rows=[{'asin':'A','goods_id':str(i),'amazon_image_path':'a','temu_image_path':str(i),
            'amazon_title':'Amazon 3 knives','temu_title':'TEMU set '+str(i),
-           'pair_revision':str(i),'vision_revision_key':str(i),'attempt':1} for i in range(2)]
+           'pair_revision':str(i),'vision_revision_key':str(i),'attempt':1} for i in range(count)]
     runner.consume(SimpleNamespace(validate_only=False,max_requests=1,results=tmp_path/'results.jsonl'),cat,tmp_path/'blocked.json','offline',iter(rows))
-    blocks=[b['text'] for b in calls[0]['input'][0]['content'] if b['type']=='input_text']
-    assert len(blocks)==4
-    assert blocks[1].startswith('TEMU 编号拼图')
+    content=calls[0]['input'][0]['content']
+    blocks=[b['text'] for b in content if b['type']=='input_text']
+    assert len(blocks)==count+2
+    assert blocks[1].startswith('TEMU 编号拼图' if count>1 else 'TEMU候选 C00 原图')
     assert blocks[0].startswith('Amazon基准') and 'Amazon 3 knives' in blocks[0]
-    assert blocks[2].startswith('C00') and 'TEMU set 0' in blocks[2]
-    assert blocks[3].startswith('C01') and 'TEMU set 1' in blocks[3]
+    assert 'a 仅描述此 Amazon 图' in blocks[0] and 't 仅描述当前 Cxx TEMU' in blocks[0]
+    assert '不可交换来源' in blocks[0]
+    for index in range(count):
+        assert blocks[index+2].startswith(f'C{index:02}') and f'TEMU set {index}' in blocks[index+2]
+    assert [b['image_url'] for b in content if b['type']=='input_image']==[
+        'data:image/png;base64,a','data:image/png;base64,fixture' if count>1 else 'data:image/png;base64,0']
 
 
 @pytest.mark.parametrize('invalid',[True,0,65537,'8192'])

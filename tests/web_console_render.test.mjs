@@ -358,6 +358,40 @@ test('current lane evidence clears stale alerts and still displays real verifica
 });
 
 
+test('third layer stop notice follows confirmed runtime state and preserves errors',async()=>{
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{});return nodes.get(id);};
+ const stopping='停止中：等待已发出的请求返回并保存，采集和前两层继续运行';
+ let rejected=false;
+ const context=sandbox({$:get,statusFresh:true,busy:false,lastStatus:{category_key:'task'},
+  AbortController,setTimeout:()=>1,clearTimeout(){},updateControls(){},poll:async()=>{},
+  fetch:async()=>({ok:!rejected,json:async()=>rejected?{error:{message:'停止请求失败'}}:{ok:true,phase:stopping}})});
+ const start=helperHtml.indexOf('function render(data)');
+ vm.runInContext(helperHtml.split('\n').find(line=>line.startsWith('function feedback('))+'\n'+
+  helperHtml.split('\n').find(line=>line.startsWith('async function action('))+'\n'+
+  helperHtml.slice(helperHtml.indexOf('function liveStage3Fresh('),helperHtml.indexOf('function renderAgentControls('))+'\n'+
+  helperHtml.slice(start,helperHtml.indexOf(" if(typeof renderResumeLaunchFeedback",start))+'}',context);
+ await vm.runInContext("action('/api/stop-stage3',{})",context);
+ assert.equal(get('global-feedback').textContent,stopping);
+ for(const fixture of [
+  {stage3_control:{stopped:false,running:false}},
+  {stage3_control:{stopped:true,running:true}},
+  {stage3_control:{stopped:true,running:false,codex_review:{running:true}}},
+  {stage3_control:{stopped:true,running:false},live_sample:{age_seconds:20}},
+ ]){
+  context.fixture=fixture;vm.runInContext('render(fixture)',context);
+  assert.equal(get('global-feedback').textContent,stopping);
+ }
+ context.fixture={stage3_control:{stopped:true,running:false,codex_review:{running:false}}};
+ vm.runInContext('render(fixture)',context);
+ for(const id of ['feedback','global-feedback'])assert.equal(get(id).textContent,'第三层已停止，已完成结果和历史记录已保留。');
+ vm.runInContext("feedback('其他操作已提交');render(fixture)",context);
+ assert.equal(get('global-feedback').textContent,'其他操作已提交');
+ rejected=true;await vm.runInContext("action('/api/stop-stage3',{})",context);
+ vm.runInContext('render(fixture)',context);
+ assert.equal(get('global-feedback').textContent,'停止请求失败');
+ assert.equal(get('global-feedback').className,'notice danger');
+});
+
 test('third layer starts during collection and displays live queue and stop controls',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const a=html.indexOf('function stage3Button(data)'),b=html.indexOf('\n}',a)+2;
