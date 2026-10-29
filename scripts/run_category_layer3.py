@@ -570,8 +570,12 @@ def consume(args, cat, fatal_file, key_identity, pending):
     with ExitStack() as resources:
         try:
             api_timeout=Timeout(timeout_seconds,connect=30,pool=30)
+            owner_file=args.results.with_name('controller.json')
+            owner=json.loads(owner_file.read_text('utf-8')) if owner_file.exists() else None
+            route_scope=[owner['pid'],owner['created']] if owner else None
             transport=resources.enter_context(create_transport(provider,timeout=api_timeout,
-                limits=Limits(max_connections=capacity,max_keepalive_connections=min(capacity,256))))
+                limits=Limits(max_connections=capacity,max_keepalive_connections=min(capacity,256)),
+                route_file=args.results.with_name('transport-route.json'),route_scope=route_scope))
             from selection_automation.match_criteria import enabled
             options={'criteria':cat['match_criteria']} if enabled(cat) else {}
             if native_d1:options['identity_policy']=stage.get('identity_policy')

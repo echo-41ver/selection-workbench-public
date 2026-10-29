@@ -63,6 +63,31 @@ def test_http_denial_does_not_switch_routes_or_retry_inference(monkeypatch):
     assert len(calls) == len(created) == 1
 
 
+def test_incremental_passes_reuse_route_within_same_controller(monkeypatch, tmp_path):
+    created, calls = clients(monkeypatch, [False, True, False])
+    route_file = tmp_path / 'transport-route.json'
+    provider = {'mode': 'multimodal_api', 'base_url': 'https://api.example/v1'}
+    for scope in ([123, 10.0], [123, 10.0], [456, 20.0]):
+        with transport.create_transport(provider, timeout=600, limits=None,
+                                        route_file=route_file, route_scope=scope):
+            pass
+    assert len(created) == 3
+    assert len(calls) == 2
+    assert all(client.closed for client in created)
+    assert 'proxy.invalid' not in route_file.read_text('utf-8')
+
+
+def test_selected_direct_route_survives_incremental_passes(monkeypatch, tmp_path):
+    created, calls = clients(monkeypatch, [True, False, True])
+    provider = {'mode': 'multimodal_api', 'base_url': 'https://api.example/v1'}
+    for _ in range(2):
+        with transport.create_transport(provider, timeout=600, limits=None,
+                                        route_file=tmp_path / 'transport-route.json',
+                                        route_scope=[123, 10.0]) as selected:
+            assert 'proxy' not in selected.options
+    assert len(created) == 3 and len(calls) == 2
+
+
 def test_both_routes_unavailable_close_clients_before_model_request(monkeypatch):
     created, calls = clients(monkeypatch, [True, True])
     with pytest.raises(ConnectionError, match='尚未发送分析'):

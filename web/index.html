@@ -518,7 +518,7 @@ function stage3RequestLabel(data={}){
  const inflight=agent?state.codex_review?.pool?.running_groups:p.inflight_requests;
  if(Number.isInteger(inflight)&&inflight>0)return agent?inflight+' 组处理中':inflight+' 个请求处理中';
  if(runtime.paused)return '已暂停派发'+(inflight===0?' · 无在途请求':' · 在途状态待确认');
- return Number.isInteger(inflight)?(agent?'未派发新组':'未派发请求'):'在途请求状态待确认';
+ return Number.isInteger(inflight)?(agent?'当前无在途新组':'当前无在途请求'):'在途请求状态待确认';
 }
 function runtimeStage3(data={}){
  const c=data.stage3_control||{},p=c.progress||{},r=data.stage3_runtime||{},review=c.codex_review||{},provider=data.stage3_provider||{},agentMode=(provider.mode||'local_agent')==='local_agent',selected=agentMode?(provider.agent_ids||[]):[];
