@@ -61,12 +61,12 @@ def _exact_categories(rows, terms, requested):
     return selected
 
 
-def collect(category, provider, progress=lambda value:None, *, now=None, max_pages=50, choose_categories=None):
+def collect(category, provider, progress=lambda value:None, *, now=None, max_pages=50, choose_categories=None, search_terms=None):
     now=now or datetime.now(timezone.utc)
     name=category['category_name_zh'].strip()
     terms=_category_terms(category);queries=[];candidates={};search_complete=True
     selected=[]
-    for term in terms:
+    for term in terms if search_terms is None else search_terms:
         for page in range(1,4):
             data=provider.categories({'keyword':term,'siteId':48,'page':page,'size':200})
             rows=data.get('list') or []
@@ -90,7 +90,7 @@ def collect(category, provider, progress=lambda value:None, *, now=None, max_pag
                   and [p.get('catName') for p in r.get('parentCatItems',[])][:4]
                   == ['电子','电脑及配件','外设产品','电脑鼠标、键盘、输入设备']]
         selection_method='已核验 Amazon 电脑键盘榜单对应极鲸云普通键盘类目路径'
-    if not selected and heading=='best sellers in barrel & hand fuel pumps':
+    if not selected and search_terms is None and heading=='best sellers in barrel & hand fuel pumps':
         queried=provider.categories({'keyword':'抽油泵','siteId':48,'page':1,'size':200})
         queries.append({'keyword':'抽油泵','page':1,'returned':len(queried['list']),'total':queried.get('total')})
         selected=[r for r in queried['list'] if r.get('catName')=='桶形和手摇燃油泵'
@@ -109,7 +109,7 @@ def collect(category, provider, progress=lambda value:None, *, now=None, max_pag
         unresolved=bool(candidates or queried['list']) or not search_complete
         return {'status':'CATEGORY_UNRESOLVED' if unresolved else 'CATEGORY_UNSUPPORTED',
                 'message':('极鲸云类目边界尚未完成核实；采集与分析可继续' if unresolved
-                           else '极鲸云未返回相关类目；本项数据暂不支持，采集与分析可继续'),
+                           else '极鲸云本次未匹配到相关类目；采集与分析可继续'),
                 'source':'GEEKBI','queried_at':now.isoformat(),'category_key':category['category_key'],
                 'optional':True,'blocking':False,'category_queries':queries,
                 'category_candidates':[{'catId':r.get('catId'),'name':r.get('catName'),'link':r.get('linkUrl'),

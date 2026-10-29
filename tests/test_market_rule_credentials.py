@@ -17,6 +17,7 @@ def task(tmp_path,monkeypatch):
     import watch_temu_union
     import urllib.request
     monkeypatch.setattr(market,'ROOT',tmp_path)
+    monkeypatch.setattr(generate_category,'ROOT',tmp_path)
     for key in ('DEEPSEEK_API_KEY','SELECTION_RULES_BASE_URL','SELECTION_RULES_MODEL','OPENAI_BASE_URL','OPENAI_VISION_MODEL'):
         monkeypatch.setenv(key,'')
     monkeypatch.setattr(urllib.request,'getproxies',lambda:{})
@@ -32,9 +33,10 @@ def task(tmp_path,monkeypatch):
             {'catId':9822,'catName':'烘焙垫','isLeaf':True,'parentCatItems':[{'catName':'厨房用具和小工具'}]}]},
         goods=lambda query:{'total':0,'list':[]})
     monkeypatch.setattr(market,'Provider',lambda **options:provider)
+    model_json=generate_category.model_json
     monkeypatch.setattr(generate_category,'model_json',lambda *a,**k:pytest.fail('unexpected model request'))
     return SimpleNamespace(root=tmp_path,category=category,generate=generate_category,
-        secret=tmp_path/'runtime/secrets/deepseek.dpapi')
+        secret=tmp_path/'runtime/secrets/deepseek.dpapi',provider=provider,model_json=model_json)
 
 
 @pytest.mark.parametrize('inherited_provider',[False,True])
@@ -90,3 +92,69 @@ def test_invalid_saved_provider_fails_before_any_model_request_or_key_export(tas
     assert result['status']=='FAILED' and result['error_type']=='ValueError'
     assert os.environ['DEEPSEEK_API_KEY']==''
     assert 'TEST_ONLY_COMPANY_KEY' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('usage',[{'prompt_tokens':37,'completion_tokens':12,'total_tokens':49},None])
+def test_empty_queries_recover_once_through_real_candidates_and_goods_with_model_usage(task,monkeypatch,usage):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_MODEL_KEY')
+    queries=[];goods_calls=[];model_calls=[]
+    candidates=task.provider.categories({})
+    def categories(query):
+        queries.append(query['keyword'])
+        return candidates if query['keyword']=='烘焙用具' else {'total':0,'list':[]}
+    def goods(query):
+        goods_calls.append(query)
+        return {'total':1,'list':[{'goodsId':'retrieved-product','catIds':[9768]}]}
+    def model(prompt,**options):
+        model_calls.append(prompt)
+        assert options['max_tokens']==600 and options['retry_truncated'] is False
+        if usage:options['_evidence'].observe(model_usage=usage)
+        return {'search_terms':['硅胶烘焙垫','烘焙用具','烘焙用具']} if len(model_calls)==1 else {
+            'cat_ids':[9768],'confidence':.95}
+    monkeypatch.setattr(task.provider,'categories',categories)
+    monkeypatch.setattr(task.provider,'goods',goods)
+    monkeypatch.setattr(task.generate,'model_json',task.model_json)
+    monkeypatch.setattr(task.generate,'_model_json',model)
+    original=task.category.read_bytes()
+    result=market.run(task.category)
+    assert result['status']=='COMPLETE' and result['categories'][0]['catId']==9768
+    assert [row['goodsId'] for row in result['records']]==['retrieved-product']
+    assert len(goods_calls)==1 and goods_calls[0]['catIds']==[9768]
+    assert queries==['硅胶烘焙垫','baking mat','烘焙用具']
+    assert [row['keyword'] for row in result['category_queries']]==queries
+    assert result['category_search_recovery']=={'status':'QUERIED','search_terms':['烘焙用具']}
+    assert len(model_calls)==2 and 'baking mat' in model_calls[0] and '9768' in model_calls[1]
+    assert task.category.read_bytes()==original
+    records=[json.loads(path.read_text('utf8')) for path in (task.root/'runtime/model-call-evidence').glob('*.json')]
+    assert len(records)==2 and all(row['outcome']=='success' for row in records)
+    assert all(row['usage']==(usage or {}) for row in records)
+    assert all(row['usage_state']==('available' if usage else 'unavailable') for row in records)
+    assert all(row['billing_state']=='UNKNOWN' for row in records)
+
+
+@pytest.mark.parametrize('proposal,extra_queries,recovery',[
+    ({'search_terms':['烘焙用具']},['烘焙用具'],'QUERIED'),
+    ({'search_terms':[]},[],'NO_NEW_TERMS'),
+    ({'search_terms':[' 硅胶烘焙垫 ','硅胶烘焙垫']},[],'NO_NEW_TERMS'),
+    ({},[],'INVALID_MODEL_TERMS'),
+    ({'search_terms':'烘焙用具'},[],'INVALID_MODEL_TERMS'),
+    ({'search_terms':['烘焙用具']*4},[],'INVALID_MODEL_TERMS'),
+    ({'search_terms':[None]},[],'INVALID_MODEL_TERMS'),
+    ({'search_terms':['baking tools']},[],'INVALID_MODEL_TERMS'),
+])
+def test_empty_or_invalid_recovery_is_bounded_without_repeating_original_queries(task,monkeypatch,proposal,extra_queries,recovery):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_MODEL_KEY')
+    queries=[];model_calls=[]
+    def categories(query):
+        queries.append(query['keyword']);return {'total':0,'list':[]}
+    def model(prompt,**options):
+        model_calls.append(prompt);return proposal
+    monkeypatch.setattr(task.provider,'categories',categories)
+    monkeypatch.setattr(task.provider,'goods',lambda *a:pytest.fail('no category must not query goods'))
+    monkeypatch.setattr(task.generate,'model_json',model)
+    result=market.run(task.category)
+    assert result['status']=='CATEGORY_UNSUPPORTED' and len(model_calls)==1
+    assert queries==['硅胶烘焙垫','baking mat']+extra_queries
+    assert [row['keyword'] for row in result['category_queries']]==queries
+    assert result['category_search_recovery']['status']==recovery
+    assert '本次未匹配' in result['message'] and '暂不支持' not in result['message']

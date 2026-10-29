@@ -369,7 +369,7 @@ test('third layer stop notice follows confirmed runtime state and preserves erro
  vm.runInContext(helperHtml.split('\n').find(line=>line.startsWith('function feedback('))+'\n'+
   helperHtml.split('\n').find(line=>line.startsWith('async function action('))+'\n'+
   helperHtml.slice(helperHtml.indexOf('function liveStage3Fresh('),helperHtml.indexOf('function renderAgentControls('))+'\n'+
-  helperHtml.slice(start,helperHtml.indexOf(" if(typeof renderResumeLaunchFeedback",start))+'}',context);
+  helperHtml.slice(start,helperHtml.indexOf(" renderSourceCounts(data);",start))+'}',context);
  await vm.runInContext("action('/api/stop-stage3',{})",context);
  assert.equal(get('global-feedback').textContent,stopping);
  for(const fixture of [

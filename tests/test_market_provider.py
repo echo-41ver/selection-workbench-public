@@ -40,6 +40,17 @@ def test_fuzzy_category_is_not_silently_used():
     assert not source.calls
 
 
+def test_recovery_search_terms_do_not_become_accepted_category_aliases():
+    class Broader(Source):
+        def categories(self,query):
+            assert query['keyword']=='电动工具'
+            return {'total':1,'list':[{'catId':55,'catName':'电动工具','isLeaf':True}]}
+    source=Broader()
+    result=collect(category(),source,now=NOW,search_terms=['电动工具'])
+    assert result['status']=='CATEGORY_UNRESOLVED' and not source.calls
+    assert [row['keyword'] for row in result['category_queries']]==['电动工具']
+
+
 def test_alias_queries_match_only_actual_returned_exact_english_name():
     class Aliases:
         def __init__(self):self.queries=[];self.goods_calls=[]
