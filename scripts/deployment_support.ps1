@@ -36,7 +36,7 @@ function Protect-DeploymentSupportRecord($Value) {
         $keys = if ($Value -is [System.Collections.IDictionary]) { $Value.Keys } else { $Value.PSObject.Properties.Name }
         foreach ($key in $keys) {
             $item = $Value.$key
-            if ($key -match '(?i)password|passwd|^pwd$|secret|credential|authorization|cookie|api.?key|access.?key|private.?key|^key$|token|username|phone|mobile|email|login.?code|ticket|request_body|response_body|raw_response|^headers$|^messages$|^prompt$|base64|b64_json' -and ($item -isnot [ValueType] -or $key -match '(?i)phone|mobile')) {
+            if ($key -notmatch '^(?:prompt|completion|input|output)_tokens_details$' -and $key -match '(?i)password|passwd|^pwd$|secret|credential|authorization|cookie|api.?key|access.?key|private.?key|^key$|token|username|phone|mobile|email|login.?code|ticket|request_body|response_body|raw_response|^headers$|^messages$|^prompt$|base64|b64_json' -and ($item -isnot [ValueType] -or $key -match '(?i)phone|mobile')) {
                 $clean[$key] = '[REDACTED]'
             } else { $clean[$key] = Protect-DeploymentSupportRecord $item }
         }
