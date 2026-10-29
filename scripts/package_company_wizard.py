@@ -29,7 +29,7 @@ def wizard(root,base,output,company_json=None):
     import tkinter as tk
     from tkinter import messagebox,filedialog
     window=tk.Tk();window.withdraw()
-    if not messagebox.askyesno('本人确认读取本机配置','将读取您选择的本机工作台中已保存的 AdsPower、代理、D1、DeepSeek 和 GeekBI 配置（含接口授权凭证及有效期），并生成含真实密钥的内部包。\n只交给获准同事，禁止上传公开 GitHub。原配置和现有包不改。\n\n是否由您本人继续？',default='no',parent=window):return
+    if not messagebox.askyesno('本人确认读取本机配置','将读取您选择的本机工作台中已保存的 AdsPower、代理、D1、DeepSeek 和 GeekBI 配置（含接口授权凭证及有效期），并生成含真实密钥的内部包。\n只交给获准使用者，禁止上传公开 GitHub。原配置和现有包不改。\n\n是否由您本人继续？',default='no',parent=window):return
     from selection_automation.secrets import load
     company={};model={};decision={};root=Path(root)
     for name in ('company','deepseek','liquid_d1'):
@@ -84,9 +84,9 @@ def wizard(root,base,output,company_json=None):
                             payload['geekbi'].update(access_token=token,expires_at=expiry)
                             break
             normalize(payload,require_model=True)
-            if not messagebox.askyesno('最终确认装入真实密钥','新包将含 AdsPower、代理、D1、DeepSeek 真实密钥，以及已填写的 GeekBI 账号密码、接口授权凭证及有效期。\n仅供获准同事内部使用，禁止公开上传。\n\n是否确认生成？',default='no',parent=window):return
+            if not messagebox.askyesno('最终确认装入真实密钥','新包将含 AdsPower、代理、D1、DeepSeek 真实密钥，以及已填写的 GeekBI 账号密码、接口授权凭证及有效期。\n仅供获准使用者使用，禁止公开上传。\n\n是否确认生成？',default='no',parent=window):return
             created=write_bundle(base,output,payload)
-            messagebox.showinfo('完成','完整内部包已生成：\n'+str(created)+'\n\n同事解压后双击 deploy.cmd，并在其电脑确认加密导入。',parent=window);window.destroy()
+            messagebox.showinfo('完成','完整内部包已生成：\n'+str(created)+'\n\n解压后双击 deploy.cmd，并在其电脑确认加密导入。',parent=window);window.destroy()
         except ValueError as error:messagebox.showerror('配置需完善',str(error),parent=window)
         except Exception:messagebox.showerror('装包失败','未改动原包或原配置。请检查输出目录权限与可用空间。',parent=window)
     tk.Button(window,text='确认生成完整内部包',command=create).grid(row=len(fields)+1,column=0,columnspan=2,pady=14)

@@ -39,9 +39,9 @@ README = '''# 第二部分 Linux / Docker 数据交接 v2
 
 输入文件：amazon.xlsx、temu.xlsx 供 Excel 读取；amazon.jsonl、temu.jsonl 供程序读取。每份 Excel 的 Products、Images、Specifications、Observations 工作表用 product_id 关联。Excel 空白格与 JSONL 的 null/空数组均表示未知。图片是公开原始地址，不包含图片文件。保留榜单 rank、关键词、前端排序证据和多次观察来源；无销量周期/准确销量不得自行补造。
 
-同事交付要求：提供 README、Dockerfile、requirements.txt 及精确锁定依赖文件（或等效锁文件），清晰 CLI 入口、最小可运行示例、测试、输出字段契约及失败重试说明。实现内容为独立第二部分，不改第一部分采集流程。
+交付要求：提供 README、Dockerfile、requirements.txt 及精确锁定依赖文件（或等效锁文件），清晰 CLI 入口、最小可运行示例、测试、输出字段契约及失败重试说明。实现内容为独立第二部分，不改第一部分采集流程。
 
-建议 CLI 契约（待同事实现，不是本包已有算法）：
+建议 CLI 契约（待后续实现，不是本包已有算法）：
 python -m part2 --input-dir /data/input --output-dir /data/output
 
 docker run --rm --env-file .env -v "$PWD/input:/data/input:ro" -v "$PWD/output:/data/output" part2:version --input-dir /data/input --output-dir /data/output

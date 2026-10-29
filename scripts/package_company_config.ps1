@@ -83,7 +83,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     if (-not $OutputZip) {
         $OutputZip = Join-Path (Split-Path -Parent $baseZip) (([IO.Path]::GetFileNameWithoutExtension($baseZip)) + '-含公司配置-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.zip')
     }
-    $prompt = "将读取：`r`n$CompanyConfig`r`n`r`n将生成：`r`n$OutputZip`r`n`r`n新 ZIP 会包含公司代理凭据及 AdsPower API Key。只发给获准的同事，禁止上传公开 GitHub。原包和原配置不变。`r`n`r`n是否现在生成？"
+    $prompt = "将读取：`r`n$CompanyConfig`r`n`r`n将生成：`r`n$OutputZip`r`n`r`n新 ZIP 会包含公司代理凭据及 AdsPower API Key。只发给获准的使用者，禁止上传公开 GitHub。原包和原配置不变。`r`n`r`n是否现在生成？"
     $answer = [Windows.Forms.MessageBox]::Show($prompt, '确认生成含公司配置的内部包',
         [Windows.Forms.MessageBoxButtons]::YesNo, [Windows.Forms.MessageBoxIcon]::Warning,
         [Windows.Forms.MessageBoxDefaultButton]::Button2)

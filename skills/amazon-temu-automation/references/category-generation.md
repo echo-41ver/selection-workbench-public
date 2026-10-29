@@ -2,7 +2,7 @@
 
 采集前提未齐时，可以先编译 identity_policy，再用规则编辑器预览或修改标准；未知的榜单 URL 和用户数量保持 null，不用假值绕校验。draft_view/edit_rules 仅检查规则结构、语义一致性及安全字段；prepare/start 和冻结读取器仍执行完整前提校验，必须先核实真实来源并取得数量。纯阈值/图片提示修改且第一层文字不变不需要模型调用；实际自然语言改写仍须遵守服务和预算授权。
 
-先调用 `selection_category_contract`，或运行 `.venv/Scripts/python.exe -m selection_automation.category_contract` 获取与当前程序匹配的配置骨架和字段说明。当前Agent完成规则生成，不额外调用文本API，不要求同事手写规则。`config/categories` 只是示例，不是支持品类清单。
+先调用 `selection_category_contract`，或运行 `.venv/Scripts/python.exe -m selection_automation.category_contract` 获取与当前程序匹配的配置骨架和字段说明。当前Agent完成规则生成，不额外调用文本API，不要求使用者手写规则。`config/categories` 只是示例，不是支持品类清单。
 
 可替换部分是第一层 `stage1.attributes`、第三层 `stage3.modules/module_descriptions/visual_instructions` 及评分条件；同时替换本品类的 Amazon 榜单、TEMU 基础词/特征词和排除词。新品类使用 `stage1.text_gate=declarative`，不要选择浴巾等专用品类 gate，不继承专用 scoring_policy。程序自动把这些配置接入第一二层、视觉请求和Excel，用户不需要编辑脚本。
 
