@@ -160,6 +160,31 @@ test('accepted refresh keeps its button disabled through cached status and resto
  render();update();assert.equal(links().length,1);assert.equal(button.disabled,false);assert.match(button.textContent,/重试极鲸云/);
 });
 
+test('market button distinguishes category matching, authorization and read failures in both render paths',()=>{
+ const {context,box,data}=marketFixture();const button={disabled:false,textContent:''};
+ context.$=id=>id==='market-status'?box:button;
+ const renderStart=helperHtml.indexOf('const ms=data.market_status||{}',helperHtml.indexOf('function render(data)'));
+ const marketRender=helperHtml.slice(renderStart,helperHtml.indexOf('renderFrontendMarket(',renderStart));
+ const controlsStart=helperHtml.indexOf(' stage3Button(data);excelButtons(data);rotationButtons();');
+ const controls=helperHtml.slice(controlsStart+' stage3Button(data);excelButtons(data);rotationButtons();'.length,helperHtml.indexOf(" if(typeof criteriaDirty",controlsStart));
+ for(const [status,action,label] of [
+  ['CATEGORY_UNRESOLVED',undefined,'重新匹配极鲸云类目'],
+  ['CATEGORY_UNRESOLVED','AUTH_REQUIRED','重新匹配极鲸云类目'],
+  ['FAILED',undefined,'重试读取极鲸云'],
+  ['FAILED','AUTH_REQUIRED','重试读取极鲸云'],
+  ['ACTION_REQUIRED','AUTH_REQUIRED','重试极鲸云 / 登录后继续'],
+  ['ACTION_REQUIRED','PAYMENT_REQUIRED','重试读取极鲸云'],
+  ['COMPLETE',undefined,'刷新极鲸云市场数据'],
+  ['RUNNING',undefined,'正在读取极鲸云…'],
+ ]){
+  context.data={...data,market_status:{status,action}};
+  for(const code of [marketRender,controls]){
+   vm.runInContext('(()=>{'+code+'})()',context);
+   assert.equal(button.textContent,label,status+' '+action);
+  }
+ }
+});
+
 test('a rejected market refresh restores its prior expiry-aware state',async()=>{
  const {context,box,links}=marketFixture(70000);
  Object.assign(context,{AbortController,setTimeout:()=>1,clearTimeout(){},updateControls(){},feedback(){},poll:async()=>{},
