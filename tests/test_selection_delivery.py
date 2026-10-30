@@ -109,6 +109,26 @@ def test_strict_threshold_and_unfinished_evidence(tmp_path):
     assert data['products'][0]['amazon']['price']['min'] is None
 
 
+@pytest.mark.parametrize('category,title,specifications,selected',[
+    ('蓝牙耳机','Apple EarPods Headphones with Lightning Connector',[],False),
+    ('蓝牙耳机','Apple AirPods Pro 3 Wireless Earbuds',[],True),
+    ('蓝牙耳机','Headphones with 3.5mm Plug',[{'label':'Connectivity Technology','value':'Bluetooth'}],True),
+    ('无线耳机','有线耳机，3.5mm插头',[],False),
+    ('有线耳机','Apple EarPods Headphones with Lightning Connector',[],True),
+    ('蓝牙耳机','Earbuds',[],True)])
+def test_wireless_audio_delivery_excludes_explicit_wired_reference_only(tmp_path,category,title,specifications,selected):
+    cat,report=setup(tmp_path);cat['category_name_zh']=category
+    base=tmp_path/'runs/fixture';path=base/'amazon/amazon_frontend_latest.json'
+    source=json.loads(path.read_text('utf-8'));source['records'][0].update(title=title,specifications=specifications)
+    path.write_text(json.dumps(source),encoding='utf-8')
+    data=build_delivery(tmp_path,cat,report)
+    assert ('A1' in [row['asin'] for row in data['products']]) is selected
+    progress=next(row for row in data['progress'] if row['asin']=='A1')
+    assert progress['amazon']['title']==title
+    assert progress['match']==report['products'][0]['match']
+    if not selected:assert progress['analysis_status']=='不属于本次无线耳机范围'
+
+
 def test_saving_stage3_provider_keeps_completed_collection_current(tmp_path):
     cat, report = setup(tmp_path)
     base = tmp_path / 'runs/fixture'

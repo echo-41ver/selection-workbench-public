@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from .commercial import jsonl, read_json, settings
 from .operations import product_card
@@ -293,6 +294,9 @@ def build_delivery(root, category, report):
     root = Path(root)
     base = root / 'runs' / category['category_key']
     limit = settings(category.get('commercial'))['same_limit']
+    name=category['category_name_zh']
+    wireless_audio=bool(re.search(r'蓝牙|无线|無線|bluetooth|wireless',name,re.I)
+        and re.search(r'耳机|耳機|earbuds?|earphones?|headphones?|headsets?',name,re.I))
     source = read_json(base / 'amazon/amazon_frontend_latest.json')
     amazon = {str(r['asin']): r for r in source.get('records', [])}
     collection=collection_progress(base,category,source)
@@ -317,11 +321,20 @@ def build_delivery(root, category, report):
         if len(same_ids)!=entry['match']['confirmed'] or len(similar_ids)!=entry['match'].get('similar',0):
             raise ValueError('同款或类似款数量与去重商品ID不一致，拒绝发布')
         analysed,analysis_label,analysis_reason=analysis_progress(entry['match'])
+        outside_scope=False
+        if wireless_audio:
+            title=card['title']
+            evidence=title+' '+collected_parameters(raw).get('规格参数','')
+            outside_scope=bool(re.search(r'\b(?:wired|corded)\b|有线|有線|lightning\s+connector|\b3[.,]5\s*mm\s*(?:plug|jack|connector)',title,re.I)
+                and not re.search(r'蓝牙|无线|無線|bluetooth|wireless',evidence,re.I))
+            if outside_scope:
+                analysis_label='不属于本次无线耳机范围'
+                analysis_reason='商品标题明确为有线耳机或音频接头，已采集参数未提供蓝牙/无线能力依据；'+analysis_reason
         item.update(collection_status=collection['label'],analysis_status=analysis_label,
                     status_reason=collection['reason']+'；'+analysis_reason)
         progress.append(item)
         # Keep the original strict threshold, including historical <= runs.
-        if collection['complete'] and analysed and item['same_count']<limit:products.append(item)
+        if collection['complete'] and analysed and not outside_scope and item['same_count']<limit:products.append(item)
         evidence = {str(p['goods_id']): p for p in entry.get('confirmed_pairs', [])+entry.get('similar_pairs',[])}
         for gid in gids:
             pairs.append({'asin': asin, 'goods_id': gid, 'amazon': card,
