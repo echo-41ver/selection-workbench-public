@@ -80,8 +80,10 @@ def checked_policy(category, *, required=False):
     for f in features:
         if not isinstance(f, dict) or set(f) != {'id', 'label', 'role', 'evidence', 'scope', 'rule', 'modules', 'required_visual', 'region', 'effects', 'preserves'}:
             raise ValueError('每个特征必须包含标识、中文名、身份作用、证据来源、对应部位、判断规则及模块')
-        if not isinstance(f['id'], str) or not re.fullmatch('[a-z][a-z0-9_]{0,63}', f['id']) or f['id'] in names:
-            raise ValueError('特征标识必须唯一，文字属性和变体使用同一标识')
+        if not isinstance(f['id'], str) or not re.fullmatch('[a-z][a-z0-9_-]{0,63}', f['id']):
+            raise ValueError('特征标识格式无效：'+repr(f['id'])+'；须符合[a-z][a-z0-9_-]{0,63}')
+        if f['id'] in names:
+            raise ValueError('特征标识重复：'+f['id'])
         names.add(f['id'])
         if not isinstance(f['region'], str) or f['region'] not in REGIONS:
             raise ValueError('特征须定位到主体、部件、装饰区域、包装或规格')

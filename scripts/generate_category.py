@@ -500,7 +500,9 @@ def resolve_listing(category_name, report, bestsellers_url=''):
     decision=model_json(source_prompt,max_tokens=800,retry_truncated=False)
     seen = set()
     last_scope_error = None
-    for attempt in range(1, 6):
+    # A wrong search branch may need ancestors before descending; use the same
+    # bounded budget as public category navigation above.
+    for attempt in range(1, 9):
         url = (decision.get('url') or decision.get('bestsellers_url')) if isinstance(decision, dict) else None
         canonical = listing_identity(url)
         node = re.search(r'/zgbs/[^/]+/(\d+)$', canonical or '')
@@ -563,7 +565,7 @@ def resolve_listing(category_name, report, bestsellers_url=''):
                 if key in seen else 'This category is absent from live evidence. Choose an actual supplied category link.')
         if allowed_nodes <= seen:
             break
-        if attempt < 5:
+        if attempt < 8:
             report(stage='discovering', depth=attempt+1, route=route, message='榜单链接未通过核实，正在通过 API 自动修正')
             decision = model_json((instruction if evidence else source_prompt) + '\nRejected response and actual evidence: ' + json.dumps({
                 'response':decision, 'problem':problem, 'rejected_nodes':sorted(seen),

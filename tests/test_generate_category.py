@@ -552,6 +552,53 @@ def test_mismatched_category_can_follow_observed_department_without_accepting_it
     assert reads==[bad,department,good]
 
 
+def test_observed_branch_can_recover_within_the_public_navigation_budget(monkeypatch):
+    wrong='https://www.amazon.com/zgbs/sporting-goods/100001'
+    root='https://www.amazon.com/Best-Sellers/zgbs'
+    department='https://www.amazon.com/Best-Sellers-Home-Kitchen/zgbs/home-garden'
+    parent='https://www.amazon.com/zgbs/home-garden/100002'
+    child='https://www.amazon.com/zgbs/home-garden/100003'
+    leaf='https://www.amazon.com/zgbs/home-garden/100004'
+    urls=[wrong,root,department,parent,child,leaf]
+    pages={url:{'url':url,'heading':'Best Sellers in '+heading,'rank_count':30,
+                'ranked_products':[{'rank':1,'title':title}],
+                'links':[{'url':urls[i+1],'text':'Observed next category'}] if i+1<len(urls) else []}
+           for i,(url,heading,title) in enumerate(zip(urls,
+               ['Specialist Implements','Beauty','Home & Kitchen','Household Supplies','Cleaning Tools','Cleaning Implements'],
+               ['Specialist maintenance item','Beauty item','Household item','Mixed household products','Mixed cleaning tools','General cleaning implement']))}
+    answers=iter([{'search_query':'cleaning implement'},{'url':'https://www.amazon.com/zgbs/home-garden/999999'},
+        {'url':wrong},{'matches':False},{'url':root},{'url':department},
+        {'url':parent},{'matches':False},{'url':child},{'matches':False},{'url':leaf},{'matches':True}])
+    reads=[];searches=[]
+    monkeypatch.setattr(generator,'search_listing_candidates',
+        lambda query:(searches.append(query) or {'candidates':[{'url':wrong}]}))
+    monkeypatch.setattr(generator,'read_listing',lambda url:(reads.append(url) or pages[url]))
+    monkeypatch.setattr(generator,'model_json',lambda *a,**k:next(answers))
+    assert generator.resolve_listing('测试清洁工具',lambda **k:None)==pages[leaf]
+    assert reads==urls and len(set(reads))==len(reads) and searches==['cleaning implement']
+
+
+def test_category_correction_stops_at_eight_even_with_more_observed_links(monkeypatch):
+    urls=['https://www.amazon.com/zgbs/tools/'+str(200000+i) for i in range(9)]
+    reads=[];searches=[]
+    monkeypatch.setattr(generator,'search_listing_candidates',
+        lambda query:(searches.append(query) or {'candidates':[{'url':urls[0]}]}))
+    def read(url):
+        reads.append(url)
+        return {'url':url,'heading':'Best Sellers in Other Implements','rank_count':30,
+                'links':[{'url':urls[len(reads)],'text':'Observed child'}]}
+    def model(prompt,**kwargs):
+        if prompt.startswith('Translate the requested'):return {'search_query':'test implement'}
+        if prompt.startswith('Check whether'):return {'matches':False}
+        return {'url':urls[len(reads)]}
+    monkeypatch.setattr(generator,'read_listing',read)
+    monkeypatch.setattr(generator,'model_json',model)
+    with pytest.raises(generator.CategoryGenerationError) as error:
+        generator.resolve_listing('测试工具',lambda **k:None)
+    assert error.value.code=='CATEGORY_UNRESOLVED'
+    assert reads==urls[:8] and searches==['test implement']
+
+
 def test_direct_api_link_corrected_without_directory_walk_or_revisiting(monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','fixture-secret')
     wrong='https://www.amazon.com/zgbs/pc/172493'

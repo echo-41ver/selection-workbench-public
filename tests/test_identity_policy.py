@@ -66,6 +66,39 @@ def test_new_categories_share_compiler_not_towel_templates(name):
     assert c['stage3']['confirmation_minimums'] == {'body': 80}
 
 
+def test_hyphenated_feature_ids_keep_references_schema_and_identity_conflicts():
+    c=category();names={'body_type':'body-type','finish':'decor-color','capacity':'nominal-capacity'}
+    for attr in c['stage1']['attributes']:attr['name']=names[attr['name']]
+    for feature in c['stage3']['identity_policy']['features']:
+        feature['id']=names[feature['id']]
+        feature['preserves']=[names[fid] for fid in feature['preserves']]
+    c=compile_policy(c);validate(c)
+    assert c['stage3']['variant_fields']==['decor-color']
+    assert 'IDENTITY_BODY-TYPE' in c['stage3']['identity_hard_conflicts']
+    assert c['stage3']['identity_policy']['features'][1]['preserves']==['body-type']
+    _,schema=protocol(c,1)
+    assert set(schema['properties']['candidates']['items']['properties']['f']['properties'])=={'body-type'}
+    validate(json.loads(json.dumps(c)))
+    facts=visual_facts(c)
+    assert score(c,facts)['state']=='确认同款'
+    facts['feature_comparisons']['body-type'].update(relation='DIFFERENT',
+        amazon='一段固定支撑',temu='两段铰接支撑')
+    assert score(c,facts)['state']=='不同款'
+
+
+@pytest.mark.parametrize('invalid',['body/type','Body-type','a'*65,''])
+def test_feature_id_format_error_identifies_the_actual_invalid_value(invalid):
+    c=category();c['stage3']['identity_policy']['features'][0]['id']=invalid
+    with pytest.raises(ValueError,match='特征标识格式无效') as error:compile_policy(c)
+    assert repr(invalid) in str(error.value)
+
+
+def test_duplicate_feature_id_reports_the_duplicated_value():
+    c=category();c['stage3']['identity_policy']['features'][1]['id']='body_type'
+    with pytest.raises(ValueError,match='特征标识重复') as error:compile_policy(c)
+    assert 'body_type' in str(error.value)
+
+
 @pytest.mark.parametrize('field,value', [
     ('variant_fields', []), ('identity_required_modules', ['appearance']),
     ('visual_instructions', '允许任何款式'), ('module_descriptions', {'body': '颜色不同就排除', 'appearance': '外观'}),
