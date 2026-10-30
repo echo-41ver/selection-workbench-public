@@ -69,7 +69,7 @@ def model_http_error(error, key):
         ('；服务返回：'+detail if detail else ''),f'MODEL_HTTP_{error.code}')
 
 
-def compile_generated_policy(config, *, model=None, policy_repair=None):
+def compile_generated_policy(config, *, model=None, policy_repair=None, on_repair=None):
     """Validate semantics and normalize bounded repair replies without replacing a category."""
     from selection_automation.identity_policy import VERSION
     from selection_automation.compact_authoring import apply_policy_repair
@@ -97,6 +97,8 @@ def compile_generated_policy(config, *, model=None, policy_repair=None):
             '\n校验失败：' + str(error)[:220] + '\n当前草稿：' + json.dumps(source, ensure_ascii=False))
         for attempt in range(2):
             proposal=model(prompt,max_tokens=6000,retry_truncated=False)
+            if on_repair is not None:
+                on_repair(proposal)
             if MODEL_PROGRESS_REPORTER:
                 MODEL_PROGRESS_REPORTER(generated_policy_repair=proposal,message='正在编译修正后的品类规则')
             try:
@@ -656,7 +658,7 @@ def ensure_subject_rules(config,evidence,*,allow_model=True,model=None):
     return validate_subject_rules(result)
 
 
-def generate_category(category_name: str, amazon_count: int, temu_count: int, *, progress=None, bestsellers_url='',reuse_approved=False,draft_store=None,policy_repair=None) -> dict:
+def generate_category(category_name: str, amazon_count: int, temu_count: int, *, progress=None, bestsellers_url='',reuse_approved=False,draft_store=None) -> dict:
     report = progress or (lambda **fields: None)
     if not category_name.strip() or len(category_name) > 120 or not 1 <= amazon_count <= 100 or temu_count < 1:
         raise CategoryGenerationError('请输入品类、Amazon 数量 1–100 和正整数采集条数')
@@ -694,8 +696,9 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         if reuse_approved and cache.is_file():
             try:receipt=json.loads(cache.read_text('utf-8'))
             except (OSError,ValueError):pass
-    proposal=receipt.get('proposal') if receipt.get('scope')==scope else None
-    reused_proposal=proposal is not None
+    if receipt.get('scope')!=scope:
+        receipt={}
+    proposal=receipt.get('proposal')
     if proposal is not None:
         report(stage='validating',message='复用本次已接收的规则稿，正在本地编译，不重复请求品类模型')
     if proposal is None:
@@ -703,7 +706,8 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
             reviewed_profile({'category_name_zh':category_name})), max_tokens=6000)
     if cache:
         cache.parent.mkdir(parents=True,exist_ok=True)
-        atomic_write(cache,json.dumps({'scope':scope,'proposal':proposal},ensure_ascii=False))
+        receipt.update(scope=scope,proposal=proposal)
+        atomic_write(cache,json.dumps(receipt,ensure_ascii=False))
     report(stage='validating', message='正在编译文字与图片规则', generated_rule_draft=proposal)
     try:
         config = expand(proposal,category_name,evidence['url'],amazon_count,temu_count)
@@ -721,7 +725,8 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         if not config['stage3'].get('visual_instructions'):
             raise ValueError()
         config['stage3'].update(provider='deepseek', model='deepseek-flash', base_url='https://api.deepseek.com')
-        config = compile_generated_policy(config,policy_repair=policy_repair if reused_proposal else None)
+        config = compile_generated_policy(config,policy_repair=receipt.get('policy_repair'),
+            on_repair=(lambda repair:atomic_write(cache,json.dumps({**receipt,'policy_repair':repair},ensure_ascii=False))) if cache else None)
         config = generated_threshold(config)
         config = apply_reviewed_recall_aliases(config)
         config = ensure_subject_rules(config,evidence,allow_model=False)
@@ -783,10 +788,8 @@ def main():
         report(**{**last,**fields})
     MODEL_PROGRESS_REPORTER=model_progress
     try:
-        repair_file=args.output.with_suffix('.policy-repair.json')
-        saved_repair=json.loads(repair_file.read_text('utf-8')) if not args.fresh_rules and repair_file.is_file() else None
         config = generate_category(args.category_name, args.amazon_count, args.temu_count, progress=report, bestsellers_url=args.bestsellers_url,reuse_approved=not args.fresh_rules,
-            draft_store=args.output.parent/'generated-rule-drafts',policy_repair=saved_repair)
+            draft_store=args.output.parent/'generated-rule-drafts')
         args.output.parent.mkdir(parents=True, exist_ok=True)
         temporary = args.output.with_suffix('.tmp')
         temporary.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')

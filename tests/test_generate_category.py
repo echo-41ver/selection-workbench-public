@@ -287,6 +287,33 @@ def test_saved_policy_repair_compiles_without_repeating_paid_request():
     assert result['stage3']['identity_policy_generation']['repair_used'] is True
 
 
+def test_rule_repair_survives_new_output_name_without_repeating_paid_call(monkeypatch,tmp_path):
+    import json
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-secret')
+    original=fixture_config();broken=fixture_config()
+    broken['stage3']['identity_policy']['features'][0].pop('required_visual')
+    repair={'identity_policy':original['stage3']['identity_policy'],'attributes':original['stage1']['attributes']}
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'resolve_listing',lambda *a,**kw:evidence)
+    monkeypatch.setattr(generator,'approved_category',lambda *a:None)
+    answers=iter([broken,repair])
+    monkeypatch.setattr(generator,'model_json',lambda *a,**kw:next(answers))
+    write=generator.atomic_write
+    def interrupt_after_saved_repair(path,text):
+        write(path,text)
+        if 'policy_repair' in json.loads(text):raise OSError('interrupted after saved model reply')
+    monkeypatch.setattr(generator,'atomic_write',interrupt_after_saved_repair)
+    with pytest.raises(generator.CategoryGenerationError):
+        generator.generate_category('电钻',2,120,draft_store=tmp_path)
+    assert json.loads(next(tmp_path.glob('*.json')).read_text('utf-8'))['policy_repair']==repair
+    monkeypatch.setattr(generator,'atomic_write',write)
+    monkeypatch.setattr(generator,'model_json',lambda *a,**kw:pytest.fail('saved repair was billed again'))
+    result=generator.generate_category('电钻',2,120,draft_store=tmp_path,reuse_approved=True)
+    assert result['stage3']['identity_policy_generation']['repair_used'] is True
+    assert result['amazon']['target_count']==2
+
+
 def test_unusable_policy_repair_stops_after_bounded_retry_without_fallback():
     broken = fixture_config(); broken['stage3']['identity_policy'] = None
     calls = []
