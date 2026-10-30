@@ -90,13 +90,16 @@ def test_discovery_follows_actual_category_navigation_to_correct_leaf(monkeypatc
     can = 'https://www.amazon.com/zgbs/kitchen/289757'
     parent = 'https://www.amazon.com/zgbs/kitchen/289754'
     bar = 'https://www.amazon.com/zgbs/home-garden/760384'
-    bottle = 'https://www.amazon.com/zgbs/kitchen/289467'
+    corkscrew = 'https://www.amazon.com/zgbs/kitchen/289734'
+    bottle = 'https://www.amazon.com/zgbs/kitchen/3109475011'
     pages = {
         can: {'url':can, 'heading':'Best Sellers in Manual Can Openers', 'rank_count':30,
               'links':[{'url':parent, 'text':'Kitchen Utensils & Gadgets'}]},
         parent: {'url':parent, 'heading':'Best Sellers in Kitchen Utensils & Gadgets', 'rank_count':30,
                  'links':[{'url':bar, 'text':'Bar & Wine Tools'}]},
         bar: {'url':bar, 'heading':'Best Sellers in Bar & Wine Tools', 'rank_count':30,
+                 'links':[{'url':corkscrew, 'text':'Corkscrews & Openers'}]},
+        corkscrew: {'url':corkscrew, 'heading':'Best Sellers in Corkscrews & Openers', 'rank_count':30,
                  'links':[{'url':bottle, 'text':'Bottle Openers'}]},
         bottle: {'url':bottle, 'heading':'Best Sellers in Bottle Openers', 'rank_count':30},
     }
@@ -105,17 +108,20 @@ def test_discovery_follows_actual_category_navigation_to_correct_leaf(monkeypatc
         visited.append(url)
         return pages[url]
     monkeypatch.setattr(generator, 'read_listing', read)
-    monkeypatch.setattr(generator, 'search_listing_candidates', lambda _: {'candidates':[{'url':can}]})
+    monkeypatch.setattr(generator, 'search_listing_candidates', lambda _: {
+        'candidates':[{'url':can}], 'summary':'INITIAL_SEARCH_ONLY'})
     responses = iter([{'search_query':'bottle opener'}, {'url':can}, {'url':parent},
-                      {'matches':False}, {'url':bar}, {'matches':False}, {'url':bottle}, {'matches':True}])
+                      {'matches':False}, {'url':bar}, {'matches':False}, {'url':corkscrew},
+                      {'matches':False}, {'url':bottle}, {'matches':True}])
     prompts = []
     def model(prompt, **kwargs):
         prompts.append(prompt)
         return next(responses)
     monkeypatch.setattr(generator, 'model_json', model)
     assert generator.resolve_listing('开瓶器', lambda **kwargs:None)['url'] == bottle
-    assert visited == [can, parent, bar, bottle]
-    assert parent in prompts[2] and bar in prompts[4] and bottle in prompts[6]
+    assert visited == [can, parent, bar, corkscrew, bottle]
+    assert parent in prompts[2] and bar in prompts[4] and bottle in prompts[8]
+    assert 'INITIAL_SEARCH_ONLY' in prompts[1] and 'INITIAL_SEARCH_ONLY' not in prompts[2]
 
 
 @pytest.mark.parametrize('manual_url', [False, True])
