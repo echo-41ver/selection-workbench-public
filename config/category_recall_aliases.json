@@ -2,6 +2,18 @@
   "schema_version": "reviewed-category-recall-aliases-v1",
   "categories": [
     {
+      "category_names": ["开瓶器"],
+      "listing_identity": "https://www.amazon.com/zgbs/kitchen/3109475011",
+      "aliases": ["开瓶器", "bottle opener"],
+      "basis": "Bottle Openers 同一商品主体的中英文名称；仅用于召回候选，不代表同款结论。",
+      "reviewed_at": "2026-10-30",
+      "stage2_recall_review": {
+        "max_candidate_threshold": 55,
+        "basis": "已复核三件套白底拼图与桌面场景图的主体高度一致，构图变化使图片向量分数低于规则模型提出的门槛。仅扩大本品类候选召回，最终同款关系仍由原第三层规则判断。",
+        "reviewed_at": "2026-10-30"
+      }
+    },
+    {
       "category_names": ["削皮器"],
       "listing_identity": "https://www.amazon.com/zgbs/kitchen/16439871",
       "aliases": ["削皮器", "vegetable peeler"],

@@ -218,6 +218,8 @@ def test_rules_and_recall_threshold_share_one_configured_api_generation(monkeypa
 
 @pytest.mark.parametrize('category,node,proposed,expected',[
     ('削皮器','16439871',60,55),('削皮器','16439871',43,43),
+    ('开瓶器','3109475011',68,55),('开瓶器','3109475011',43,43),
+    ('开瓶器','123',68,68),
     ('削皮器','123',60,60),('其他品类','16439871',60,60)])
 def test_reviewed_recall_ceiling_applies_only_to_exact_category_and_listing(monkeypatch,category,node,proposed,expected):
     monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')

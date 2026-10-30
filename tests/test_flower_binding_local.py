@@ -29,7 +29,7 @@ $previous.profile_id='selected';$previous.browser_started_ticks=201
 '''+decision+'''
 if($incompleteOwnedBinding){throw 'restarted browser identity was ignored'}
 ''',encoding='utf-8-sig')
-    result=subprocess.run([shell,'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=15)
+    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=15)
     assert result.returncode==0,result.stderr
 
 def test_binding_rest_is_loopback_only_and_bypasses_proxy(tmp_path):
@@ -55,7 +55,7 @@ $refused=$false
 try{{Invoke-LocalDriverRest 'http://example.invalid/'}}catch{{$refused=$true}}
 if(-not $refused){{throw 'non-loopback request allowed'}}
 ''',encoding='utf-8-sig')
-        result=subprocess.run([shell,'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=20)
+        result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=20)
         assert result.returncode==0,result.stderr
         assert received==[{'probe':True}]
     finally:server.shutdown();server.server_close()
@@ -122,5 +122,5 @@ $refused=$false
 try{Show-VerifiedProfileWindow 52248}catch{if($_.Exception.Message -notmatch 'ownership changed'){throw};$refused=$true}
 if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'window changed during confirmation was activated'}
 ''',encoding='utf-8-sig')
-    result=subprocess.run([shell,'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=15)
+    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=15)
     assert result.returncode==0,result.stderr
