@@ -313,6 +313,7 @@ try {
   } else {
   const outcome=await runAmazonDetailQueue({records:[...active.values()],concurrency:detailConcurrency,
     recheckContinuation:process.env.AMAZON_CONTINUATION_RECHECK==='1',
+    recheckManual:process.env.AMAZON_MANUAL_RECHECK==='1',
     shouldStop:async()=>{try{await fs.access(path.resolve(path.dirname(outputPath),'../STOP'));return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}},
     fetchDetail:async(row,attempt)=>detailFacts(await browser.getContext(),row,attempt),
     repairImage:async row=>detailFacts(await browser.getContext(),row,row.detail_image_attempts),

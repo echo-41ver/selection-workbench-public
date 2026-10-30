@@ -42,6 +42,43 @@ def test_auto_still_requires_valid_saved_route(tmp_path, monkeypatch):
     assert refreshes == [tmp_path]
 
 
+def test_first_company_amazon_browser_uses_prepared_local_route(tmp_path, monkeypatch):
+    from selection_automation import secrets
+    company_path=tmp_path/'runtime/secrets/company.dpapi'
+    company_path.parent.mkdir(parents=True)
+    company_path.write_bytes(b'fixture')
+    company={'preproxy_mode':'AUTO','proxy_architecture':'LOCAL_VPN'}
+    monkeypatch.setattr(secrets,'load',lambda path:company if path==company_path else pytest.fail('Wrong company path'))
+    calls=[]
+    def prepare(root,loaded,read,save):
+        calls.append((root,loaded))
+        return {'preproxy_host':'127.0.0.1','preproxy_port':7890,'preproxy_protocol':'HTTP'},{}
+    monkeypatch.setattr(transport,'prepare',prepare)
+    before=dict(os.environ)
+    assert transport.amazon_environment(tmp_path,mode='AUTO')=={
+        'AMAZON_BROWSER_ROUTE_MODE':'AUTO','AMAZON_BROWSER_PROXY':'http://127.0.0.1:7890'}
+    assert calls==[(tmp_path,company)]
+    assert dict(os.environ)==before
+    assert not (company_path.parent/'proxyshare.settings.json').exists()
+
+
+def test_first_company_route_failure_does_not_fall_back_to_system(tmp_path, monkeypatch):
+    from selection_automation import secrets
+    company_path=tmp_path/'runtime/secrets/company.dpapi'
+    company_path.parent.mkdir(parents=True)
+    company_path.write_bytes(b'fixture')
+    monkeypatch.setattr(secrets,'load',lambda path:{'preproxy_mode':'AUTO'})
+    def unavailable(*args):raise transport.NetworkNotReady('No confirmed local route','AUTO')
+    monkeypatch.setattr(transport,'prepare',unavailable)
+    with pytest.raises(transport.NetworkNotReady,match='No confirmed local route'):
+        transport.amazon_environment(tmp_path,mode='AUTO')
+
+
+def test_unconfigured_amazon_browser_preserves_system_route(tmp_path, monkeypatch):
+    monkeypatch.setattr(transport,'prepare',lambda *args:pytest.fail('No imported company configuration'))
+    assert transport.amazon_environment(tmp_path,mode='AUTO')=={'AMAZON_BROWSER_ROUTE_MODE':'AUTO'}
+
+
 def test_auto_refreshes_restarted_proxy_owner_without_changing_route(tmp_path, monkeypatch):
     from functools import partial
     from selection_automation.local_proxy_prepare import refresh_saved_owner

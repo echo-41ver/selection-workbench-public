@@ -62,3 +62,27 @@ test('an interrupted authorized request retains its attempt reservation and rema
   assert.equal(result.requests, 0);
   assert.equal(result.queue.status, 'MANUAL_ACTION_REQUIRED');
 });
+
+test('explicit webpage resume rechecks each known gate once and preserves completed products', async () => {
+  const codes=['AMAZON_LOGIN_REQUIRED','AMAZON_VERIFICATION_REQUIRED','AMAZON_HTTP_403','AMAZON_HTTP_429'];
+  const done=completeDetail(card('DONE',9)),calls=[];
+  const result=await queue({records:[...codes.map((code,index)=>paused(code,index+1,code)),done],recheckManual:true,
+    fetchDetail:async(row,attempt)=>{calls.push([row.asin,attempt]);return completeDetail(row);}});
+  assert.deepEqual(calls,codes.map(code=>[code,9]));
+  assert.equal(result.queue.status,'COMPLETE');
+  assert.deepEqual(result.records.at(-1),done);
+});
+
+test('failed manual resume remains bounded and background restart cannot repeat it', async () => {
+  for(const code of ['AMAZON_LOGIN_REQUIRED','AMAZON_VERIFICATION_REQUIRED','AMAZON_HTTP_403','AMAZON_HTTP_429']) {
+    const result=await queue({records:[paused('A',1,code)],recheckManual:true,
+      fetchDetail:async()=>{throw new Error('fixture transport failure');}});
+    assert.equal(result.requests,1);
+    assert.equal(result.queue.status,'MANUAL_ACTION_REQUIRED');
+    assert.equal(result.records[0].detail_error.code,code);
+    assert.equal(result.records[0].detail_error.retryable,false);
+    assert.equal(result.records[0].detail_image_attempts,9);
+    const resumed=await queue({records:result.records,fetchDetail:async()=>assert.fail('No new explicit resume')});
+    assert.equal(resumed.requests,0);
+  }
+});

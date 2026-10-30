@@ -18,15 +18,17 @@ export function amazonDetailBlock(evidence = {}) {
   return null;
 }
 
-// Reopen only this ordinary navigation gate after an explicit user continuation.
+// Recheck paused gates only after an explicit user continuation.
 // Keep its saved error non-retryable until the one request has finished: a crash
 // or background restart must not turn this authorization into an automatic loop.
-export function scheduleAmazonContinuationRecheck(items, authorized = false) {
+export function scheduleAmazonContinuationRecheck(items, authorized = false, manual = false) {
   const selected = new Set();
-  if (!authorized) return selected;
+  if (!authorized && !manual) return selected;
   for (const item of items.values()) {
-    if (item.status !== 'MANUAL_ACTION_REQUIRED'
-      || item.last_error?.code !== 'AMAZON_CONTINUATION_REQUIRED') continue;
+    const code=item.last_error?.code;
+    if (item.status !== 'MANUAL_ACTION_REQUIRED' || !(authorized && code==='AMAZON_CONTINUATION_REQUIRED'
+      || manual && ['AMAZON_CONTINUATION_REQUIRED','AMAZON_LOGIN_REQUIRED','AMAZON_VERIFICATION_REQUIRED',
+        'AMAZON_HTTP_403','AMAZON_HTTP_429'].includes(code))) continue;
     item.status = 'PENDING';
     selected.add(item.asin);
   }
@@ -35,7 +37,7 @@ export function scheduleAmazonContinuationRecheck(items, authorized = false) {
 
 export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,repairImage,concurrency=4,
   retryDelayMs=5000,maxRetryDelayMs=60000,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms)),shouldStop=()=>false,
-  recheckContinuation=false}) {
+  recheckContinuation=false,recheckManual=false}) {
   if (!Number.isFinite(retryDelayMs) || retryDelayMs<0 || !Number.isFinite(maxRetryDelayMs) || maxRetryDelayMs<retryDelayMs) throw new Error('Invalid detail retry delay');
   if (!Number.isInteger(concurrency) || concurrency<1 || concurrency>10) throw new Error('detail_concurrency must be 1..10');
   records=records.map(recoverMisclassifiedContinuation).map(row=>row.detail_error
@@ -60,7 +62,7 @@ export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,rep
       :attempts?'RETRY_PENDING':'PENDING';
     return [row.asin,{asin:row.asin,rank:row.rank,attempts,status,last_error:row.detail_error || null}];
   }));
-  const continuationRechecks=scheduleAmazonContinuationRecheck(items,recheckContinuation);
+  const continuationRechecks=scheduleAmazonContinuationRecheck(items,recheckContinuation,recheckManual);
   let requests=0,retries=0,stopped=false,nextRetryAt=null;
   const retriedAsins=new Set();
   const snapshot=()=>{
@@ -98,8 +100,8 @@ export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,rep
         value={...row,...value,asin:row.asin,rank:row.rank,product_url:row.product_url,detail_image_attempts:item.attempts};
         if(!detailComplete(value) && !value.detail_error) value.detail_error={code:'DETAIL_INCOMPLETE',retryable:true,message:value.detail_status || '详情或主图不完整'};
         if(continuationRechecks.has(item.asin) && !detailComplete(value) && value.detail_error?.retryable!==false) {
-          value={...value,detail_error:{code:'AMAZON_CONTINUATION_REQUIRED',retryable:false,
-            message:'Amazon 继续购物入口显式重查未完成，已保留断点，等待再次手动继续',
+          value={...value,detail_error:{code:row.detail_error.code,retryable:false,
+            message:'Amazon 显式重查未完成，已保留断点，等待再次手动继续',
             recheck_error:value.detail_error}};
         }
         if(value.detail_error)value={...value,detail_error:sanitizeAmazonDiagnostic(value.detail_error)};

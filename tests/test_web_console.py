@@ -653,6 +653,7 @@ def test_generation_then_start_key_only_in_env(tmp_path,monkeypatch):
     assert len(calls)==4
     assert '--listing-only' not in calls[1][0]
     assert 'AMAZON_CONTINUATION_RECHECK' not in calls[1][1]['env']
+    assert 'AMAZON_MANUAL_RECHECK' not in calls[1][1]['env']
     assert '--input-type=module' in calls[2][0]
     assert 'extract_match_criteria.py' in calls[3][0][0]
     assert all('private-key' not in json.dumps(args) for args,kw in calls)

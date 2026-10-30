@@ -2,7 +2,7 @@
 import json
 import os
 from pathlib import Path
-from .local_proxy_prepare import verify_saved, refresh_saved_owner
+from .local_proxy_prepare import verify_saved, refresh_saved_owner, prepare
 from .network_readiness import NetworkNotReady
 
 
@@ -39,12 +39,21 @@ def amazon_environment(root, *, mode=None):
         # The collector also passes --no-proxy-server to bypass WinINET.
         return {**environment, 'AMAZON_BROWSER_PROXY': ''}
     path=Path(root)/'runtime/secrets/proxyshare.settings.json'
-    if not path.exists():return environment
-    settings=json.loads(path.read_text(encoding='utf-8-sig'))
-    if not verify_saved(settings):
-        settings=refresh_saved_owner(root,settings)
+    if not path.exists():
+        company_path=Path(root)/'runtime/secrets/company.dpapi'
+        if not company_path.exists():return environment
+        from .secrets import load
+        from .merge_temu_snapshots import atomic_write
+        # Rules and Amazon details run before the first TEMU preparation.
+        settings,_=prepare(root,load(company_path),
+            lambda path,default:json.loads(path.read_text(encoding='utf-8-sig')) if path.exists() else default,
+            lambda path,value:atomic_write(path,json.dumps(value,ensure_ascii=False)))
+    else:
+        settings=json.loads(path.read_text(encoding='utf-8-sig'))
         if not verify_saved(settings):
-            raise NetworkNotReady('Amazon 本机网络出口已变化，请重新检测；未回退直连。','AUTO')
+            settings=refresh_saved_owner(root,settings)
+            if not verify_saved(settings):
+                raise NetworkNotReady('Amazon 本机网络出口已变化，请重新检测；未回退直连。','AUTO')
     if not settings.get('preproxy_port'):return environment
     scheme='socks5' if settings['preproxy_protocol']=='SOCKS5' else 'http'
     host=settings['preproxy_host']

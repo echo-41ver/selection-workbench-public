@@ -86,6 +86,7 @@ def test_web_generate_reuses_uuid_without_model_and_stop_survives_restart(tmp_pa
         assert not any('generate_category.py' in arg for arg in argv)
         assert argv[argv.index('--config')+1]==str(output)
         assert kwargs['env']['AMAZON_CONTINUATION_RECHECK']=='1'
+        assert kwargs['env']['AMAZON_MANUAL_RECHECK']=='1'
         console.cancel.set()
         raise web.ConsoleError('CANCELLED','已停止')
     monkeypatch.setattr(console,'invoke',invoke)
@@ -167,6 +168,7 @@ def test_explicit_preparation_can_switch_only_amazon_route_before_listing_exists
     def invoke(argv,**kwargs):
         assert '--config' in argv and kwargs['env']['AMAZON_BROWSER_ROUTE_MODE']=='DIRECT'
         assert kwargs['env']['AMAZON_CONTINUATION_RECHECK']=='1'
+        assert kwargs['env']['AMAZON_MANUAL_RECHECK']=='1'
         assert 'DEEPSEEK_API_KEY' not in kwargs['env']
         raise web.ConsoleError('CANCELLED','已停止')
     monkeypatch.setattr(console,'invoke',invoke)

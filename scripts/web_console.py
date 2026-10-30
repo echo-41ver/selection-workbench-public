@@ -761,8 +761,11 @@ class Console:
         env={**os.environ,**environment(provider),'DEEPSEEK_API_KEY':supplied_key,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}
         env['AMAZON_BROWSER_ROUTE_MODE']=body.pop('amazon_route_mode','AUTO')
         env.pop('AMAZON_CONTINUATION_RECHECK',None)
+        env.pop('AMAZON_MANUAL_RECHECK',None)
         explicit_preparation_resume=bool(self.preparation_path)
-        if self.preparation_path:env['AMAZON_CONTINUATION_RECHECK']='1'
+        if self.preparation_path:
+            env['AMAZON_CONTINUATION_RECHECK']='1'
+            env['AMAZON_MANUAL_RECHECK']='1'
         try:
             folder=self.root/'runtime'/'web-console'; folder.mkdir(parents=True,exist_ok=True)
             output=self.preparation_path or folder/f'category-{uuid.uuid4().hex}.json'
