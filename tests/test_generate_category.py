@@ -7,6 +7,66 @@ generator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(generator)
 
 
+def test_search_login_uses_public_category_navigation_without_repeating_search(monkeypatch):
+    import subprocess
+    root = 'https://www.amazon.com/Best-Sellers/zgbs'
+    home = 'https://www.amazon.com/Best-Sellers-Home-Kitchen/zgbs/home-garden'
+    bags = 'https://www.amazon.com/Best-Sellers-Laundry-Bags/zgbs/home-garden/3744371'
+    pages = {
+        root: {'url':root, 'heading':'Best Sellers', 'rank_count':30,
+               'links':[{'url':home, 'text':'Home & Kitchen'}]},
+        home: {'url':home, 'heading':'Home & Kitchen', 'rank_count':30,
+               'links':[{'url':bags, 'text':'Laundry Bags'}]},
+        bags: {'url':bags, 'heading':'Best Sellers in Laundry Bags', 'rank_count':30, 'links':[]},
+    }
+    answers = iter([{'search_query':'laundry bag'}, {'next_url':home}, {'next_url':bags}, {'matches':True}])
+    monkeypatch.setattr(generator, 'model_json', lambda *a, **kw:next(answers))
+    searches, reads = [], []
+    def search(query):
+        searches.append(query)
+        raise generator.CategoryGenerationError('search login', 'AMAZON_LISTING_READ_FAILED') from subprocess.CalledProcessError(
+            1, ['node'], stderr='{"code":"AMAZON_LOGIN_REQUIRED"}')
+    monkeypatch.setattr(generator, 'search_listing_candidates', search)
+    monkeypatch.setattr(generator, 'read_listing', lambda url:(reads.append(url) or pages[url]))
+    assert generator.resolve_listing('洗衣袋', lambda **kw:None) == pages[bags]
+    assert searches == ['laundry bag'] and reads == [root, home, bags]
+
+
+@pytest.mark.parametrize('code', ['AMAZON_HTTP_429', 'AMAZON_VERIFICATION_REQUIRED'])
+def test_category_navigation_does_not_hide_search_verification_or_rate_limit(monkeypatch, code):
+    import json, subprocess
+    monkeypatch.setattr(generator, 'model_json', lambda *a, **kw:{'search_query':'laundry bag'})
+    def search(query):
+        raise generator.CategoryGenerationError('original gate') from subprocess.CalledProcessError(
+            1, ['node'], stderr=json.dumps({'code':code}))
+    monkeypatch.setattr(generator, 'search_listing_candidates', search)
+    monkeypatch.setattr(generator, 'read_listing', lambda _:pytest.fail('gate was hidden by another route'))
+    with pytest.raises(generator.CategoryGenerationError, match='original gate'):
+        generator.resolve_listing('洗衣袋', lambda **kw:None)
+
+
+@pytest.mark.parametrize('choice', ['https://www.amazon.com/zgbs/home-garden/999999999',
+                                   'https://www.amazon.com/Best-Sellers/zgbs'])
+def test_category_navigation_rejects_unobserved_or_revisited_url(monkeypatch, choice):
+    import subprocess
+    answers = iter([{'search_query':'laundry bag'}, {'next_url':choice}])
+    monkeypatch.setattr(generator, 'model_json', lambda *a, **kw:next(answers))
+    def search(query):
+        raise generator.CategoryGenerationError('search login') from subprocess.CalledProcessError(
+            1, ['node'], stderr='{"code":"AMAZON_LOGIN_REQUIRED"}')
+    monkeypatch.setattr(generator, 'search_listing_candidates', search)
+    reads = []
+    def read(url):
+        reads.append(url)
+        return {'url':url, 'heading':'Best Sellers', 'rank_count':30,
+                'links':[{'url':'https://www.amazon.com/zgbs/home-garden', 'text':'Home & Kitchen'}]}
+    monkeypatch.setattr(generator, 'read_listing', read)
+    with pytest.raises(generator.CategoryGenerationError) as error:
+        generator.resolve_listing('洗衣袋', lambda **kw:None)
+    assert error.value.code == 'CATEGORY_UNRESOLVED'
+    assert reads == ['https://www.amazon.com/Best-Sellers/zgbs']
+
+
 @pytest.mark.parametrize('arguments', [['--query', 'laundry bag'], ['https://www.amazon.com/zgbs/home-garden/900001']])
 @pytest.mark.parametrize('direct_succeeds', [True, False])
 def test_category_proxy_login_tries_direct_once_and_preserves_evidence(monkeypatch, tmp_path, arguments, direct_succeeds):
