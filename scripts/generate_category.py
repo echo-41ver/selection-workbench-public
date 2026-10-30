@@ -652,6 +652,7 @@ def ensure_subject_rules(config,evidence,*,allow_model=True,model=None):
     proposal=(model or model_json)('只为当前已确认品类补齐采集主体规则，返回两个字段category_aliases和subject_filter。'
         'category_aliases包含同一出售主体的英文、简体、繁体及常见地区称呼。'
         'subject_filter必须包含mode=TARGET_BODY_ONLY、reject_mixed_subjects=true、exclude_subject_terms。'
+        '两个词表均为1至200项的非空数组，每项2至120字符；使用具体商品称呼，不能用字段名或笼统占位词。'
         '排除词必须是其他明确出售主体或目标配件的中英文名词；不能包含目标主体自身、共享功能、品牌或型号。'
         '目标本身是配件时必须把它视作目标商品，例如手机壳不能因配件身份被排除。'
         '不同款式仍属于同品类；兼容宿主不等于出售主体；组合套装与单品应按本品类范围区分。'
@@ -731,7 +732,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
             on_repair=(lambda repair:atomic_write(cache,json.dumps({**receipt,'policy_repair':repair},ensure_ascii=False))) if cache else None)
         config = generated_threshold(config)
         config = apply_reviewed_recall_aliases(config)
-        config = ensure_subject_rules(config,evidence,allow_model=False)
+        config = ensure_subject_rules(config,evidence)
         config = compile_stage1_rules(config)
         validate_execution_inputs(config)
     except CategoryGenerationError:

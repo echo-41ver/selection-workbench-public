@@ -202,6 +202,55 @@ def test_semantic_plan_produces_valid_rules_and_chinese_summary_without_explanat
     assert category['rule_summary_source']=='generated_conditions_local_summary_v1'
 
 
+@pytest.mark.parametrize('defect',['short_exclusion','empty_exclusions','missing_chinese_alias'])
+def test_new_compact_subject_rules_use_existing_one_shot_repair_and_cache(monkeypatch,tmp_path,defect):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    monkeypatch.setattr(generator,'approved_category',lambda *args:None)
+    raw=proposal()
+    if defect=='short_exclusion':raw['exclude_terms']=['other implement','刀']
+    elif defect=='empty_exclusions':raw['exclude_terms']=[]
+    else:raw['aliases']=['test implement']
+    repaired={'category_aliases':['test implement','测试工具'],
+        'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+                          'exclude_subject_terms':['other implement','其他工具']}}
+    calls=[]
+    def model(prompt,**kwargs):
+        calls.append(prompt)
+        return deepcopy(raw if len(calls)==1 else repaired)
+    monkeypatch.setattr(generator,'model_json',model)
+    first=generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],draft_store=tmp_path)
+    assert len(calls)==2 and first['temu']['subject_filter']==repaired['subject_filter']
+    assert '只为当前已确认品类补齐采集主体规则' in calls[1]
+    saved=json.loads(next(tmp_path.glob('*.json')).read_text('utf-8'))
+    assert saved['proposal']['temu']['subject_filter']==repaired['subject_filter']
+    second=generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],
+        draft_store=tmp_path,reuse_approved=True)
+    assert len(calls)==2 and second['temu']['subject_filter']==first['temu']['subject_filter']
+    assert second['stage3']['identity_policy']==first['stage3']['identity_policy']
+
+
+def test_subject_rule_repair_remains_single_and_does_not_weaken_validation(monkeypatch):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    raw=proposal();raw['exclude_terms']=['other implement','刀']
+    calls=[]
+    def model(prompt,**kwargs):
+        calls.append(prompt)
+        if len(calls)==1:return raw
+        return {'category_aliases':['test implement','测试工具'],
+            'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+                              'exclude_subject_terms':['other implement','刀']}}
+    monkeypatch.setattr(generator,'model_json',model)
+    with pytest.raises(generator.CategoryGenerationError) as error:
+        generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'])
+    assert error.value.code=='CATEGORY_SUBJECT_RULES_MISSING' and len(calls)==2
+
+
 def test_compact_authoring_keeps_meaning_but_omits_mechanical_config_and_navigation_links():
     prompt=authoring_prompt('电钻','电钻本体',{'url':'https://www.amazon.com/zgbs/tools/123','links':[{'title':'irrelevant-navigation'}]},None)
     assert 'irrelevant-navigation' not in prompt and 'detail_concurrency' not in prompt

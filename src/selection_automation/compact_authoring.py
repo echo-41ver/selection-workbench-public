@@ -18,8 +18,8 @@ def authoring_prompt(name, intent, evidence, reviewed):
     return (
         '为 Amazon–TEMU 同款核验生成精简品类规则，只返回一个 JSON。不要返回程序配置、模块、权重、提示词或长篇说明。'
         '字段：format="compact-category-v1",category_key(英文下划线标识),product_scope(出售主体/套装范围),'
-        'queries(1–3个英文主体关键词),aliases(主体英文/简体/繁体及地区称呼),'
-        'exclude_terms(明确其他出售主体的中英文名词，不能排除共享功能词),keyword_features(有标题依据才使用的英文细化词),'
+        'queries(1–3个英文主体关键词),aliases(1–200项非空数组，含同一主体英文和中文称呼，每项2–120字符),'
+        'exclude_terms(1–200项非空数组，每项2–120字符，明确其他出售主体的中英文名词，不能排除共享功能词),keyword_features(有标题依据才使用的英文细化词),'
         'attributes(独立文字属性数组，完整格式见下述文字属性契约；不要求与图片特征同名),'
         'threshold(本品类第二层0–100保守召回阈值),threshold_reason_zh(一句中文依据),features(1–8项必要特征)。'
         'features沿用下述特征契约，但省略version和modules；不重复描述同一部位，scope和rule各用一句短语。'
