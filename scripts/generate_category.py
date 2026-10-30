@@ -96,8 +96,8 @@ def compile_generated_policy(config, *, model=None, policy_repair=None, on_repai
             '按实际影响填写region/effects/preserves，不用换特征名字绕过结构检查。'
             '文字属性values每个取值返回短语数组；同义词不能与其他取值完全相同，歧义短语不能遮掉该属性所有明确冲突。'
             '\n已确认品类依据：' + json.dumps(reviewed_profile(config), ensure_ascii=False) +
-            '\n文字属性契约：' + json.dumps({'requirements':contract['field_requirements']['stage1.attributes'],
-                'example':contract['attribute_shape']}, ensure_ascii=False, separators=(',', ':')) +
+            '\n文字属性契约：' + contract['field_requirements']['stage1.attributes'] +
+            '\n文字属性示例：' + json.dumps({'attributes':[contract['attribute_shape']]}, ensure_ascii=False, separators=(',', ':')) +
             '\n契约：' + json.dumps(contract['field_requirements']['stage3.identity_policy'], ensure_ascii=False) +
             '\n校验失败：' + str(error)[:220] + '\n当前草稿：' + json.dumps(source, ensure_ascii=False))
         for attempt in range(2):

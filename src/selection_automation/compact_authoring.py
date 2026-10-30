@@ -6,6 +6,11 @@ from .category_contract import category_contract
 FORMAT = 'compact-category-v1'
 
 
+def unwrap_attribute_list(value):
+    """Remove the observed single-key envelope without changing authored rules."""
+    return value['requirements'] if isinstance(value,dict) and set(value)=={'requirements'} else value
+
+
 def authoring_prompt(name, intent, evidence, reviewed):
     contract = category_contract()
     policy = contract['field_requirements']['stage3.identity_policy']
@@ -24,8 +29,8 @@ def authoring_prompt(name, intent, evidence, reviewed):
         '结构、部件位置和构成不能整项设为变体；局部颜色/装饰变化须界定范围并用preserves引用保留的结构。'
         '文字仅双边明确互斥才排除，缺失/多值/否定/适配语境不硬排除；歧义短语绑定具体属性，不能单独填for/适用于。'
         '阈值优先减少不同角度/背景造成的漏检，不照抄固定模板，不声称实测最优。'
-        '\n文字属性契约：' + json.dumps({'requirements':contract['field_requirements']['stage1.attributes'],
-            'example':contract['attribute_shape']}, ensure_ascii=False, separators=(',', ':')) +
+        '\n文字属性契约：' + contract['field_requirements']['stage1.attributes'] +
+        '\n文字属性示例：' + json.dumps({'attributes':[contract['attribute_shape']]}, ensure_ascii=False, separators=(',', ':')) +
         '\n特征契约：' + policy + '\n品类：' + name + '\n目标：' + intent +
         '\n已核实榜单：' + json.dumps(listing, ensure_ascii=False, separators=(',', ':')) +
         '\n已确认品类边界：' + json.dumps(reviewed, ensure_ascii=False, separators=(',', ':')))
@@ -81,7 +86,7 @@ def normalize(value,name):
         'aliases':[value.get('aliases'),value.get('category_aliases'),temu.get('category_aliases')],
         'exclude_terms':[value.get('exclude_terms'),value.get('severe_exclude_terms'),temu.get('severe_exclude_terms')],
         'keyword_features':[value.get('keyword_features'),temu.get('keyword_features')],
-        'attributes':[value.get('attributes'),value.get('stage1_attributes'),stage1.get('attributes')],
+        'attributes':[unwrap_attribute_list(v) for v in (value.get('attributes'),value.get('stage1_attributes'),stage1.get('attributes'))],
         'threshold':[value.get('threshold'),value.get('candidate_threshold'),stage2.get('candidate_threshold')],
         'threshold_reason_zh':[value.get('threshold_reason_zh'),stage2.get('threshold_reason_zh')],
         'features':[value.get('features'),policy.get('features')]}
@@ -120,7 +125,7 @@ def apply_policy_repair(config, reply):
         if values and any(value!=values[0] for value in values[1:]):
             raise ValueError('同款边界修正存在冲突的重复字段')
         return deepcopy(values[0] if values else default)
-    attributes=choose([node[key] for node,key in ((reply,'attributes'),(reply,'stage1_attributes'),(stage1,'attributes'))
+    attributes=choose([unwrap_attribute_list(node[key]) for node,key in ((reply,'attributes'),(reply,'stage1_attributes'),(stage1,'attributes'))
                        if key in node],config['stage1']['attributes'])
     policy=choose([node['identity_policy'] for node in (reply,stage3) if 'identity_policy' in node])
     if policy is None and 'features' not in reply:

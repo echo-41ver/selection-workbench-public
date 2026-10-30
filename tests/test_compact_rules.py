@@ -37,18 +37,46 @@ def test_invalid_first_layer_dictionary_uses_the_same_bounded_rule_repair():
 def test_generation_and_repair_share_the_complete_literal_attribute_contract():
     from selection_automation.category_contract import category_contract
     contract=category_contract()
-    expected={'requirements':contract['field_requirements']['stage1.attributes'],
-              'example':contract['attribute_shape']}
+    expected={'attributes':[contract['attribute_shape']]}
     prompt=authoring_prompt('测试商品','出售主体',{},None)
-    assert json.loads(prompt.split('\n文字属性契约：')[1].split('\n')[0])==expected
+    assert contract['field_requirements']['stage1.attributes'] in prompt
+    assert json.loads(prompt.split('\n文字属性示例：')[1].split('\n')[0])==expected
     config=expand(proposal(),'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
     original=deepcopy(config);config['stage3']['identity_policy']['features'][0].pop('required_visual')
     def repair(prompt,**kwargs):
-        assert json.loads(prompt.split('\n文字属性契约：')[1].split('\n')[0])==expected
+        assert contract['field_requirements']['stage1.attributes'] in prompt
+        assert json.loads(prompt.split('\n文字属性示例：')[1].split('\n')[0])==expected
         return {'identity_policy':original['stage3']['identity_policy']}
     generator.compile_generated_policy(config,model=repair)
-    assert isinstance(expected['example']['values'],dict)
-    assert type(expected['example']['hard_conflict']) is bool
+    assert isinstance(expected['attributes'][0]['values'],dict)
+    assert type(expected['attributes'][0]['hard_conflict']) is bool
+
+
+@pytest.mark.parametrize('entry',['initial','repair'])
+def test_observed_requirements_envelope_preserves_attributes_without_model_call(entry):
+    raw=proposal();expected=deepcopy(raw['attributes'])
+    if entry=='initial':raw['attributes']={'requirements':raw['attributes']}
+    config=expand(raw,'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
+    repair=({'identity_policy':config['stage3']['identity_policy'],
+             'attributes':{'requirements':expected}} if entry=='repair' else None)
+    result=generator.compile_generated_policy(config,policy_repair=repair,
+        model=lambda *a,**k:pytest.fail('unambiguous framing must not incur another model call'))
+    assert result['stage1']['attributes']==expected
+    generator.validate(result)
+
+
+@pytest.mark.parametrize('attributes',[{'unknown':[]},['not an attribute'],
+    {'requirements':[],'extra':[]}])
+def test_invalid_attribute_collection_framing_enters_existing_bounded_repair(attributes):
+    raw=proposal();expected=deepcopy(raw['attributes']);raw['attributes']=attributes
+    config=expand(raw,'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
+    calls=[]
+    def repair(prompt,**kwargs):
+        calls.append(prompt)
+        assert '第一层文字属性必须为对象数组' in prompt
+        return {'identity_policy':config['stage3']['identity_policy'],'attributes':expected}
+    result=generator.compile_generated_policy(config,model=repair)
+    assert len(calls)==1 and result['stage1']['attributes']==expected
 
 
 def test_saved_attribute_repair_preserves_declared_fields_by_name_without_model_call():
