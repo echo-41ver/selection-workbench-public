@@ -52,6 +52,15 @@ def test_live_or_unknown_owned_service_is_never_restarted(tmp_path):
         watcher.step();assert not calls
 
 
+def test_ready_environment_still_defers_until_supervisor_finishes_starting(tmp_path):
+    base,watcher,calls=fixture(tmp_path)
+    status=base/'status.json'
+    status.write_text(json.dumps({'状态':'启动中','阶段':{'bootstrap':{'状态':'启动准备完成'}}}))
+    watcher.step();assert not calls
+    status.write_text(json.dumps({'状态':'运行中','阶段':{'bootstrap':{'状态':'启动准备完成'}}}))
+    watcher.step();assert len(calls)==2
+
+
 def test_explicit_stop_and_local_stage12_stop_are_respected(tmp_path):
     base,watcher,calls=fixture(tmp_path)
     (base/'STOP').touch();watcher.step();assert not calls

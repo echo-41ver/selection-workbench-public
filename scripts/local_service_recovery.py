@@ -103,8 +103,9 @@ class LocalServiceRecovery:
         if not re.fullmatch('[a-z][a-z0-9_]{0,63}',key):return
         base=self.root/'runs'/key
         if not (base/'category.json').is_file() or (base/'STOP').exists():return
-        bootstrap=read(base/'status.json',{}).get('阶段',{}).get('bootstrap',{}).get('状态')
-        if bootstrap in ('运行中','启动准备失败'):return
+        status=read(base/'status.json',{})
+        bootstrap=status.get('阶段',{}).get('bootstrap',{}).get('状态')
+        if status.get('状态')=='启动中' or bootstrap in ('运行中','启动准备失败'):return
         category=read(base/'category.json',{})
         services={}
         for name in ('temu_union','stage12'):
