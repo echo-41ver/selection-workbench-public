@@ -395,7 +395,7 @@ class Console:
     def recover_preparation(self,scope,manifest=None,*,legacy=False):
         """Reuse only a unique, validated local generation; never invent a draft."""
         from selection_automation.rules import validate
-        from generate_category import validate_subject_rules,valid_url,CategoryGenerationError
+        from generate_category import validate_subject_rules,valid_url,listing_identity,CategoryGenerationError
         from selection_automation.rule_provider import settings
         from selection_automation.commercial import settings as commercial_settings
         folder=self.root/'runtime/web-console'
@@ -421,7 +421,7 @@ class Console:
                         or category.get('rule_generation_provider')!=provider
                         or {**commercial_settings(category.get('commercial')),'same_operator':'lt'}!=expected_commercial
                         or not valid_url(category['amazon'].get('bestsellers_url'))
-                        or (scope.get('bestsellers_url') and category['amazon']['bestsellers_url']!=scope['bestsellers_url'])
+                        or (scope.get('bestsellers_url') and listing_identity(category['amazon']['bestsellers_url'])!=listing_identity(scope['bestsellers_url']))
                         or (self.root/'runs'/category['category_key']).exists()
                         or selection.read(path.with_suffix('.progress.json'),{}).get('stage')!='complete'):
                     continue
@@ -698,7 +698,7 @@ class Console:
         from selection_automation.commercial import settings as commercial_settings
         try:body['commercial']={**commercial_settings(body.get('commercial') or {'same_limit':5}),'same_operator':'lt'}
         except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
-        from generate_category import valid_url,approved_category
+        from generate_category import valid_url,approved_category,listing_identity
         listing=body.get('bestsellers_url','')
         if not isinstance(listing,str) or (listing.strip() and not valid_url(listing.strip())):
             raise ConsoleError('INVALID_LISTING_URL','请填写 Amazon 美国站 Best Sellers 榜单链接，不支持商品详情或搜索链接')
@@ -733,7 +733,7 @@ class Console:
                'api_base_url':provider['base_url'],'api_model':provider['model'],'amazon_route_mode':route}
         with self.lock:
             if self.busy or self.stage3_busy or self.owner(): raise ConsoleError('ALREADY_RUNNING','已有任务运行，请先停止',409)
-            business_scope=lambda value:{k:v for k,v in (value or {}).items() if k!='amazon_route_mode'}
+            business_scope=lambda value:{k:listing_identity(v) if k=='bestsellers_url' else v for k,v in (value or {}).items() if k!='amazon_route_mode'}
             manifest=selection.read(self.root/'runtime/web-console/pending-generation.json',{}).get('preparation') if business_scope(self.pending_scope)==business_scope(scope) else None
             recovery=self.recover_preparation(scope,manifest,legacy=True)
             if manifest and not recovery:
@@ -877,9 +877,18 @@ class Console:
         from pipeline import build_category_keyword_plan, keyword_coverage
         amazon=category_path.with_suffix('.amazon.json'); plan_path=category_path.with_suffix('.keywords.json')
         amazon_env={key:value for key,value in env.items() if key!='DEEPSEEK_API_KEY'}
-        result=self.invoke(['node',str(self.root/'scripts/collect_amazon_search_frontend.mjs'),'--config',str(category_path),
-                            '--output',str(amazon)],env=amazon_env,timeout=max(1800,45*category['amazon']['target_count']))
+        command=['node',str(self.root/'scripts/collect_amazon_search_frontend.mjs'),'--config',str(category_path),'--output',str(amazon)]
+        timeout=max(1800,45*category['amazon']['target_count'])
+        result=self.invoke(command,env=amazon_env,timeout=timeout)
         payload=selection.read(amazon,{})
+        if (amazon_env.get('AMAZON_BROWSER_ROUTE_MODE','AUTO')=='AUTO'
+                and payload.get('amazon_browser_route',{}).get('transport')=='CONFIGURED_PROXY'
+                and any(item.get('error',{}).get('code')=='AMAZON_LOGIN_REQUIRED' for item in payload.get('missing_details',[]))):
+            selection.save(amazon.with_suffix('.proxy-login.json'),payload)
+            self.phase='Amazon 代理出口转到登录页，正在改用直连继续商品断点'
+            amazon_env.update(AMAZON_BROWSER_ROUTE_MODE='DIRECT',AMAZON_BROWSER_PROXY='',AMAZON_MANUAL_RECHECK='1')
+            result=self.invoke(command,env=amazon_env,timeout=timeout)
+            payload=selection.read(amazon,{})
         rows=payload.get('records') or []
         count=category['amazon']['target_count']
         if (len(rows)!=count or len({r.get('asin') for r in rows})!=count or
