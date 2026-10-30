@@ -50,7 +50,8 @@ def register_codex(root, agent):
     script=str(root/'scripts/mcp_server.py')
     def existing(name):
         result=subprocess.run(prefix+['mcp','get',name,'--json'],capture_output=True,
-                              text=True,encoding='utf-8',errors='replace',env=environment(),timeout=15)
+                              text=True,encoding='utf-8',errors='replace',env=environment(),timeout=15,
+                              creationflags=subprocess.CREATE_NO_WINDOW if sys.platform=='win32' else 0)
         try:return json.loads(result.stdout) if result.returncode==0 else None
         except ValueError:return None
     name='amazon-temu-selection'

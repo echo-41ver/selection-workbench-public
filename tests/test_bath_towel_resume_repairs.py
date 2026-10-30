@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -180,7 +181,8 @@ def test_start_exits_before_sample_key_or_watcher_when_cached_or_running(tmp_pat
     target = scripts / "launcher.ps1"
     target.write_text(script, encoding="utf-8-sig")
     completed = subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(target), "-Action", "Start"],
-                               capture_output=True, timeout=20)
+                               capture_output=True, timeout=20,
+                               creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
     assert completed.returncode == 0, completed.stderr.decode(errors="replace")
     output = completed.stdout.decode(errors="replace")
     assert "42" in output if already_running else '"paid_api_requests":  0' in output or '"paid_api_requests": 0' in output
