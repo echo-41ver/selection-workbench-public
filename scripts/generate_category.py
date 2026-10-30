@@ -645,8 +645,30 @@ def validate_subject_rules(config):
     return config
 
 
-def ensure_subject_rules(config,evidence,*,allow_model=True,model=None):
-    try:return validate_subject_rules(config)
+def ensure_subject_rules(config,evidence,*,allow_model=True,model=None,subject_repair=None,on_repair=None):
+    def normalized(value):
+        temu=value.get('temu',{});policy=temu.get('subject_filter',{})
+        sources={'severe_exclude_terms':temu.get('severe_exclude_terms'),
+                 'exclude_subject_terms':policy.get('exclude_subject_terms') if isinstance(policy,dict) else None}
+        removed={key:[word for word in words if isinstance(word,str) and len(word.strip())==1]
+                 for key,words in sources.items() if isinstance(words,list)}
+        if not any(removed.values()):return value
+        value=deepcopy(value);temu=value['temu']
+        for key,words in removed.items():
+            if words:
+                target=temu if key=='severe_exclude_terms' else temu['subject_filter']
+                target[key]=[word for word in sources[key] if word not in words]
+        prior=temu.get('subject_rule_normalization',{}).get('removed_single_character_exclusions',[])
+        temu['subject_rule_normalization']={'removed_single_character_exclusions':list(dict.fromkeys(
+            [*prior,*(word for words in removed.values() for word in words)]))}
+        return value
+    config=normalized(config)
+    def checked(proposal):
+        if not isinstance(proposal,dict) or set(proposal)!={'category_aliases','subject_filter'}:
+            raise CategoryGenerationError('品类主体规则返回结构无效，未创建采集任务','CATEGORY_SUBJECT_RULES_MISSING')
+        result=deepcopy(config);result.setdefault('temu',{}).update(proposal)
+        return validate_subject_rules(normalized(result))
+    try:return checked(subject_repair) if subject_repair is not None else validate_subject_rules(config)
     except CategoryGenerationError:
         if not allow_model:raise
     if not os.environ.get('DEEPSEEK_API_KEY','').strip() and model is None:
@@ -660,10 +682,10 @@ def ensure_subject_rules(config,evidence,*,allow_model=True,model=None):
         '不同款式仍属于同品类；兼容宿主不等于出售主体；组合套装与单品应按本品类范围区分。'
         '不得使用其他品类模板。已确认品类和榜单：'+json.dumps({'category':config.get('category_name_zh'),
             'listing':evidence,'existing_terms':config.get('temu',{}).get('include_terms',[])},ensure_ascii=False),max_tokens=4000,retry_truncated=False)
-    if not isinstance(proposal,dict) or set(proposal)!={'category_aliases','subject_filter'}:
-        raise CategoryGenerationError('品类主体规则返回结构无效，未创建采集任务','CATEGORY_SUBJECT_RULES_MISSING')
-    result=deepcopy(config);result.setdefault('temu',{}).update(proposal)
-    return validate_subject_rules(result)
+    if on_repair is not None:on_repair(proposal)
+    if MODEL_PROGRESS_REPORTER:
+        MODEL_PROGRESS_REPORTER(generated_subject_repair=proposal,message='正在编译补齐后的商品主体规则')
+    return checked(proposal)
 
 
 def generate_category(category_name: str, amazon_count: int, temu_count: int, *, progress=None, bestsellers_url='',reuse_approved=False,draft_store=None) -> dict:
@@ -717,6 +739,9 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         receipt.update(scope=scope,proposal=proposal)
         atomic_write(cache,json.dumps(receipt,ensure_ascii=False))
     report(stage='validating', message='正在编译文字与图片规则', generated_rule_draft=proposal)
+    def save_repair(field,repair):
+        receipt[field]=repair
+        if cache:atomic_write(cache,json.dumps(receipt,ensure_ascii=False))
     try:
         config = expand(proposal,category_name,evidence['url'],amazon_count,temu_count)
         config['category_name_zh'] = category_name
@@ -731,10 +756,11 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
             raise ValueError()
         config['stage3'].update(provider='deepseek', model='deepseek-flash', base_url='https://api.deepseek.com')
         config = compile_generated_policy(config,policy_repair=receipt.get('policy_repair'),
-            on_repair=(lambda repair:atomic_write(cache,json.dumps({**receipt,'policy_repair':repair},ensure_ascii=False))) if cache else None)
+            on_repair=lambda repair:save_repair('policy_repair',repair))
         config = generated_threshold(config)
         config = apply_reviewed_recall_aliases(config)
-        config = ensure_subject_rules(config,evidence)
+        config = ensure_subject_rules(config,evidence,subject_repair=receipt.get('subject_repair'),
+            on_repair=lambda repair:save_repair('subject_repair',repair))
         config = compile_stage1_rules(config)
         validate_execution_inputs(config)
     except CategoryGenerationError:
@@ -762,11 +788,12 @@ def main():
     args = parser.parse_args()
     last = {}
     def report(**fields):
-        repair=fields.pop('generated_policy_repair',None)
-        if repair is not None:
-            repair_file=args.output.with_suffix('.policy-repair.json')
-            repair_file.parent.mkdir(parents=True,exist_ok=True)
-            atomic_write(repair_file,json.dumps(repair,ensure_ascii=False))
+        for field,suffix in (('generated_policy_repair','.policy-repair.json'),('generated_subject_repair','.subject-repair.json')):
+            repair=fields.pop(field,None)
+            if repair is not None:
+                repair_file=args.output.with_suffix(suffix)
+                repair_file.parent.mkdir(parents=True,exist_ok=True)
+                atomic_write(repair_file,json.dumps(repair,ensure_ascii=False))
         draft=fields.pop('generated_rule_draft',None)
         if draft is not None:
             draft_file=args.output.with_suffix('.generated-rules.json')

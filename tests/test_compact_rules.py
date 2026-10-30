@@ -222,13 +222,16 @@ def test_new_compact_subject_rules_use_existing_one_shot_repair_and_cache(monkey
         return deepcopy(raw if len(calls)==1 else repaired)
     monkeypatch.setattr(generator,'model_json',model)
     first=generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],draft_store=tmp_path)
-    assert len(calls)==2 and first['temu']['subject_filter']==repaired['subject_filter']
-    assert '只为当前已确认品类补齐采集主体规则' in calls[1]
+    expected_calls=1 if defect=='short_exclusion' else 2
+    expected_filter=({'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+        'exclude_subject_terms':['other implement']} if defect=='short_exclusion' else repaired['subject_filter'])
+    assert len(calls)==expected_calls and first['temu']['subject_filter']==expected_filter
+    if defect!='short_exclusion':assert '只为当前已确认品类补齐采集主体规则' in calls[1]
     saved=json.loads(next(tmp_path.glob('*.json')).read_text('utf-8'))
-    assert saved['proposal']['temu']['subject_filter']==repaired['subject_filter']
+    assert saved['proposal']['temu']['subject_filter']==expected_filter
     second=generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],
         draft_store=tmp_path,reuse_approved=True)
-    assert len(calls)==2 and second['temu']['subject_filter']==first['temu']['subject_filter']
+    assert len(calls)==expected_calls and second['temu']['subject_filter']==first['temu']['subject_filter']
     assert second['stage3']['identity_policy']==first['stage3']['identity_policy']
 
 
@@ -237,18 +240,64 @@ def test_subject_rule_repair_remains_single_and_does_not_weaken_validation(monke
     evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
               'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
     monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
-    raw=proposal();raw['exclude_terms']=['other implement','刀']
+    raw=proposal();raw['exclude_terms']=['刀']
     calls=[]
     def model(prompt,**kwargs):
         calls.append(prompt)
         if len(calls)==1:return raw
         return {'category_aliases':['test implement','测试工具'],
             'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
-                              'exclude_subject_terms':['other implement','刀']}}
+                              'exclude_subject_terms':['刀']}}
     monkeypatch.setattr(generator,'model_json',model)
     with pytest.raises(generator.CategoryGenerationError) as error:
         generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'])
     assert error.value.code=='CATEGORY_SUBJECT_RULES_MISSING' and len(calls)==2
+
+
+def test_subject_supplement_is_saved_before_later_failure_and_reused_across_output_names(monkeypatch,tmp_path):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    monkeypatch.setattr(generator,'approved_category',lambda *a:None)
+    raw=proposal();raw['exclude_terms']=[]
+    policy_repair={'features':deepcopy(raw['features']),'attributes':deepcopy(raw['attributes'])}
+    raw['features'][0].pop('required_visual')
+    repaired={'category_aliases':['test implement','测试工具'],
+        'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+                          'exclude_subject_terms':['other implement','其他工具']}}
+    answers=iter([raw,policy_repair,repaired]);calls=[]
+    monkeypatch.setattr(generator,'model_json',lambda *a,**k:(calls.append(1) or next(answers)))
+    validate_inputs=generator.validate_execution_inputs
+    monkeypatch.setattr(generator,'validate_execution_inputs',lambda _:(_ for _ in ()).throw(ValueError('later fixture failure')))
+    with pytest.raises(generator.CategoryGenerationError):
+        generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],draft_store=tmp_path)
+    saved=json.loads(next(tmp_path.glob('*.json')).read_text('utf-8'))
+    assert saved['subject_repair']==repaired and saved['policy_repair']==policy_repair and len(calls)==3
+    monkeypatch.setattr(generator,'validate_execution_inputs',validate_inputs)
+    monkeypatch.setattr(generator,'model_json',lambda *a,**k:pytest.fail('saved supplement was billed again'))
+    result=generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],draft_store=tmp_path,reuse_approved=True)
+    assert result['temu']['subject_filter']==repaired['subject_filter']
+
+
+def test_cli_preserves_an_invalid_subject_supplement_before_validation_fails(monkeypatch,tmp_path):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    monkeypatch.setattr(generator,'approved_category',lambda *a:None)
+    raw=proposal();raw['exclude_terms']=[]
+    reply={'category_aliases':['test implement','测试工具'],
+        'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,'exclude_subject_terms':[]}}
+    answers=iter([raw,reply]);monkeypatch.setattr(generator,'model_json',lambda *a,**k:next(answers))
+    output=tmp_path/'new-output.json';status=tmp_path/'progress.json'
+    monkeypatch.setattr(generator.sys,'argv',['generate_category.py','--category-name','测试工具',
+        '--amazon-count','2','--per-keyword','120','--bestsellers-url',evidence['url'],
+        '--output',str(output),'--status-file',str(status)])
+    assert generator.main()==1
+    assert json.loads(output.with_suffix('.subject-repair.json').read_text('utf-8'))==reply
+    receipt=json.loads(next((tmp_path/'generated-rule-drafts').glob('*.json')).read_text('utf-8'))
+    assert receipt['subject_repair']==reply and not output.exists()
 
 
 def test_compact_authoring_keeps_meaning_but_omits_mechanical_config_and_navigation_links():
