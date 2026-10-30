@@ -150,7 +150,7 @@ def _model_json(prompt: str, *, max_tokens: int, retry_truncated: bool, images, 
         try:
             images,bindings=prepare_images(ROOT,images)
         except Exception as error:
-            _evidence.image_input_failed()
+            _evidence.image_input_failed(error)
             raise CategoryGenerationError('Amazon 主图下载或校验失败，未发送模型请求；请检查图片后继续准备',
                                           'MODEL_IMAGE_INPUT_FAILED') from error
         _evidence.bind_images(bindings)

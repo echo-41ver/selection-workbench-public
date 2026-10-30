@@ -167,9 +167,12 @@ class RuleModelEvidence:
         if self.storage_state != 'recorded':
             raise RuleModelEvidenceError()
 
-    def image_input_failed(self):
+    def image_input_failed(self, error):
         self.record.update(request_sent=False,billing_state='NO_CHARGE',
-                           amount_state='LOCAL_INPUT_REJECTED_BEFORE_MODEL_REQUEST')
+                           amount_state='LOCAL_INPUT_REJECTED_BEFORE_MODEL_REQUEST',
+                           image_input_error_type=type(error).__name__)
+        response=getattr(error,'response',None)
+        if response is not None:self.record['image_input_http_status']=response.status_code
         self._save()
         if self.storage_state != 'recorded':
             raise RuleModelEvidenceError()

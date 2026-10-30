@@ -79,6 +79,37 @@ def test_validated_cache_is_reused_but_corrupt_cache_is_downloaded_once(wire,tmp
     assert len(downloads)==2 and cached[0].read_bytes()==data
 
 
+@pytest.mark.parametrize('first_failure',['truncated','connection'])
+def test_image_input_recovers_once_before_the_single_model_request(wire,monkeypatch,tmp_path,first_failure):
+    calls,downloads,data=wire
+    import httpx2
+    class Client:
+        def stream(self,method,url,**kwargs):
+            if not downloads:
+                if first_failure=='connection':
+                    downloads.append((url,None));raise httpx2.ReadError('connection interrupted')
+                return image_client(b'truncated JPEG'*20,downloads).stream(method,url,**kwargs)
+            return image_client(data,downloads).stream(method,url,**kwargs)
+    monkeypatch.setattr(ImageTransport,'_client',lambda *args:Client())
+    generator.model_json('test',images=['https://m.media-amazon.com/images/I/one.jpg'])
+    assert len(downloads)==2 and len(calls)==1
+    attachment=calls[0]['messages'][-1]['content'][1]['image_url']['url']
+    assert base64.b64decode(attachment.split(',',1)[1])==data
+    record=json.loads(next((tmp_path/'runtime/model-call-evidence').glob('*.json')).read_text())
+    assert record['image_inputs'][0]['download_attempts']==2
+    assert record['image_inputs'][0]['recovered_from'] in {'UnidentifiedImageError','ReadError'}
+
+
+def test_permanent_image_damage_stops_after_two_gets_without_paid_request(wire,monkeypatch,tmp_path):
+    calls,downloads,_=wire
+    monkeypatch.setattr(ImageTransport,'_client',lambda *args:image_client(b'broken JPEG'*20,downloads))
+    with pytest.raises(generator.CategoryGenerationError):
+        generator.model_json('test',images=['https://m.media-amazon.com/images/I/one.jpg'])
+    assert len(downloads)==2 and calls==[]
+    record=json.loads(next((tmp_path/'runtime/model-call-evidence').glob('*.json')).read_text())
+    assert record['request_sent'] is False and record['image_input_error_type']=='UnidentifiedImageError'
+
+
 def test_responses_transport_also_embeds_original_bytes(wire,monkeypatch):
     calls,downloads,data=wire
     monkeypatch.setattr('selection_automation.rule_provider.request_protocol',lambda provider:('responses','http://localhost:1234/v1/responses'))
