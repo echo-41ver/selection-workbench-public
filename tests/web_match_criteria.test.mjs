@@ -30,10 +30,13 @@ test('text and image checkboxes are separate and keep per-product evidence',()=>
 test('applied choices use a versioned request, while running tasks are read only',async()=>{
  const {get,context}=setup();context.lastStatus={draft:{id:'draft',match_criteria:catalog}};
  vm.runInContext('renderMatchCriteria(lastStatus);criteriaSelection.delete("size");criteriaDirty=true',context);
- const requests=[];context.fetch=async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({phase:'已保存'})};};
+ const requests=[];context.fetch=async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({phase:'已保存',match_criteria:{...catalog,revision:'r2',items:catalog.items.map(item=>({...item,selected:item.id==='body'}))}})};};
  await vm.runInContext('applyMatchCriteria()',context);
  assert.equal(requests[0].url,'/api/match-criteria');assert.deepEqual(requests[0].body.selected_ids,['body']);
  assert.equal(requests[0].body.revision,'r1');
+ assert.equal(get('match-text-rows').children[0].children[0].children[0].checked,false);
+ assert.equal(get('match-visual-rows').children[0].children[0].children[0].checked,true);
+ assert.equal(vm.runInContext('criteriaSelection.size',context),1);
  context.running={active:true,category_key:'task',match_criteria:catalog};vm.runInContext('renderMatchCriteria(running)',context);
  assert.equal(get('match-visual-rows').children[0].children[0].children[0].disabled,true);
  assert.equal(get('apply-match-criteria').disabled,true);

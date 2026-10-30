@@ -494,7 +494,7 @@ function renderMatchCriteria(data={}){
 }
 async function applyMatchCriteria(){
  if(!lastStatus?.draft||!criteriaSelection)return;criteriaSaving=true;renderMatchCriteria(lastStatus);const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
- try{const response=await fetch('/api/match-criteria',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({draft_id:lastStatus.draft.id,revision:criteriaRevision,selected_ids:[...criteriaSelection]})});const value=await response.json();if(!response.ok)throw Error(value.error?.message||'匹配条件保存失败');criteriaDirty=false;criteriaRevision='';feedback(value.phase);await poll();}
+ try{const response=await fetch('/api/match-criteria',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({draft_id:lastStatus.draft.id,revision:criteriaRevision,selected_ids:[...criteriaSelection]})});const value=await response.json();if(!response.ok)throw Error(value.error?.message||'匹配条件保存失败');lastStatus.draft.match_criteria=value.match_criteria;criteriaDirty=false;criteriaRevision='';feedback(value.phase);await poll();}
  catch(error){feedback(error.name==='AbortError'?'条件保存等待超时，请刷新确认；原任务数据保留。':error.message,true);}
  finally{clearTimeout(timer);criteriaSaving=false;criteriaRendering='';if(lastStatus)renderMatchCriteria(lastStatus);updateControls();}
 }
