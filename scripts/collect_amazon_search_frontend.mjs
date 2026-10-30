@@ -169,6 +169,9 @@ async function detailFacts(context, record, attempt = 1) {
         if (parts.length >= 2) add(parts[0], parts.slice(1).join(' '));
       });
       document.querySelectorAll('#feature-bullets li span').forEach((item, index) => { if (index < 20) add(`卖点${index + 1}`, item.textContent); });
+      document.querySelectorAll('#haul-productFacts-desktop-expander .haul-productFacts-desktop-row').forEach(row =>
+        add(row.querySelector('.haul-productFacts-desktop-label')?.textContent,
+            row.querySelector('.haul-productFacts-desktop-value')?.textContent));
       const image = document.querySelector('#landingImage');
       const dynamic = image?.getAttribute('data-a-dynamic-image');
       let candidates = [];

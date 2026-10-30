@@ -100,7 +100,7 @@ test('migration leaves real CAPTCHA, login, exhausted budget and current detecto
   }
 });
 
-test('real detail parser captures modern specifications and does not mislabel CNY as USD',async()=>{
+for(const haul of [false,true]) test(`real detail parser captures ${haul?'Haul':'standard'} specifications and does not mislabel CNY as USD`,async()=>{
   const browser=await launchBrowser();
   try {
     const context=await browser.newContext();
@@ -111,7 +111,11 @@ test('real detail parser captures modern specifications and does not mislabel CN
       headers:()=>({'content-type':'image/png'}),body:async()=>imageBytes,dispose:async()=>{}})}};
     await context.route('https://www.amazon.com/**',route=>route.fulfill({contentType:'text/html',body:`
       <h1 id="productTitle">Drill</h1><div id="corePriceDisplay_desktop_feature_div"><span class="a-offscreen">CNY 600.00</span></div>
-      <table class="prodDetTable"><tr><th>Brand</th><td>DEWALT</td></tr><tr><th>Voltage</th><td>20 volts</td></tr><tr><th>Item Weight</th><td>3.6 pounds</td></tr></table>
+      ${haul?`<div id="haul-productFacts-desktop-expander">
+        <div class="haul-productFacts-desktop-row"><span class="haul-productFacts-desktop-label">Brand Name:</span><span class="haul-productFacts-desktop-value">DEWALT</span></div>
+        <div class="haul-productFacts-desktop-row"><span class="haul-productFacts-desktop-label">Voltage:</span><span class="haul-productFacts-desktop-value">20 volts</span></div>
+        <div class="haul-productFacts-desktop-row"><span class="haul-productFacts-desktop-label">Item Weight:</span><span class="haul-productFacts-desktop-value">3.6 pounds</span></div>
+      </div>`:'<table class="prodDetTable"><tr><th>Brand</th><td>DEWALT</td></tr><tr><th>Voltage</th><td>20 volts</td></tr><tr><th>Item Weight</th><td>3.6 pounds</td></tr></table>'}
       <table><tr><th>Unrelated recommendation</th><td>100V</td></tr></table>
       <img id="landingImage" data-old-hires="https://images-na.ssl-images-amazon.com/images/I/fixture.jpg">
     `}));
