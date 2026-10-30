@@ -361,6 +361,10 @@ def search_listing_candidates(query):
 
 def category_intent(category_name):
     name = category_name.strip()
+    if name == '开瓶器':
+        return ('Bottle openers for removing bottle caps. Not can/tin openers or jar lid openers. '
+                'A can opener with an auxiliary bottle-opening feature is still a can opener, '
+                'not the requested bottle opener category.')
     if '抽油泵' in name and not any(word in name for word in ('发动机', '内部机油', '润滑系统')):
         return ('Portable pumps for extracting and transferring oil/fuel from a tank or container. '
                 'Include complete electric or manual fuel transfer/siphon pumps. '
@@ -371,7 +375,10 @@ def category_intent(category_name):
 
 def validate_listing_intent(category_name, evidence):
     heading = str(evidence.get('heading') or '')
-    if (category_intent(category_name) and re.search(r'\boil pumps\b', heading, re.I)
+    if category_name.strip() == '开瓶器' and re.search(r'\b(?:can|tin|jar) openers?\b', heading, re.I):
+        raise CategoryGenerationError('榜单是开罐器或罐盖工具，与开瓶器不符；正在查找瓶盖开瓶器榜单',
+                                      'CATEGORY_SCOPE_MISMATCH')
+    if ('抽油泵' in category_name and category_intent(category_name) and re.search(r'\boil pumps\b', heading, re.I)
             and not re.search(r'transfer|siphon|barrel|hand', heading, re.I)):
         raise CategoryGenerationError('榜单是发动机内部机油泵配件，与抽取／转移油液的抽油泵不符；请使用液体输送泵榜单',
                                       'CATEGORY_SCOPE_MISMATCH')

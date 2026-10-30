@@ -73,6 +73,19 @@ def fixture_config():
     return c
 
 
+@pytest.mark.parametrize('heading', ['Best Sellers in Manual Can Openers', 'Best Sellers in Jar Openers'])
+def test_bottle_opener_rejects_other_container_openers(heading):
+    assert 'bottle opener' in generator.category_intent('开瓶器').lower()
+    with pytest.raises(generator.CategoryGenerationError) as error:
+        generator.validate_listing_intent('开瓶器', {'heading': heading})
+    assert error.value.code == 'CATEGORY_SCOPE_MISMATCH'
+
+
+def test_bottle_and_can_openers_keep_their_own_scope():
+    generator.validate_listing_intent('开瓶器', {'heading': 'Best Sellers in Bottle Openers'})
+    generator.validate_listing_intent('开罐器', {'heading': 'Best Sellers in Manual Can Openers'})
+
+
 @pytest.mark.parametrize('manual_url', [False, True])
 def test_transfer_pump_rejects_engine_parts_before_rule_generation(monkeypatch, manual_url):
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
