@@ -472,6 +472,30 @@ def test_manual_listing_is_verified_before_generating(monkeypatch):
     assert len(calls)==1
 
 
+def test_listing_scope_uses_real_products_instead_of_shared_storage_heading(monkeypatch):
+    bad='https://www.amazon.com/zgbs/office-products/1069646'
+    good='https://www.amazon.com/zgbs/office-products/900001'
+    bags=[{'rank':1,'title':'Mesh Zipper Pouch Bags 24 Pack'}]
+    boxes=[{'rank':1,'title':'Desktop Storage Organizer Box with Drawers'}]
+    pages={bad:{'url':bad,'heading':'Best Sellers in Supply Organizers','rank_count':30,
+                'ranked_products':bags,'links':[{'url':good,'text':'Desk Organizers'}]},
+           good:{'url':good,'heading':'Best Sellers in Desk Organizers','rank_count':30,
+                 'ranked_products':boxes,'links':[]}}
+    answers=iter([{'search_query':'desktop storage box'},{'url':bad},{'matches':False},
+                  {'url':good},{'matches':True}])
+    prompts=[];reads=[]
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _:{'candidates':[{'url':bad}]})
+    monkeypatch.setattr(generator,'read_listing',lambda url:(reads.append(url) or pages[url]))
+    def model(prompt,**kw):
+        prompts.append(prompt)
+        return next(answers)
+    monkeypatch.setattr(generator,'model_json',model)
+    assert generator.resolve_listing('桌面收纳盒',lambda **kw:None)==pages[good]
+    assert reads==[bad,good] and len(prompts)==5
+    assert bags[0]['title'] in prompts[2] and 'physical products' in prompts[2]
+    assert bags[0]['title'] in prompts[3] and boxes[0]['title'] in prompts[4]
+
+
 def test_direct_api_link_corrected_without_directory_walk_or_revisiting(monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','fixture-secret')
     wrong='https://www.amazon.com/zgbs/pc/172493'

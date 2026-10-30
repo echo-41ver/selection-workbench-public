@@ -69,6 +69,20 @@ try {
     title: document.title,
     heading: [...document.querySelectorAll('h1,h2')].map(x => x.textContent.trim()).find(x => /^Best Sellers in /i.test(x)) || document.querySelector('#zg_banner_text, .zg-banner-text, h1')?.textContent?.trim() || '',
     rank_count: document.querySelectorAll('.zg-bdg-ctr').length || document.querySelectorAll('.zg-bdg-text').length,
+    ranked_products: [...document.querySelectorAll('.zg-bdg-ctr')].slice(0,8).map(badge => {
+      let card=badge.closest('.zg-grid-general-faceout');
+      if(!card) {
+        let parent=badge.parentElement;
+        while(parent && parent!==document.body) {
+          if(parent.querySelector('a[href*="/dp/"]') && parent.querySelectorAll('.zg-bdg-ctr').length===1) { card=parent; break; }
+          parent=parent.parentElement;
+        }
+      }
+      const titles=[...card?.querySelectorAll('a[href*="/dp/"]') || []]
+        .map(a=>(a.innerText || '').replace(/\s+/g,' ').trim()).filter(Boolean).sort((a,b)=>b.length-a.length);
+      return {rank:Number((badge.textContent || '').replace(/\D/g,'')),
+        title:(titles[0] || card?.querySelector('img')?.alt || '').slice(0,300)};
+    }).filter(product=>product.title),
     blocked: /enter the characters|robot check|solve this puzzle/i.test(document.body.innerText.slice(0, 10000)),
     links: [...new Set([...document.querySelectorAll('#zg-left-col a[href], [role="tree"] a[href]'), ...document.querySelectorAll('a[href]')])].filter(a => /\/(zgbs|gp\/bestsellers)(\/|$)/.test(new URL(a.href).pathname) && a.textContent.trim()).map(a => ({url:a.href, text:a.textContent.trim().slice(0,150)})),
   })));
