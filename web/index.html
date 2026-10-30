@@ -823,6 +823,7 @@ let taskScopeEdited=false,taskScopeOwner=null,retryScopeOwner=null,retryListingE
 let amazonRouteEdited=false;
 $('amazon-route-mode').addEventListener('change',()=>{amazonRouteEdited=true;});
 for(const id of taskScopeFieldIds)$(id).addEventListener('input',()=>{taskScopeEdited=true;});
+$('category').addEventListener('input',()=>{const previous=lastStatus?.draft;if(previous&&$('category').value.trim()!==previous.category_name&&$('bestsellers-url').value.trim()===previous.amazon_url)$('bestsellers-url').value='';});
 $('biz-same_limit').addEventListener('input',()=>{taskScopeEdited=true;businessScopeEdited=true;});
 $('retry-listing-url').addEventListener('input',()=>{retryListingEdited=true;});
 function pendingGenerationScope(data){
