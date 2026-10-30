@@ -34,8 +34,33 @@ def test_direct_clears_only_child_amazon_proxy_without_reading_shared_settings(t
 def test_auto_still_requires_valid_saved_route(tmp_path, monkeypatch):
     saved_settings(tmp_path)
     monkeypatch.setattr(transport, 'verify_saved', lambda _: False)
+    refreshes = []
+    monkeypatch.setattr(transport, 'refresh_saved_owner',
+                        lambda root, settings: refreshes.append(root) or settings)
     with pytest.raises(RuntimeError, match='Amazon'):
         transport.amazon_environment(tmp_path, mode='AUTO')
+    assert refreshes == [tmp_path]
+
+
+def test_auto_refreshes_restarted_proxy_owner_without_changing_route(tmp_path, monkeypatch):
+    from functools import partial
+    from selection_automation.local_proxy_prepare import refresh_saved_owner
+
+    path, settings = saved_settings(tmp_path, local_proxy_owner={
+        'pid': 1, 'created': 1, 'name': 'clash-meta.exe'})
+    evidence = {'processes': [{'pid': 2, 'created': 2, 'name': 'clash-meta.exe',
+                              'listeners': [{'host': '127.0.0.1', 'port': 7890}]}]}
+    monkeypatch.setattr(transport, 'verify_saved',
+                        lambda value: value['local_proxy_owner']['pid'] == 2)
+    monkeypatch.setattr(transport, 'refresh_saved_owner', partial(
+        refresh_saved_owner, evidence=evidence,
+        protocol_probe=lambda _: {'protocol': 'HTTP'}, check_owner=lambda _: True))
+
+    assert transport.amazon_environment(tmp_path, mode='AUTO') == {
+        'AMAZON_BROWSER_ROUTE_MODE': 'AUTO', 'AMAZON_BROWSER_PROXY': 'http://127.0.0.1:7890'}
+    updated = json.loads(path.read_text(encoding='utf-8'))
+    assert updated == {**settings, 'local_proxy_owner': {
+        'pid': 2, 'created': 2, 'name': 'clash-meta.exe'}}
 
 
 def test_explicit_auto_overrides_inherited_direct_and_keeps_local_proxy(tmp_path, monkeypatch):

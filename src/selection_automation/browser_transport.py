@@ -2,7 +2,7 @@
 import json
 import os
 from pathlib import Path
-from .local_proxy_prepare import verify_saved
+from .local_proxy_prepare import verify_saved, refresh_saved_owner
 from .network_readiness import NetworkNotReady
 
 
@@ -42,7 +42,9 @@ def amazon_environment(root, *, mode=None):
     if not path.exists():return environment
     settings=json.loads(path.read_text(encoding='utf-8-sig'))
     if not verify_saved(settings):
-        raise NetworkNotReady('Amazon 本机网络出口已变化，请重新检测；未回退直连。','AUTO')
+        settings=refresh_saved_owner(root,settings)
+        if not verify_saved(settings):
+            raise NetworkNotReady('Amazon 本机网络出口已变化，请重新检测；未回退直连。','AUTO')
     if not settings.get('preproxy_port'):return environment
     scheme='socks5' if settings['preproxy_protocol']=='SOCKS5' else 'http'
     host=settings['preproxy_host']
