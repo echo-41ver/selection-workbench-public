@@ -29,7 +29,7 @@ def write(path, data):
 
 
 @pytest.mark.parametrize('status,kind,scrolled', [
-    ('WAITING_LOGIN','LOGIN',True), ('WAITING_CAPTCHA','CAPTCHA',True),
+    ('WAITING_LOGIN','LOGIN',True), ('WAITING_CAPTCHA',None,True),
     ('STOPPED_HTTP_403','ACCESS',True), ('STOPPED_HTTP_429','RATE_LIMIT',True),
     ('WAITING_CAPTCHA',None,False), ('WAITING_SEARCH_VERIFICATION',None,False),
     ('WAITING_HUMAN_VERIFICATION',None,False),

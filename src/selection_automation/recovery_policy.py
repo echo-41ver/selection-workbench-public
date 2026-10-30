@@ -7,7 +7,7 @@ CAPTCHA_STATUSES = {'WAITING_CAPTCHA', 'CAPTCHA_REQUIRED', 'WAITING_SEARCH_VERIF
 
 
 def captcha_needs_manual_verification(status, progress):
-    return status in CAPTCHA_STATUSES and progress.get('scroll_collection_started') is not True
+    return status in CAPTCHA_STATUSES
 
 def recovery_budget(previous, goods, profile_id, kind, limit=None):
     before = previous.get('unique_goods_before')
@@ -33,12 +33,12 @@ def site_access_wait(kind, previous, worker_number=1):
     return delay + max(0, worker_number - 1) * 11
 
 def session_recovery_kind(status, progress):
-    """CAPTCHA requests replacement only after this collector has begun scrolling."""
+    """CAPTCHA always preserves the existing session and checkpoint."""
     if status in {'STOPPED_BROWSER_COMMAND_TIMEOUT', 'STOPPED_USER_REQUEST',
                   'KEYWORD_COMPLETE', 'KEYWORD_LIMIT_REACHED', 'WORKER_COMPLETE'}:
         return None
     if status in CAPTCHA_STATUSES:
-        return None if captcha_needs_manual_verification(status, progress) else 'CAPTCHA'
+        return None
     if status in {'STOPPED_LOGIN_REQUIRED', 'WAITING_LOGIN', 'LOGIN_REQUIRED'} or progress.get('confirmed_login_redirect') is True:
         return 'LOGIN'
     http = progress.get('http_block') or {}

@@ -6,11 +6,12 @@ import {sessionRecoveryRequest, captchaNeedsManualVerification} from '../scripts
 import {retryAfterSeconds, networkEvidence} from '../scripts/temu_network_evidence.mjs';
 import {createCategoryRelevance,COLLECTION_PROGRESS_VERSION} from '../scripts/category_relevance.mjs';
 import {createRawCounter,RAW_COUNT_VERSION} from '../scripts/temu_raw_count.mjs';
+import {captchaStatuses} from '../scripts/captcha_browser.mjs';
 
 const source = fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs', import.meta.url), 'utf8');
 const snapshotSource = source.slice(source.indexOf('async function writeSnapshot('), source.indexOf('function startBidi()'));
 
-for (const [status,kind,scrolled=true] of [['WAITING_LOGIN','LOGIN'], ['WAITING_SEARCH_VERIFICATION','CAPTCHA'],
+for (const [status,kind,scrolled=true] of [['WAITING_LOGIN','LOGIN'], ['WAITING_SEARCH_VERIFICATION',null],
   ['STOPPED_HTTP_403','ACCESS'], ['STOPPED_HTTP_429','RATE_LIMIT'],
   ...['WAITING_CAPTCHA','WAITING_SEARCH_VERIFICATION','WAITING_EMPTY_SEARCH_VERIFICATION','WAITING_HUMAN_VERIFICATION']
     .map(status=>[status,null,false])]) {
@@ -20,7 +21,7 @@ for (const [status,kind,scrolled=true] of [['WAITING_LOGIN','LOGIN'], ['WAITING_
     const context = vm.createContext({sessionRecoveryRequest, captchaNeedsManualVerification,
       RAW_COUNT_VERSION,rawCounter:createRawCounter(50,{version:RAW_COUNT_VERSION,count:40}),
       categoryRelevance:createCategoryRelevance({temu:{include_terms:['retained'],severe_exclude_terms:[]}}),COLLECTION_PROGRESS_VERSION,
-      AUTO_SESSION_RECOVERY:true, scrollingCollectionStarted:scrolled,
+      AUTO_SESSION_RECOVERY:true, scrollingCollectionStarted:scrolled, captchaStatuses, handleCaptcha:async()=>{calls.push('captcha-at-original-checkpoint');return false;}, humanVerificationActive:false,
       products:new Map([['123',row]]), pendingProducts:new Map(), unclassifiedProducts:new Map(), filteredSevereOffTopic:new Map(),
       isCategoryRelated:()=>true, atomic:async (file,text)=>{writes.set(file,text);calls.push(file);},
       PRODUCTS:'products', PENDING_PRODUCTS:'pending', UNCLASSIFIED_PRODUCTS:'unclassified', FILTERED_OFF_TOPIC:'filtered', IMAGE_BACKFILL_QUEUE:'images',
@@ -48,6 +49,7 @@ for (const [status,kind,scrolled=true] of [['WAITING_LOGIN','LOGIN'], ['WAITING_
       assert.equal(saved.automatic_recovery_eligible,false);
       assert.ok(!calls.includes('SESSION_RECOVERY_REQUESTED'));
       assert.ok(!calls.includes('shutdown-2'));
+      assert.ok(calls.includes('captcha-at-original-checkpoint'));
       return;
     }
     assert.equal(saved.session_recovery_kind,kind);
@@ -73,7 +75,7 @@ test('startup CAPTCHA cannot be overridden by restored counts, HTTP evidence or 
       const progress={scroll_collection_started:marker,round:37,unique_goods:1504,
         automatic_recovery_eligible:true,http_block:{status:429},confirmed_login_redirect:true};
       assert.equal(sessionRecoveryRequest(status,progress,true),null);
-      assert.equal(sessionRecoveryRequest(status,{...progress,scroll_collection_started:true},true).session_recovery_kind,'CAPTCHA');
+      assert.equal(sessionRecoveryRequest(status,{...progress,scroll_collection_started:true},true),null);
     }
   }
 });

@@ -44,7 +44,7 @@ def test_session_replacements_have_no_cumulative_limit_and_captcha_is_preserved(
         assert allowed and record['limit'] is None
         allowed, progressed = recovery_budget(record,11,'newer-profile',kind)
         assert allowed and progressed['attempts_without_progress'] == 1
-    assert recovery_kind('WAITING_CAPTCHA',{'scroll_collection_started':True},True) == 'CAPTCHA'
+    assert recovery_kind('WAITING_CAPTCHA',{'scroll_collection_started':True},True) is None
     assert recovery_kind('WAITING_CAPTCHA',{},True) is None
 
 
@@ -62,7 +62,7 @@ def test_all_requested_site_gates_reach_automatic_recovery():
         assert recovery_kind(code,{},True) == 'ACCESS'
     assert recovery_kind('STOPPED_HTTP_429',{},True) == 'RATE_LIMIT'
     for code in ['WAITING_CAPTCHA','CAPTCHA_REQUIRED','WAITING_SEARCH_VERIFICATION']:
-        assert recovery_kind(code,{'scroll_collection_started':True},False) == 'CAPTCHA'
+        assert recovery_kind(code,{'scroll_collection_started':True},False) is None
     assert recovery_kind('STOPPED_PROXY_OR_NETWORK_FAILURE',{'automatic_recovery_eligible':False},True) is None
     assert recovery_kind('STOPPED_PROXY_OR_NETWORK_FAILURE',{},True)=='TRANSPORT'
 
@@ -117,5 +117,5 @@ def test_startup_captcha_remains_manual_even_with_old_checkpoint_and_transport_f
             assert recovery_kind(status,progress,True) is None
             assert automatic_retry_stopped(progress)
             progress['scroll_collection_started']=True
-            assert recovery_kind(status,progress,False)=='CAPTCHA'
-            assert not automatic_retry_stopped(progress)
+            assert recovery_kind(status,progress,False)is None
+            assert automatic_retry_stopped(progress)

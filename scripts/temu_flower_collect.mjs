@@ -8,6 +8,7 @@ import {readInitialWindowHandles} from './browser_control_bootstrap.mjs';
 import {parseProductCardMetrics} from './product_card_metrics.mjs';
 import {hasLocalWarehouseLabel,inspectLocalWarehouse,confirmsLocalWarehouse,selectLocalWarehouse,loadLocalWarehouseEvidence} from './temu_local_warehouse.mjs';
 import {sessionRecoveryRequest, captchaNeedsManualVerification} from './temu_session_recovery.mjs';
+import {createCaptchaHandler,webdriverCaptchaAdapter,captchaStatuses} from './captcha_browser.mjs';
 import {createBrowserControlClient} from './browser_control_request.mjs';
 import {clickVisibleControl,expansionObserved} from './temu_control_click.mjs';
 import { createOwnedLifecycle, topDocumentUrl } from './temu_bidi_lifecycle.mjs';
@@ -134,6 +135,20 @@ async function atomic(file, text) {
 async function appendEvent(type, data = {}) {
   await fs.appendFile(EVENTS, `${JSON.stringify({ at: now(), type, ...data })}\n`, 'utf8');
 }
+
+const handleCaptcha=createCaptchaHandler({root:ROOT,scope:`temu/${categoryConfig.category_key}`,browserIdentity:sid,
+  adapter:webdriverCaptchaAdapter(wd,execute),
+  shouldStop:async()=>Boolean(argument('--stop-file')&&await fs.access(argument('--stop-file')).then(()=>true,()=>false)),
+  isReleased:async()=>execute(`return !(${inspectHumanVerification.toString()})() && !/bgn_verification|captcha|login/i.test(location.pathname)
+    && !document.querySelector('input[type="password"]')
+    && (document.querySelector('a[href*="goods_id="],a[href*="-g-"]')!==null || document.querySelector('input[type="search"],input[placeholder*="search" i]')!==null);`,[],'captcha_release_check'),
+  onStatus:async captcha=>{
+    const progress=JSON.parse(await fs.readFile(PROGRESS,'utf8'));
+    await atomicSnapshot(PROGRESS,JSON.stringify({...progress,captcha,message:captcha.message,
+      manual_action_required:!['PENDING','ANSWER_READY','VERIFIED'].includes(captcha.status),
+      automatic_retry:false,automatic_recovery_eligible:false,resume_requires_session_rotation:false},null,2));
+    await appendEvent('CAPTCHA_STATUS',captcha);
+  }});
 
 // BEGIN_INITIAL_WINDOW_SELECTION
 function strictExistingSearchUrl(value) {
@@ -412,6 +427,10 @@ async function writeSnapshot(status, extra = {}) {
     await appendEvent('SESSION_RECOVERY_REQUESTED', {status, ...sessionRecovery, unique_goods: rows.length});
     await boundedShutdown(2);
   }
+  if(captchaStatuses.has(status)) {
+    humanVerificationActive=true;
+    if(await handleCaptcha()) {humanVerificationActive=false;httpBlock=null;}
+  }
 }
 
 function startBidi() {
@@ -680,6 +699,7 @@ if(!window.__temuImageNeutralizer){
  const save=(img,attr,target)=>{const v=img.getAttribute(attr);if(v&&v!==blank&&!img.getAttribute(target))img.setAttribute(target,v)};
  const neutralize=img=>{
   if(!(img instanceof HTMLImageElement))return;
+  if(img.closest('[id*="captcha" i],[class*="captcha" i]'))return;
   save(img,'src','data-temu-original-src'); save(img,'srcset','data-temu-original-srcset');
   for(const attr of ['data-src','data-original','data-lazy-src','data-srcset']){
    const v=img.getAttribute(attr); if(v){const target=attr.includes('srcset')?'data-temu-original-srcset':'data-temu-original-src';if(!img.getAttribute(target))img.setAttribute(target,v);img.removeAttribute(attr)}

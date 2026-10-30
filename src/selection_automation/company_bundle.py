@@ -69,14 +69,18 @@ def normalize(value,require_model=False):
             expires_at=geekbi.get('expires_at')
             if type(expires_at) is not int or expires_at<=0:raise ValueError('Invalid geekbi.expires_at')
             out['geekbi'].update(access_token=access_token,expires_at=expires_at)
+    if 'twocaptcha' in value:
+        from .captcha import normalize as captcha_settings
+        out['twocaptcha']=captcha_settings(value['twocaptcha'])
     return out
 
 def import_bundle(root,value,store):
     """All validation precedes writes; rollback both encrypted files on failure."""
     normalized=normalize(value);folder=Path(root)/'runtime/secrets';folder.mkdir(parents=True,exist_ok=True)
-    targets=[('company.dpapi',{k:v for k,v in normalized.items() if k not in {'deepseek','liquid_d1'}})]
+    targets=[('company.dpapi',{k:v for k,v in normalized.items() if k not in {'deepseek','liquid_d1','twocaptcha'}})]
     if 'deepseek' in normalized:targets.append(('deepseek.dpapi',normalized['deepseek']))
     if 'liquid_d1' in normalized:targets.append(('liquid_d1.dpapi',normalized['liquid_d1']))
+    if 'twocaptcha' in normalized:targets.append(('twocaptcha.dpapi',normalized['twocaptcha']))
     before={name:(folder/name).read_bytes() if (folder/name).exists() else None for name,_ in targets}
     transaction=folder/('import-backup-'+uuid.uuid4().hex);transaction.mkdir()
     for name,data in before.items():

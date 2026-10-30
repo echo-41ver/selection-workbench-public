@@ -12,13 +12,13 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED_DOCS = {"docs/DEPLOYMENT_GUIDE.md", "docs/DELIVERY_BASELINE.md", "docs/COLLECTION_INTERFACE.md", "docs/deployment-parity.md"}
+ALLOWED_DOCS = {"docs/DEPLOYMENT_GUIDE.md", "docs/DELIVERY_BASELINE.md", "docs/COLLECTION_INTERFACE.md", "docs/deployment-parity.md", "docs/2CAPTCHA.md"}
 PRIVATE_PARTS = {".git", ".githooks", ".venv", "node_modules", "runtime", "runs", "dist", "work", "logs", "__pycache__", ".deployment-backup", ".pytest_cache"}
 ASSET_ROOT = "deployment-assets"
 TEXT_SUFFIXES = {'.json','.js','.mjs','.cjs','.py','.ps1','.cmd','.bat','.md','.txt','.toml','.yaml','.yml','.html','.css','.xml'}
 SECRET_TOKEN = re.compile(r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b")
 AUTH_URL = re.compile(r"https?://[^\s/:\"']+:[^\s/@\"']+@[^\s\"'<>]+")
-SECRET_FIELDS = {"password", "proxy_password", "api_key", "adspower_api_key", "deepseek_api_key", "access_token", "client_secret"}
+SECRET_FIELDS = {"password", "proxy_password", "api_key", "adspower_api_key", "deepseek_api_key", "access_token", "client_secret", "twocaptcha_key", "captcha_api_key"}
 
 
 def included(name: str) -> bool:
@@ -52,7 +52,7 @@ def scan_files(files: dict[str, bytes]) -> list[dict]:
     def scan_json(value, name, prefix=""):
         if isinstance(value, dict):
             for key, item in value.items():
-                if key.lower() in SECRET_FIELDS and isinstance(item, str) and not is_placeholder(item):
+                if (key.lower() in SECRET_FIELDS or key.lower()=='key' and prefix.endswith('twocaptcha.')) and isinstance(item, str) and not is_placeholder(item):
                     issues.append({"file": name, "rule": "literal-credential", "field": prefix + key})
                 scan_json(item, name, prefix + key + ".")
         elif isinstance(value, list):

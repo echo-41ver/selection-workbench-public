@@ -740,6 +740,14 @@ def worker_snapshot(base, name):
     if progress.get('max_products'):
         view['当前排序目标']=progress['max_products']
     if recovery: view['建议动作']=recovery['action']; view['浏览器保留']=True
+    captcha=progress.get('captcha')
+    if recovery and code in {'WAITING_CAPTCHA','WAITING_SEARCH_VERIFICATION','WAITING_EMPTY_SEARCH_VERIFICATION','WAITING_HUMAN_VERIFICATION','CAPTCHA_REQUIRED'} and isinstance(captcha,dict):
+        from selection_automation.captcha import MESSAGES
+        state=captcha.get('status')
+        if state in MESSAGES:
+            view.update(状态=MESSAGES[state],验证码状态=state,浏览器保留=True,
+                        需人工介入=state not in {'PENDING','ANSWER_READY','VERIFIED'},
+                        建议动作=MESSAGES[state])
     if recovery and worker.get('status')=='HUMAN_ACTION_REQUIRED' and isinstance(worker.get('verification_probe'),dict):
         view.update(verification_probe_view(worker['verification_probe'],recovery))
     return worker,view,recovery
@@ -828,6 +836,21 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
         return True
     if running:
         return True
+    if verification_wait and worker.get('output') and not (base/'STOP').exists():
+        # A crashed/stopped collector cannot poll its paid task. Restart only
+        # the owning pipeline in this same session, once new settings arrive
+        # or a saved answer/task still needs polling.
+        captcha_config=ROOT/'runtime/secrets/twocaptcha.dpapi'
+        progress_path=Path(worker['output'])/'progress.json'
+        pending=not progress.get('captcha') or (progress.get('captcha') or {}).get('status') in {'PENDING','ANSWER_READY'}
+        if captcha_config.is_file() and (pending or captcha_config.stat().st_mtime_ns>progress_path.stat().st_mtime_ns):
+            from selection_automation.captcha import settings
+            config=settings(ROOT)
+            if config['enabled'] and config['key']:
+                children.pop(name,None);finished.discard(name);attempts[name]=0;next_at[name]=0
+                save(worker_path,{**worker,'status':'RESUMING','manual_action_required':False,'automatic_resume_pending':True})
+                state[name]={**view,'状态':'恢复原验证码任务，浏览器与采集断点保留','需人工介入':False}
+                return False
     command_timeout=view['采集状态']=='STOPPED_BROWSER_COMMAND_TIMEOUT'
     if command_timeout and not control_command_finished(session,worker.get('current_query')):
         return True
