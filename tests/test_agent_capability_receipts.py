@@ -45,11 +45,13 @@ def _real_probe(tmp_path, monkeypatch, script, *, timeout=.4, grace=1.5, startup
     import sys
     import time
     from pathlib import Path
+    # Control the actual stdlib-only child, not Windows' extra venv launcher.
+    interpreter = sys._base_executable
     agent = {'id': 'codex', 'name': 'Codex CLI', 'installed': True,
-             'authenticated': True, 'executable': sys.executable, 'version': 'test'}
+             'authenticated': True, 'executable': interpreter, 'version': 'test'}
     monkeypatch.setattr(local_agents, 'discover', lambda *a, **kw: [dict(agent)])
     monkeypatch.setattr(local_agents, 'analysis_command',
-                        lambda *a, **kw: [sys.executable, '-u', '-c', script])
+                        lambda *a, **kw: [interpreter, '-u', '-c', script])
     original_popen = local_agents.subprocess.Popen
     def ready_interpreter(command, *args, **kwargs):
         job = Path(kwargs['cwd'])
