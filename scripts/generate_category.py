@@ -303,8 +303,25 @@ def _read_listing_once(url):
 
 def _read_amazon_category(arguments, *, timeout):
     from selection_automation.browser_transport import amazon_environment
-    result = subprocess.run(['node', str(ROOT/'scripts/discover_amazon_category.mjs'), *arguments],
-        cwd=ROOT, env={**os.environ,**amazon_environment(ROOT)},capture_output=True, text=True, encoding='utf-8', timeout=timeout, check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    command = ['node', str(ROOT/'scripts/discover_amazon_category.mjs'), *arguments]
+    options = dict(cwd=ROOT, env={**os.environ, **amazon_environment(ROOT)},
+        capture_output=True, text=True, encoding='utf-8', timeout=timeout, check=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    try:
+        result = subprocess.run(command, **options)
+    except subprocess.CalledProcessError as error:
+        env = options['env']
+        if (env.get('AMAZON_BROWSER_ROUTE_MODE', 'AUTO') != 'AUTO'
+                or not env.get('AMAZON_BROWSER_PROXY')
+                or not re.search(r'"code"\s*:\s*"AMAZON_LOGIN_REQUIRED"', error.stderr or '')):
+            raise
+        diagnostic = ROOT/'runtime/web-console'/('amazon-category-proxy-login-'+uuid.uuid4().hex+'.json')
+        failures = [{'exception_type': type(error).__name__, 'stderr': error.stderr,
+                     'traceback': traceback.format_exc(), 'route': 'CONFIGURED_PROXY'}]
+        _save_listing_diagnostic(diagnostic, command[-1], failures, recovered=False)
+        env.update(AMAZON_BROWSER_ROUTE_MODE='DIRECT', AMAZON_BROWSER_PROXY='')
+        result = subprocess.run(command, **options)
+        _save_listing_diagnostic(diagnostic, command[-1], failures, recovered=True)
     evidence = json.loads(result.stdout)
     if (arguments[0] != '--query' and not valid_url(evidence['url'])) or evidence.get('blocked'):
         raise ValueError('榜单证据无效或页面要求验证')

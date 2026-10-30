@@ -4,6 +4,7 @@ import path from 'node:path';
 import {inspectAmazonPage} from './amazon_page_state.mjs';
 import {openAmazonDetail} from './amazon_browser_recovery.mjs';
 import {readAmazonDocument} from './amazon_page_read.mjs';
+import {amazonBrowserRoute} from './amazon_browser_route.mjs';
 const query = process.argv[2]==='--query' ? process.argv[3]?.trim() : null;
 if (process.argv[2]==='--query' && (!query || query.length>120)) throw new Error('Invalid product search query');
 const url = query ? 'https://www.amazon.com/s?k='+encodeURIComponent(query) : process.argv[2];
@@ -18,7 +19,7 @@ try {
     .filter(Boolean).map(directory=>path.join(directory,'Microsoft/Edge/Application/msedge.exe')).find(existsSync) : null;
   browser = await chromium.launch({ headless: true,
     executablePath: process.env.AMAZON_BROWSER_PATH || installedEdge || chromium.executablePath(),
-    ...(process.env.AMAZON_BROWSER_PROXY?{proxy:{server:process.env.AMAZON_BROWSER_PROXY}}:{}) });
+    ...amazonBrowserRoute().launchOptions });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'en-US' });
   const page = await context.newPage();
   stage = 'page_navigation';

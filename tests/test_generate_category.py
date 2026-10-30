@@ -7,6 +7,58 @@ generator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(generator)
 
 
+@pytest.mark.parametrize('arguments', [['--query', 'laundry bag'], ['https://www.amazon.com/zgbs/home-garden/900001']])
+@pytest.mark.parametrize('direct_succeeds', [True, False])
+def test_category_proxy_login_tries_direct_once_and_preserves_evidence(monkeypatch, tmp_path, arguments, direct_succeeds):
+    import json
+    import subprocess
+    from types import SimpleNamespace
+    from selection_automation import browser_transport
+    monkeypatch.setattr(generator, 'ROOT', tmp_path)
+    monkeypatch.setattr(browser_transport, 'amazon_environment', lambda _: {
+        'AMAZON_BROWSER_ROUTE_MODE': 'AUTO', 'AMAZON_BROWSER_PROXY': 'http://127.0.0.1:7890'})
+    calls = []
+    def run(command, **options):
+        calls.append(dict(options['env']))
+        if len(calls) == 1 or not direct_succeeds:
+            raise subprocess.CalledProcessError(1, command, stderr='{"code":"AMAZON_LOGIN_REQUIRED"}')
+        return SimpleNamespace(stdout=json.dumps({'url': 'https://www.amazon.com/zgbs/home-garden/900001'}))
+    monkeypatch.setattr(generator.subprocess, 'run', run)
+    if direct_succeeds:
+        generator._read_amazon_category(arguments, timeout=100)
+    else:
+        with pytest.raises(subprocess.CalledProcessError):
+            generator._read_amazon_category(arguments, timeout=100)
+    assert len(calls) == 2
+    assert calls[0]['AMAZON_BROWSER_PROXY'] == 'http://127.0.0.1:7890'
+    assert calls[1]['AMAZON_BROWSER_ROUTE_MODE'] == 'DIRECT'
+    assert calls[1]['AMAZON_BROWSER_PROXY'] == ''
+    record = json.loads(next((tmp_path/'runtime/web-console').glob('amazon-category-proxy-login-*.json')).read_text('utf-8'))
+    assert record['recovered'] is direct_succeeds
+    assert record['failures'][0]['stderr'] == '{"code":"AMAZON_LOGIN_REQUIRED"}'
+
+
+@pytest.mark.parametrize('mode,proxy,code', [
+    ('DIRECT', '', 'AMAZON_LOGIN_REQUIRED'), ('AUTO', '', 'AMAZON_LOGIN_REQUIRED'),
+    ('AUTO', 'http://127.0.0.1:7890', 'AMAZON_CAPTCHA_REQUIRED'),
+    ('AUTO', 'http://127.0.0.1:7890', 'AMAZON_HTTP_429')])
+def test_category_browser_does_not_retry_other_routes_or_gates(monkeypatch, tmp_path, mode, proxy, code):
+    import json
+    import subprocess
+    from selection_automation import browser_transport
+    monkeypatch.setattr(generator, 'ROOT', tmp_path)
+    monkeypatch.setattr(browser_transport, 'amazon_environment', lambda _: {
+        'AMAZON_BROWSER_ROUTE_MODE': mode, 'AMAZON_BROWSER_PROXY': proxy})
+    calls = []
+    def run(command, **options):
+        calls.append(command)
+        raise subprocess.CalledProcessError(1, command, stderr=json.dumps({'code': code}))
+    monkeypatch.setattr(generator.subprocess, 'run', run)
+    with pytest.raises(subprocess.CalledProcessError):
+        generator._read_amazon_category(['--query', 'laundry bag'], timeout=100)
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize('recover', [True, False])
 @pytest.mark.parametrize('stage,kind,message',[
     ('page_navigation','TimeoutError','page.goto: Timeout 45000ms exceeded'),
