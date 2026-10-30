@@ -842,10 +842,9 @@ class Console:
                     self.generation_error={'code':'PREPARATION_STOPPED','message':self.phase}
                 if self.generation_error:
                     progress=selection.read(self.progress_file,{}) if self.progress_file else {}
-                    if self.pending_scope and progress.get('failed_stage')=='generating':
+                    if self.pending_scope:
                         from generate_category import valid_url
-                        route=progress.get('route',[])
-                        resolved=route[-1].get('url') if route and isinstance(route[-1],dict) else None
+                        resolved=progress.get('verified_listing_url')
                         if valid_url(resolved):self.pending_scope['bestsellers_url']=resolved
                     if not self.cancel.is_set():self.pending_key=supplied_key
                     self.persist_preparation()

@@ -612,7 +612,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
     if not os.environ.get('DEEPSEEK_API_KEY', '').strip():
         raise CategoryGenerationError('本机没有已运行的同品类规则；新品类需要 API key 才能生成规则')
     evidence = resolve_listing(category_name, report, bestsellers_url)
-    report(stage='generating', message='榜单已核实，正在生成本品类文字和视觉规则')
+    report(stage='generating', message='榜单已核实，正在生成本品类文字和视觉规则', verified_listing_url=evidence['url'])
     from selection_automation.compact_authoring import authoring_prompt,expand,add_summary
     from selection_automation.rule_provider import settings
     scope={'category_name':category_name,'listing':listing_identity(evidence['url']),
@@ -692,6 +692,7 @@ def main():
             draft_file.parent.mkdir(parents=True,exist_ok=True)
             atomic_write(draft_file,json.dumps(draft,ensure_ascii=False))
         route = fields.get('route', last.get('route'))
+        verified_listing_url=fields.get('verified_listing_url',last.get('verified_listing_url'))
         if fields.get('stage')=='error':
             for field in ('model_request_id','response_id','model_usage','model_protocol','model_output_budget','model_network','events','characters','model_event'):
                 if field in last:fields[field]=last[field]
@@ -699,6 +700,7 @@ def main():
         last.update(fields)
         if route:
             last['route'] = route
+        if verified_listing_url:last['verified_listing_url']=verified_listing_url
         if args.status_file:
             args.status_file.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(args.status_file, json.dumps(last, ensure_ascii=False))
