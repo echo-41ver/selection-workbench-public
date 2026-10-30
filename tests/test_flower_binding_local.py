@@ -62,7 +62,7 @@ if(-not $refused){{throw 'non-loopback request allowed'}}
 def test_binding_foreground_and_logs_remain_owned_by_selected_profile():
     source=(ROOT/'scripts/bind_flower_worker.ps1').read_text('utf-8')
     assert 'Get-ProfileBrowserTree $RootPid' in source
-    assert 'if ($windows.Count -ne 1)' in source
+    assert 'Sort-Object { $_.Id -ne $RootPid }' in source
     assert 'Show-VerifiedProfileWindow $script:expectedProfileBrowserPid' in source
     assert source.index('$foreground = if ($ProfileId)') < source.index('$session = Invoke-LocalDriverRest')
     assert 'retained rather than creating a second session' in source
@@ -89,15 +89,22 @@ public static class OwnedFlowerForeground {
  public static uint GetCurrentThreadId(){return 44u;}
 }
 "@
-function Get-ProfileBrowserTree { return @(62788) }
-function Get-Process { return [pscustomobject]@{Id=62788;MainWindowHandle=[IntPtr]401288;StartTime=[DateTime]'2026-01-01'} }
+$WaitSeconds=2
+$script:windowReads=0
+function Get-ProfileBrowserTree { return @(90000,62788) }
+function Get-Process {
+ param($Id)
+ $script:windowReads++
+ $handle=if($script:windowReads -le 2){0}elseif($Id -eq 62788){401288}else{111}
+ return [pscustomobject]@{Id=$Id;MainWindowHandle=[IntPtr]$handle;StartTime=[DateTime]'2026-01-01'}
+}
 '''+helper+'''
-$r=Show-VerifiedProfileWindow 52248
+$r=Show-VerifiedProfileWindow 62788
 if($r.attempts -ne 3 -or $r.window_pid -ne 62788){throw 'wrong target or missing bounded retry'}
 if([OwnedFlowerForeground]::Attached -ne 6 -or [OwnedFlowerForeground]::Detached -ne 6){throw 'input queues not detached'}
 [OwnedFlowerForeground]::Lost=$true
 $refused=$false
-try{Show-VerifiedProfileWindow 52248}catch{$refused=$true}
+try{Show-VerifiedProfileWindow 62788}catch{$refused=$true}
 if(-not $refused){throw 'ownership change was ignored'}
 [OwnedFlowerForeground]::Lost=$false
 [OwnedFlowerForeground]::Blocked=$true
@@ -108,18 +115,18 @@ function Request-BrowserDisplayConfirmation {
     [OwnedFlowerForeground]::Blocked=$false
     return 0.25
 }
-$r=Show-VerifiedProfileWindow 52248
+$r=Show-VerifiedProfileWindow 62788
 if($script:prompts -ne 1 -or [OwnedFlowerForeground]::Sets -ne 13 -or $r.confirmation_seconds -ne 0.25 -or -not $r.activated){throw 'confirmation did not return to actual foreground verification'}
 [OwnedFlowerForeground]::Blocked=$true
 [OwnedFlowerForeground]::Sets=0
 function Request-BrowserDisplayConfirmation {throw 'TEST_ONLY_CANCELLED'}
 $refused=$false
-try{Show-VerifiedProfileWindow 52248}catch{if($_.Exception.Message -ne 'TEST_ONLY_CANCELLED'){throw};$refused=$true}
+try{Show-VerifiedProfileWindow 62788}catch{if($_.Exception.Message -ne 'TEST_ONLY_CANCELLED'){throw};$refused=$true}
 if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'cancelled confirmation was ignored or retried'}
 [OwnedFlowerForeground]::Sets=0
 function Request-BrowserDisplayConfirmation {[OwnedFlowerForeground]::Lost=$true;return 0.1}
 $refused=$false
-try{Show-VerifiedProfileWindow 52248}catch{if($_.Exception.Message -notmatch 'ownership changed'){throw};$refused=$true}
+try{Show-VerifiedProfileWindow 62788}catch{if($_.Exception.Message -notmatch 'ownership changed'){throw};$refused=$true}
 if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'window changed during confirmation was activated'}
 ''',encoding='utf-8-sig')
     result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=15)

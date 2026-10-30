@@ -87,13 +87,18 @@ public static class OwnedFlowerForeground {
 }
 "@
     }
-    $tree = @(Get-ProfileBrowserTree $RootPid)
-    $windows = @(foreach ($member in $tree) {
-        $p = Get-Process -Id $member -ErrorAction SilentlyContinue
-        if ($p -and $p.MainWindowHandle -ne 0) { $p }
-    })
-    if ($windows.Count -ne 1) { throw 'Selected profile must expose one visible browser window; no other window was activated.' }
-    $selected = $windows[0]
+    $windowClock = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        $tree = @(Get-ProfileBrowserTree $RootPid)
+        $windows = @(foreach ($member in $tree) {
+            $p = Get-Process -Id $member -ErrorAction SilentlyContinue
+            if ($p -and $p.MainWindowHandle -ne 0) { $p }
+        })
+        $selected = $windows | Sort-Object { $_.Id -ne $RootPid } | Select-Object -First 1
+        if ($selected) { break }
+        Start-Sleep -Milliseconds 250
+    } while ($windowClock.Elapsed.TotalSeconds -lt $WaitSeconds)
+    if (-not $selected) { throw '所选浏览器窗口尚未就绪，已保留环境，请稍后继续。' }
     $handle = $selected.MainWindowHandle
     $selectedStartedTicks = $selected.StartTime.ToUniversalTime().Ticks
     $confirmationSeconds = 0.0

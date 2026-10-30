@@ -609,8 +609,6 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         cached=compile_stage1_rules(cached)
         validate(cached)
         return cached
-    if not os.environ.get('DEEPSEEK_API_KEY', '').strip():
-        raise CategoryGenerationError('本机没有已运行的同品类规则；新品类需要 API key 才能生成规则')
     evidence = resolve_listing(category_name, report, bestsellers_url)
     report(stage='generating', message='榜单已核实，正在生成本品类文字和视觉规则', verified_listing_url=evidence['url'])
     from selection_automation.compact_authoring import authoring_prompt,expand,add_summary

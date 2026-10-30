@@ -721,8 +721,6 @@ class Console:
             body['api_key']=key
         try: count=worker_count(body.get('worker_count',4))
         except ValueError as exc: raise ConsoleError('INVALID_INPUT',str(exc)) from None
-        if not isinstance(name,str) or not name.strip() or len(name)>120 or any(ord(c)<32 for c in name):
-            raise ConsoleError('INVALID_INPUT','品类名称无效')
         if not isinstance(key,str) or (not key.strip() and not cached) or len(key)>4096 or any(ord(c)<32 for c in key):
             raise ConsoleError('INVALID_INPUT','API key无效')
         for field,maximum in [('amazon_count',100),('per_keyword',100000)]:
