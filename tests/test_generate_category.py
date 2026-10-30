@@ -89,11 +89,14 @@ def test_bottle_and_can_openers_keep_their_own_scope():
 def test_discovery_follows_actual_category_navigation_to_correct_leaf(monkeypatch):
     can = 'https://www.amazon.com/zgbs/kitchen/289757'
     parent = 'https://www.amazon.com/zgbs/kitchen/289754'
+    bar = 'https://www.amazon.com/zgbs/home-garden/760384'
     bottle = 'https://www.amazon.com/zgbs/kitchen/289467'
     pages = {
         can: {'url':can, 'heading':'Best Sellers in Manual Can Openers', 'rank_count':30,
               'links':[{'url':parent, 'text':'Kitchen Utensils & Gadgets'}]},
         parent: {'url':parent, 'heading':'Best Sellers in Kitchen Utensils & Gadgets', 'rank_count':30,
+                 'links':[{'url':bar, 'text':'Bar & Wine Tools'}]},
+        bar: {'url':bar, 'heading':'Best Sellers in Bar & Wine Tools', 'rank_count':30,
                  'links':[{'url':bottle, 'text':'Bottle Openers'}]},
         bottle: {'url':bottle, 'heading':'Best Sellers in Bottle Openers', 'rank_count':30},
     }
@@ -104,15 +107,15 @@ def test_discovery_follows_actual_category_navigation_to_correct_leaf(monkeypatc
     monkeypatch.setattr(generator, 'read_listing', read)
     monkeypatch.setattr(generator, 'search_listing_candidates', lambda _: {'candidates':[{'url':can}]})
     responses = iter([{'search_query':'bottle opener'}, {'url':can}, {'url':parent},
-                      {'matches':False}, {'url':bottle}, {'matches':True}])
+                      {'matches':False}, {'url':bar}, {'matches':False}, {'url':bottle}, {'matches':True}])
     prompts = []
     def model(prompt, **kwargs):
         prompts.append(prompt)
         return next(responses)
     monkeypatch.setattr(generator, 'model_json', model)
     assert generator.resolve_listing('开瓶器', lambda **kwargs:None)['url'] == bottle
-    assert visited == [can, parent, bottle]
-    assert parent in prompts[2] and bottle in prompts[4]
+    assert visited == [can, parent, bar, bottle]
+    assert parent in prompts[2] and bar in prompts[4] and bottle in prompts[6]
 
 
 @pytest.mark.parametrize('manual_url', [False, True])
@@ -132,7 +135,7 @@ def test_transfer_pump_rejects_engine_parts_before_rule_generation(monkeypatch, 
     with pytest.raises(generator.CategoryGenerationError, match='发动机内部机油泵配件') as error:
         generator.generate_category('抽油泵', 50, 400, bestsellers_url=evidence['url'] if manual_url else '')
     assert error.value.code == 'CATEGORY_SCOPE_MISMATCH'
-    assert len(prompts) == (0 if manual_url else 4)
+    assert len(prompts) == (0 if manual_url else 2)
 
 
 def test_transfer_scope_allows_correct_leaf_and_explicit_engine_request():

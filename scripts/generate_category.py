@@ -376,7 +376,7 @@ def category_intent(category_name):
 def validate_listing_intent(category_name, evidence):
     heading = str(evidence.get('heading') or '')
     if category_name.strip() == '开瓶器' and re.search(r'\b(?:can|tin|jar) openers?\b', heading, re.I):
-        raise CategoryGenerationError('榜单是开罐器或罐盖工具，与开瓶器不符；正在查找瓶盖开瓶器榜单',
+        raise CategoryGenerationError('开瓶器不能使用开罐器或罐盖工具榜单，请使用瓶盖开瓶器榜单',
                                       'CATEGORY_SCOPE_MISMATCH')
     if ('抽油泵' in category_name and category_intent(category_name) and re.search(r'\boil pumps\b', heading, re.I)
             and not re.search(r'transfer|siphon|barrel|hand', heading, re.I)):
@@ -430,7 +430,7 @@ def resolve_listing(category_name, report, bestsellers_url=''):
     decision=model_json(source_prompt,max_tokens=800,retry_truncated=False)
     seen = set()
     last_scope_error = None
-    for attempt in range(1, 4):
+    for attempt in range(1, 5):
         url = (decision.get('url') or decision.get('bestsellers_url')) if isinstance(decision, dict) else None
         canonical = listing_identity(url)
         node = re.search(r'/zgbs/[^/]+/(\d+)$', canonical or '')
@@ -482,7 +482,9 @@ def resolve_listing(category_name, report, bestsellers_url=''):
         elif node:
             problem = ('This numeric category node was already rejected; changing its department or tracking path does not fix it.'
                 if node[1] in seen else 'This node is absent from live search evidence. Choose an actual supplied node ID.')
-        if attempt < 3:
+        if allowed_nodes <= seen:
+            break
+        if attempt < 4:
             report(stage='discovering', depth=attempt+1, route=route, message='榜单链接未通过核实，正在通过 API 自动修正')
             decision = model_json(source_prompt + '\nRejected response and actual evidence: ' + json.dumps({
                 'response':decision, 'problem':problem, 'rejected_nodes':sorted(seen),
