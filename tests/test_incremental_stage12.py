@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from concurrent.futures import CancelledError
 from unittest.mock import patch
 from pathlib import Path
 
@@ -396,6 +397,31 @@ class IncrementalStage12Tests(unittest.TestCase):
             self.assertEqual(parallel.status()["text_gate_workers"], 2)
         finally:
             parallel.close()
+
+    def test_completed_vector_batches_survive_stop_and_are_reused(self):
+        for path in (self.a1, self.a2, self.t2):
+            with Image.open(path) as image:
+                resized = image.resize((64, 64))
+            resized.save(path)
+        products = [normalize_record(self.front(f'T{i}', 'curtain', image), platform='TEMU', source_key='front', adapter='temu_frontend')
+                    for i, image in enumerate((self.a1, self.a2, self.t2))]
+        self.pipeline.vector_batch_size = 2
+        self.pipeline._prefetch_images(products)
+        original_encode = self.vectorizer.encode_many
+        saved_before_stop = []
+        def interrupted_encode(paths):
+            if self.vectorizer.batch_calls:
+                saved_before_stop.append(self.pipeline.con.execute('SELECT count(*) FROM vectors').fetchone()[0])
+                raise CancelledError('normal user stop')
+            return original_encode(paths)
+        with patch.object(self.vectorizer, 'encode_many', interrupted_encode):
+            with self.assertRaises(CancelledError):
+                self.pipeline._prefetch_vectors(products)
+        self.assertEqual(saved_before_stop, [2])
+        self.assertEqual(self.vectorizer.calls, 2)
+        self.pipeline._prefetch_vectors(products)
+        self.assertEqual(self.vectorizer.calls, 3)
+        self.assertEqual(self.pipeline.con.execute("SELECT count(*) FROM vectors WHERE status='READY'").fetchone()[0], 3)
 
 
 if __name__ == "__main__": unittest.main()

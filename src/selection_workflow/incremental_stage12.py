@@ -1096,10 +1096,11 @@ class IncrementalStage12:
             return errors, time.monotonic() - started
 
         items = list(missing.items())
-        successes: list[tuple[str, np.ndarray]] = []
         for offset in range(0, len(items), self.vector_batch_size):
             self._raise_if_stopped()
             chunk = items[offset:offset + self.vector_batch_size]
+            successes: list[tuple[str, np.ndarray]] = []
+            chunk_errors: dict[str, Exception] = {}
             try:
                 encode_many = getattr(self.vectorizer, "encode_many", None)
                 if encode_many:
@@ -1135,18 +1136,18 @@ class IncrementalStage12:
                     except CancelledError:
                         raise
                     except Exception as exc:
-                        errors[content_hash] = exc
-        self._raise_if_stopped()
-        with self.con:
-            self.con.executemany("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)", [
-                (content_hash, self.vectorizer.revision, int(vector.size), vector.tobytes(), "READY", None, utcnow())
-                for content_hash, vector in successes
-            ])
-            self.con.executemany("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)", [
-                (content_hash, self.vectorizer.revision, None, None, "FAILED", str(exc), utcnow())
-                for content_hash, exc in errors.items()
-            ])
-            self._inc("vectors_computed", len(successes))
+                        chunk_errors[content_hash] = exc
+            with self.con:
+                self.con.executemany("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)", [
+                    (content_hash, self.vectorizer.revision, int(vector.size), vector.tobytes(), "READY", None, utcnow())
+                    for content_hash, vector in successes
+                ])
+                self.con.executemany("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)", [
+                    (content_hash, self.vectorizer.revision, None, None, "FAILED", str(exc), utcnow())
+                    for content_hash, exc in chunk_errors.items()
+                ])
+                self._inc("vectors_computed", len(successes))
+            errors.update(chunk_errors)
         return errors, time.monotonic() - started
 
     def _ensure_image(self, product: dict[str, Any]) -> tuple[str, Path, bool]:

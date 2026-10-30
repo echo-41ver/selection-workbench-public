@@ -111,6 +111,7 @@ for(const haul of [false,true]) test(`real detail parser captures ${haul?'Haul':
       headers:()=>({'content-type':'image/png'}),body:async()=>imageBytes,dispose:async()=>{}})}};
     await context.route('https://www.amazon.com/**',route=>route.fulfill({contentType:'text/html',body:`
       <h1 id="productTitle">Drill</h1><div id="corePriceDisplay_desktop_feature_div"><span class="a-offscreen">CNY 600.00</span></div>
+      ${haul?'<div id="haulAverageCustomerReviewsContainer"><span class="a-color-base a-text-bold">4.0</span><span id="haul-number-of-reviews">(404)</span></div>':'<span id="acrPopover" title="4.0 out of 5 stars"></span><span id="acrCustomerReviewText">404 ratings</span>'}
       ${haul?`<div id="haul-productFacts-desktop-expander">
         <div class="haul-productFacts-desktop-row"><span class="haul-productFacts-desktop-label">Brand Name:</span><span class="haul-productFacts-desktop-value">DEWALT</span></div>
         <div class="haul-productFacts-desktop-row"><span class="haul-productFacts-desktop-label">Voltage:</span><span class="haul-productFacts-desktop-value">20 volts</span></div>
@@ -121,7 +122,7 @@ for(const haul of [false,true]) test(`real detail parser captures ${haul?'Haul':
     `}));
     const source=await fs.readFile(new URL('../scripts/collect_amazon_search_frontend.mjs',import.meta.url),'utf8');
     const facts=source.slice(source.indexOf('async function detailFacts('),source.indexOf('const browser ='));
-    const sandbox=vm.createContext({context:detailContext,record:{asin:'B00ET5VMTU',product_url:'https://www.amazon.com/dp/B00ET5VMTU',price_usd:92.09},
+    const sandbox=vm.createContext({context:detailContext,record:{asin:'B00ET5VMTU',product_url:'https://www.amazon.com/dp/B00ET5VMTU',price_usd:92.09,review_count:405404},
       inspectAmazonPage,openAmazonDetail,amazonDetailBlock,amazonUsdPrice,selectAmazonMainImage,sanitizeAmazonDiagnostic,
       qualifyAmazonDetail,inspectAmazonImage,
       isHttps:value=>String(value || '').startsWith('https://'),clean:value=>String(value).trim()});
@@ -130,5 +131,26 @@ for(const haul of [false,true]) test(`real detail parser captures ${haul?'Haul':
     assert.equal(value.detail_status,'详情页已采集');assert.equal(value.brand,'DEWALT');
     assert.equal(value.specifications.length,3);assert.equal(value.specifications[1].value,'20 volts');
     assert.equal(value.price_usd,92.09);assert.equal(value.detail_price_text,'CNY 600.00');
+    assert.equal(value.rating,4);assert.equal(value.review_count,404);
+  } finally {await browser.close();}
+});
+
+for(const ranking of [false,true]) test(`real ${ranking?'bestseller':'search'} cards keep star rating separate from review count`,async()=>{
+  const browser=await launchBrowser();
+  try {
+    const page=await browser.newPage();
+    await page.setContent(`<div class="zg-grid-general-faceout" data-component-type="s-search-result" data-asin="B0GC66Q4NB">
+      <span class="zg-bdg-ctr">#2</span><h2><a href="https://www.amazon.com/dp/B0GC66Q4NB">Magnetic Bottle Opener</a></h2>
+      <a href="https://www.amazon.com/product-reviews/B0GC66Q4NB"><span class="a-icon-alt">4.0 out of 5 stars</span></a>
+      <a href="https://www.amazon.com/product-reviews/B0GC66Q4NB"><span>404</span></a></div>`);
+    const source=await fs.readFile(new URL('../scripts/collect_amazon_search_frontend.mjs',import.meta.url),'utf8');
+    const start=ranking?'async function collectBestSellerCards(':'async function collectSearchCards(';
+    const end=ranking?'async function detailFacts(':'async function collectBestSellerCards(';
+    const sandbox=vm.createContext({page,targetCount:2,searchUrl:'https://www.amazon.com/best-sellers/',
+      openAmazonRanking:async()=>{},inspectAmazonPage});
+    page.goto=async()=>({status:()=>200});page.waitForTimeout=async()=>{};
+    vm.runInContext(source.slice(source.indexOf(start),source.indexOf(end)),sandbox);
+    const rows=await vm.runInContext(`${ranking?'collectBestSellerCards':'collectSearchCards'}(page)`,sandbox);
+    assert.equal(rows.length,1);assert.equal(rows[0].rating,4);assert.equal(rows[0].review_count,404);
   } finally {await browser.close();}
 });

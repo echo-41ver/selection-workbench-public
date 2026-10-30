@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+import pytest
 from types import SimpleNamespace
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
@@ -31,6 +32,18 @@ def test_dead_local_watchers_restart_without_starting_collection_or_models(tmp_p
     assert calls[1][2]=='watch'
     assert all('stage3' not in str(arg) and 'collect' not in str(arg) for cmd in calls for arg in cmd)
     assert json.loads((base/'local_service_recovery.json').read_text('utf-8'))['model_requests']==0
+
+
+@pytest.mark.parametrize('state',['运行中','启动准备失败'])
+def test_recovery_defers_to_bootstrap_then_resumes_after_environment_ready(tmp_path,state):
+    base,watcher,calls=fixture(tmp_path)
+    status=base/'status.json'
+    status.write_text(json.dumps({'阶段':{'bootstrap':{'状态':state}}}))
+    watcher.step()
+    assert not calls
+    status.write_text(json.dumps({'阶段':{'bootstrap':{'状态':'启动准备完成'}}}))
+    watcher.step()
+    assert len(calls)==2
 
 
 def test_live_or_unknown_owned_service_is_never_restarted(tmp_path):

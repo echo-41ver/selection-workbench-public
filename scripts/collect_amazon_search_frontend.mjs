@@ -64,7 +64,8 @@ async function collectSearchCards(page) {
     const image = card.querySelector('img.s-image')?.currentSrc || card.querySelector('img.s-image')?.src || null;
     const priceText = text('.a-price .a-offscreen');
     const ratingText = card.querySelector('.a-icon-alt')?.textContent || '';
-    const reviewText = text('a[href*="customerReviews"] span, a[href*="product-reviews"] span');
+    const reviewText = [...card.querySelectorAll('a[href*="customerReviews"], a[href*="product-reviews"]')]
+      .filter(node => !node.querySelector('.a-icon-alt')).map(node => node.textContent.trim()).find(Boolean) || '';
     return {
       rank: index + 1,
       asin,
@@ -108,7 +109,8 @@ async function collectBestSellerCards(page, url = searchUrl) {
     const imageNode = card.querySelector('img.p13n-product-image, img');
     const image = imageNode?.currentSrc || imageNode?.src || imageNode?.getAttribute('data-src') || null;
     const ratingText = card.querySelector('.a-icon-alt')?.textContent || '';
-    const reviewText = [...card.querySelectorAll('a[href*="product-reviews"], a[href*="customerReviews"]')].map(node => node.textContent || '').join(' ');
+    const reviewText = [...card.querySelectorAll('a[href*="product-reviews"], a[href*="customerReviews"]')]
+      .filter(node => !node.querySelector('.a-icon-alt')).map(node => node.textContent.trim()).find(Boolean) || '';
     const priceText = [...card.querySelectorAll('.a-color-price, [class*="p13n-sc-price"], .a-price .a-offscreen')].map(node => node.textContent || '').find(Boolean) || '';
     return {
       rank,
@@ -156,8 +158,8 @@ async function detailFacts(context, record, attempt = 1) {
         const href=review.querySelector('a[href*="/gp/customer-reviews/"]')?.href;
         if(rating>=1&&rating<=2&&text&&href)negativeReviews.push({rating,text:text.slice(0,1000),source_url:href});
       }
-      const ratingText = document.querySelector('#acrPopover')?.getAttribute('title') || first('#acrPopover .a-icon-alt');
-      const reviewText = first('#acrCustomerReviewText');
+      const ratingText = document.querySelector('#acrPopover')?.getAttribute('title') || first('#acrPopover .a-icon-alt', '#haulAverageCustomerReviewsContainer .a-color-base.a-text-bold');
+      const reviewText = first('#acrCustomerReviewText', '#haul-number-of-reviews');
       const specs = [];
       const add = (label, value) => {
         const key = cleanText(label).replace(/:$/, ''); const content = cleanText(value);
