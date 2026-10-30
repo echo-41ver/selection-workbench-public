@@ -104,6 +104,9 @@ for (const solved of [true, false]) {
       <div id="challenge" class="captcha" hidden>请拖动滑块</div>
       <button id="authorize" hidden onclick="window.authorized=true;this.remove()">确认授权</button>`);
     let closed = false, submissions = 0, authorized = false;
+    const startedAt = Date.now();
+    let elapsed = 0;
+    t.mock.method(Date, 'now', () => startedAt + elapsed);
     t.mock.method(page, 'goto', async () => ({status: () => 200}));
     t.mock.method(chromium, 'launchPersistentContext', async () => ({
       setDefaultTimeout: timeout => page.setDefaultTimeout(timeout), pages: () => [page],
@@ -119,6 +122,7 @@ for (const solved of [true, false]) {
       await page.waitForFunction(() => window.submissions === 1);
       await page.waitForTimeout(700);
       assert.equal(closed, false);
+      elapsed = solved ? 700 : 1500;
       if (solved) await page.evaluate(() => {
         document.querySelector('#challenge').remove();
         document.querySelector('#phone').remove();
