@@ -1065,9 +1065,9 @@ function showPage(page){
  for(const name of ['create','monitor','results','history'])$(name+'-panel').hidden=name!==page;
  for(const button of document.querySelectorAll('[data-page]'))button.setAttribute('aria-selected',String(button.dataset.page===page));
  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);
- const next=$('next-step');if(next)next.hidden=page!=='create';placeDraftEditor();if(page==='history')loadHistory();
+ const next=$('next-step');if(next)next.hidden=page!=='create';placeDraftEditor();if(page==='history'){loadHistory();if(historySelectedKey)openHistory(historySelectedKey);}
 }
-let historyLoading=false,historyRequest=0,historyRetry,historyDetailRetry;
+let historyLoading=false,historyRequest=0,historyRetry,historyDetailRetry,historySelectedKey;
 async function historyJSON(path){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
  try{const response=await fetch(path,{cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'历史记录读取失败');return data;}
@@ -1098,7 +1098,7 @@ function historyExcelLinks(key,files){
  }
  return links;
 }
-async function openHistory(key){const request=++historyRequest;
+async function openHistory(key){historySelectedKey=key;const request=++historyRequest;
  clearTimeout(historyDetailRetry);
  const box=$('history-detail');box.replaceChildren();box.textContent='正在读取历史结果…';
  const restoreButton=()=>{const button=document.createElement('button');button.type='button';button.textContent='恢复到工作区';button.addEventListener('click',()=>action('/api/restore',{category_key:key}));return button;};
