@@ -496,6 +496,25 @@ def test_listing_scope_uses_real_products_instead_of_shared_storage_heading(monk
     assert bags[0]['title'] in prompts[3] and boxes[0]['title'] in prompts[4]
 
 
+def test_mismatched_category_can_follow_observed_department_without_accepting_it(monkeypatch):
+    bad='https://www.amazon.com/zgbs/office-products/1069646'
+    department='https://www.amazon.com/Best-Sellers-Office-Products/zgbs/office-products'
+    good='https://www.amazon.com/zgbs/office-products/900001'
+    pages={bad:{'url':bad,'heading':'Best Sellers in Supply Organizers','rank_count':30,
+                'links':[{'url':department,'text':'Office Products'}]},
+           department:{'url':department,'heading':'Best Sellers in Office Products','rank_count':30,
+                       'links':[{'url':good,'text':'Desk Organizers'}]},
+           good:{'url':good,'heading':'Best Sellers in Desk Organizers','rank_count':30,'links':[]}}
+    answers=iter([{'search_query':'desktop storage box'},{'url':bad},{'matches':False},
+                  {'url':department},{'url':good},{'matches':True}])
+    reads=[]
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _:{'candidates':[{'url':bad}]})
+    monkeypatch.setattr(generator,'read_listing',lambda url:(reads.append(url) or pages[url]))
+    monkeypatch.setattr(generator,'model_json',lambda *a,**kw:next(answers))
+    assert generator.resolve_listing('桌面收纳盒',lambda **kw:None)==pages[good]
+    assert reads==[bad,department,good]
+
+
 def test_direct_api_link_corrected_without_directory_walk_or_revisiting(monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','fixture-secret')
     wrong='https://www.amazon.com/zgbs/pc/172493'
