@@ -694,6 +694,9 @@ def worker_snapshot(base, name):
     if worker.get('status')=='WAITING_BROWSER_CONTROL_RECOVERY': code=worker['status']
     if replacing or worker.get('status') in {'SESSION_REPLACED','RESUMING','STARTING','WORKER_COMPLETE','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY','WAITING_INITIAL_PRODUCTS_RETRY'}: code=worker['status']
     recovery=collector_block(code)
+    if not recovery and progress.get('collector_paused') is True:
+        recovery={'reason':code,'action':'请处理当前浏览器的采集暂停原因，确认后手动恢复；浏览器和断点已保留',
+                  'verify_to_resume':False}
     if not recovery and worker.get('status')=='HUMAN_ACTION_REQUIRED':
         recovery={'reason':'采集阻断，等待人工处理','action':worker.get('recovery_action','请检查当前浏览器；确认当前关键词商品页正常后继续'),'verify_to_resume':worker.get('verify_to_resume',True)}
     waiting={

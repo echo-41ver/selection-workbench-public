@@ -1707,6 +1707,7 @@ async function prepareLocalWarehouseFilter() {
     }
   };
   localWarehouseFilter=await selectLocalWarehouse({inspect:readLocalWarehouse,query:QUERY,sleep,guard,initialEvidence:localWarehouseFilter,
+    reload:()=>wd('POST','/refresh',{}),
     onAction:action=>appendEvent('LOCAL_WAREHOUSE_CONTROL_ACTION',action),
     onRetry:retry=>appendEvent('LOCAL_WAREHOUSE_CONTROL_RETRY',retry),
     click:element=>clickSalesSortControl({element,execute,sleep,click:current=>wd('POST',`/element/${current[EKEY]}/click`,{})})});

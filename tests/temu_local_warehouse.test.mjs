@@ -30,6 +30,28 @@ test('missing filter fails closed and CAPTCHA guard prevents interaction',async(
  await assert.rejects(()=>selectLocalWarehouse({query,inspect:async()=>({url,option:'checkbox'}),guard:async()=>{throw Error('CAPTCHA');},sleep:async()=>{},click:async()=>assert.fail('blocked')}),/CAPTCHA/);
  assert.equal(confirmsLocalWarehouse({...selected(),url:'https://www.temu.com/search_result.html?search_key=mouse'},query),false);
 });
+
+test('a search missing its filter bar reloads once then still requires checked and applied warehouse results',async()=>{
+ let phase=0,reloads=0;const actions=[];
+ const result=await selectLocalWarehouse({query,guard:async()=>{},sleep:async()=>{},
+  reload:async()=>{reloads++;phase=1;},
+  inspect:async()=>({url:phase>=3?url+'&filter_items=400%3A1':url,
+   goods_ids:phase===4?['local-product']:['unfiltered-product'],
+   selected:phase===3,explicit:phase===2||phase===3,filter_group:phase>=2?'400':null,
+   menu:phase===1?'menu':null,option:phase===2?'checkbox':null,
+   dialog_open:phase===2||phase===3,apply:phase===3?'apply':null}),
+  click:async control=>{actions.push(control);phase++;}});
+ assert.equal(reloads,1);assert.deepEqual(actions,['menu','checkbox','apply']);
+ assert.equal(result.state,'UI_CONFIRMED');assert.equal(result.filter_item,'400:1');
+});
+
+test('one reload cannot turn a persistently missing filter into success',async()=>{
+ let reloads=0;
+ const result=await selectLocalWarehouse({query,guard:async()=>{},sleep:async()=>{},
+  inspect:async()=>({url,goods_ids:['unfiltered-product']}),
+  reload:async()=>{reloads++;},click:async()=>assert.fail('no filter control')});
+ assert.equal(reloads,1);assert.equal(result.state,'UNCONFIRMED');
+});
 test('applied results can unmount the radio; filter reset invalidates the observed proof',async()=>{
  let applied=false;const filterUrl=url+'&filter_items=400%3A1%7C0%3A1';
  const result=await selectLocalWarehouse({query,guard:async()=>{},sleep:async()=>{},

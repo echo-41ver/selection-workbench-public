@@ -106,6 +106,44 @@ def test_first_screen_wait_is_not_reported_as_zero_or_complete(tmp_path):
     assert selection.supervision_status({'worker1': view})['阻断阶段'] == []
 
 
+@pytest.mark.parametrize('worker_status', ['RUNNING', 'HUMAN_ACTION_REQUIRED'])
+@pytest.mark.parametrize('child_status', ['absent', 'exited', 'running'])
+def test_explicit_collector_pause_waits_for_manual_resume(tmp_path, monkeypatch, worker_status, child_status):
+    monkeypatch.setattr(selection, 'ROOT', tmp_path)
+    status = '本地仓筛选失败，需要处理'
+    worker, output = worker_fixture(tmp_path, status, worker_status=worker_status,
+        collector_paused=True, manual_action_required=True, automatic_retry=False,
+        browser_preserved=True, unique_goods=0)
+    worker['completed_passes'] = [{'query':query, 'sort':sort}
+        for query in ('first query', 'second query') for sort in ('sales', 'recent')]
+    worker_path = tmp_path/'temu/supervisors/worker1.json'
+    write(worker_path, worker)
+    checkpoint = output/'products.jsonl'
+    checkpoint.write_text('{"goods_id":"retained"}\n', encoding='utf-8')
+    retained = {path:path.read_bytes() for path in (worker_path, output/'progress.json', checkpoint)}
+    children = {} if child_status == 'absent' else {'worker1':SimpleNamespace(
+        pid=123, poll=lambda:None if child_status == 'running' else 1)}
+    finished = {'worker1'}; attempts = {'worker1':2}; next_at = {'worker1':100}; state = {}
+    def no_verify(*args):
+        pytest.fail('Visible product cards must not automatically resume an explicitly paused collector')
+    for _ in range(3):
+        assert selection.hold_blocked_worker(tmp_path, {'name':'worker1'}, children=children,
+            finished=finished, attempts=attempts, next_at=next_at, state=state, verify=no_verify)
+        view = state['worker1']
+        assert view['采集状态'] == status and view['需人工介入'] and view['浏览器保留']
+        assert view['已完成关键词'] == ['corded drill'] and view['唯一商品数'] == 0
+        assert not finished and attempts == {'worker1':2} and next_at == {'worker1':100}
+        assert all(path.read_bytes() == before for path,before in retained.items())
+    if child_status != 'running':
+        # Explicit recovery can still request this same query and checkpoint.
+        write(worker_path, {**worker, 'status':'RESUMING', 'manual_action_required':False})
+        assert not selection.hold_blocked_worker(tmp_path, {'name':'worker1'}, children=children,
+            finished=finished, attempts=attempts, next_at=next_at, state=state, verify=no_verify)
+        assert attempts == {'worker1':0} and next_at == {'worker1':0}
+        assert (output/'progress.json').read_bytes() == retained[output/'progress.json']
+        assert checkpoint.read_bytes() == retained[checkpoint]
+
+
 def test_recovered_worker_clears_previous_verification_advice(tmp_path):
     _, output = worker_fixture(tmp_path, 'WAITING_CAPTCHA', unique_goods=37)
     _, previous, recovery = selection.worker_snapshot(tmp_path, 'worker1')
