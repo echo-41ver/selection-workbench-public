@@ -69,15 +69,16 @@ def model_http_error(error, key):
         ('；服务返回：'+detail if detail else ''),f'MODEL_HTTP_{error.code}')
 
 
-def compile_generated_policy(config, *, model=None):
+def compile_generated_policy(config, *, model=None, policy_repair=None):
     """Validate semantics and normalize bounded repair replies without replacing a category."""
     from selection_automation.identity_policy import VERSION
+    from selection_automation.compact_authoring import apply_policy_repair
     model = model or model_json
     def compile_authoring(value):
         return compile_stage1_rules(compile_policy(value))
     try:
-        result = compile_authoring(config)
-        repaired = False
+        result = compile_authoring(apply_policy_repair(config,policy_repair) if policy_repair is not None else config)
+        repaired = policy_repair is not None
     except (ValueError, TypeError, KeyError) as error:
         source = {'category': config.get('category_name_zh'),
                   'attributes': config['stage1'].get('attributes'),
@@ -94,7 +95,6 @@ def compile_generated_policy(config, *, model=None):
             '\n已确认品类依据：' + json.dumps(reviewed_profile(config), ensure_ascii=False) +
             '\n契约：' + json.dumps(category_contract()['field_requirements']['stage3.identity_policy'], ensure_ascii=False) +
             '\n校验失败：' + str(error)[:220] + '\n当前草稿：' + json.dumps(source, ensure_ascii=False))
-        from selection_automation.compact_authoring import apply_policy_repair
         for attempt in range(2):
             proposal=model(prompt,max_tokens=6000,retry_truncated=False)
             if MODEL_PROGRESS_REPORTER:
@@ -656,7 +656,7 @@ def ensure_subject_rules(config,evidence,*,allow_model=True,model=None):
     return validate_subject_rules(result)
 
 
-def generate_category(category_name: str, amazon_count: int, temu_count: int, *, progress=None, bestsellers_url='',reuse_approved=False,draft_store=None) -> dict:
+def generate_category(category_name: str, amazon_count: int, temu_count: int, *, progress=None, bestsellers_url='',reuse_approved=False,draft_store=None,policy_repair=None) -> dict:
     report = progress or (lambda **fields: None)
     if not category_name.strip() or len(category_name) > 120 or not 1 <= amazon_count <= 100 or temu_count < 1:
         raise CategoryGenerationError('请输入品类、Amazon 数量 1–100 和正整数采集条数')
@@ -695,6 +695,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
             try:receipt=json.loads(cache.read_text('utf-8'))
             except (OSError,ValueError):pass
     proposal=receipt.get('proposal') if receipt.get('scope')==scope else None
+    reused_proposal=proposal is not None
     if proposal is not None:
         report(stage='validating',message='复用本次已接收的规则稿，正在本地编译，不重复请求品类模型')
     if proposal is None:
@@ -720,7 +721,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         if not config['stage3'].get('visual_instructions'):
             raise ValueError()
         config['stage3'].update(provider='deepseek', model='deepseek-flash', base_url='https://api.deepseek.com')
-        config = compile_generated_policy(config)
+        config = compile_generated_policy(config,policy_repair=policy_repair if reused_proposal else None)
         config = generated_threshold(config)
         config = apply_reviewed_recall_aliases(config)
         config = ensure_subject_rules(config,evidence,allow_model=False)
@@ -782,8 +783,13 @@ def main():
         report(**{**last,**fields})
     MODEL_PROGRESS_REPORTER=model_progress
     try:
-        config = generate_category(args.category_name, args.amazon_count, args.temu_count, progress=report, bestsellers_url=args.bestsellers_url,reuse_approved=not args.fresh_rules,
-            draft_store=args.output.parent/'generated-rule-drafts')
+        repair_file=args.output.with_suffix('.policy-repair.json')
+        saved_repair=json.loads(repair_file.read_text('utf-8')) if not args.fresh_rules and repair_file.is_file() else None
+        listing_url=args.bestsellers_url
+        if saved_repair is not None and not listing_url and args.status_file and args.status_file.is_file():
+            listing_url=json.loads(args.status_file.read_text('utf-8')).get('verified_listing_url','')
+        config = generate_category(args.category_name, args.amazon_count, args.temu_count, progress=report, bestsellers_url=listing_url,reuse_approved=not args.fresh_rules,
+            draft_store=args.output.parent/'generated-rule-drafts',policy_repair=saved_repair)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         temporary = args.output.with_suffix('.tmp')
         temporary.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')

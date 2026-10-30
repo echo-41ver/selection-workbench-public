@@ -22,6 +22,8 @@ def validate_semantic_boundary(features):
     by_id = {f['id']: f for f in features}
     for feature in features:
         physical_change = set(feature['effects']) & STRUCTURAL_EFFECTS
+        if feature['region'] == 'decoration':
+            physical_change.discard('transparency')
         if feature['role'] == 'variant' and physical_change and feature['region'] != 'packaging':
             raise ValueError(
                 '结构特征不能整项设为允许变体：' + feature['id'] +

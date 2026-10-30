@@ -277,6 +277,16 @@ def test_policy_repair_is_once_and_preserves_collection_configuration():
     assert 'required_visual' not in broken['stage3']['identity_policy']['features'][0]
 
 
+def test_saved_policy_repair_compiles_without_repeating_paid_request():
+    original=fixture_config();broken=fixture_config()
+    broken['stage3']['identity_policy']=None
+    saved={'identity_policy':original['stage3']['identity_policy'],'attributes':original['stage1']['attributes']}
+    result=generator.compile_generated_policy(broken,policy_repair=saved,
+        model=lambda *a,**kw:pytest.fail('completed policy repair was billed again'))
+    assert result['amazon']==original['amazon'] and result['temu']==original['temu']
+    assert result['stage3']['identity_policy_generation']['repair_used'] is True
+
+
 def test_unusable_policy_repair_stops_after_bounded_retry_without_fallback():
     broken = fixture_config(); broken['stage3']['identity_policy'] = None
     calls = []

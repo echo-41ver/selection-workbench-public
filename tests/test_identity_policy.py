@@ -32,6 +32,24 @@ def category(name='台灯'):
     return c
 
 
+def test_decorative_transparent_finish_preserves_container_structure():
+    c=category('桌面收纳盒')
+    c['stage3']['identity_policy']['features'][1].update(
+        region='decoration',effects=['surface_texture','color','transparency'],
+        scope='盒体表面透明或哑光处理',rule='仅表面处理可变，盒体形状和分格结构必须保留')
+    result=compile_policy(c)
+    assert result['stage3']['variant_fields']==['finish']
+    assert result['stage3']['identity_required_modules']==['body']
+
+
+@pytest.mark.parametrize('region,effects',[('body',['transparency']),('component',['transparency']),('decoration',['shape'])])
+def test_finish_exception_does_not_allow_structural_variations(region,effects):
+    c=category('桌面收纳盒')
+    c['stage3']['identity_policy']['features'][1].update(region=region,effects=effects)
+    with pytest.raises(ValueError,match='结构特征'):
+        compile_policy(c)
+
+
 @pytest.mark.parametrize('name', ['台灯', '收纳箱', '宠物食盆', '遥控器', '电钻'])
 def test_new_categories_share_compiler_not_towel_templates(name):
     c = compile_policy(category(name))
