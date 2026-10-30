@@ -68,15 +68,6 @@ label:has(>input[type="checkbox"]),label:has(>input[type="radio"]){display:flex;
 <div class="two"><div><label for="api-base-url">API 服务地址 / 端口（Base URL）</label><input id="api-base-url" type="url" value="https://api.deepseek.com" autocomplete="off" spellcheck="false" placeholder="https://你的服务地址/v1"></div><div><label for="api-model">规则生成模型名</label><input id="api-model" value="deepseek-flash" maxlength="200" autocomplete="off" spellcheck="false" placeholder="填写服务商提供的模型 ID"></div></div><p class="small">支持 Chat Completions 和 Responses 接口。可填写完整的 /chat/completions 或 /responses 地址；DaiTu 的 GPT 模型自动使用原生 Responses。规则准备会调用付费 API；收到请求后即可能计费，回答中断或截断不会自动重复提交。</p>
 </details><div class="actions"><button class="primary" id="start" type="submit">生成规则与关键词</button></div>
 </form>
-<details id="captcha-settings" class="notice"><summary>自动验证码 · 2Captcha（付费服务）</summary>
-<p class="small">启用后，程序后台优先处理已适配验证码，保留原浏览器和断点。未适配题型、余额不足或失败会暂停自动解题。Key 仅保存在本机加密配置中。</p>
-<label><input id="captcha-enabled" type="checkbox"> 启用自动解题</label>
-<label for="captcha-key">2Captcha API Key</label><input id="captcha-key" type="password" autocomplete="off" placeholder="尚未配置；已有 Key 时留空保留">
-<div class="two"><div><label for="captcha-max">每任务最多提交次数</label><input id="captcha-max" type="number" min="1" max="100" value="10"></div><div><label for="captcha-budget">任务预算阈值（美元）</label><input id="captcha-budget" type="number" min="0.01" max="10" step="0.01" value="0.10"></div></div>
-<p class="small">默认每题预留 $0.01，最多 10 次；未变化的题目只提交一次。预算预留与余额变化用于停止新增请求，服务端实际计费以 2Captcha 账单为准。</p>
-<button id="captcha-save" type="button">保存验证码配置</button><p id="captcha-settings-status" role="status" aria-live="polite">正在读取配置…</p>
-</details>
-
 <section id="task-preparation-settings"><p id="runtime-version" class="small"></p><p id="network-readiness" class="notice" aria-live="polite"></p><div id="local-proxy-choice" hidden><label>检测到多个出口，请选择 <select id="local-proxy-endpoint"></select></label><button id="local-proxy-save" type="button">准备时使用所选出口</button><span id="local-proxy-choice-result" class="small"></span></div></section><section id="draft-editor" class="review-divider" hidden><h2>确认任务</h2><p class="small">生成时会先采集 Amazon 前 N 名并从商品标题提炼关键词。确认规则与分配后，点击运行，所选路数的 TEMU 采集及第一、二层分析自动开始。第三层需单独点击付费按钮。</p><div class="notice draft-source"><strong id="draft-category"></strong><div id="draft-title"></div><a id="draft-url" target="_blank" rel="noopener noreferrer"></a></div><details id="draft-keyword-details" class="notice"><summary id="draft-keyword-summary">采集关键词（自动生成，展开查看）</summary><div id="draft-keywords" aria-live="polite"></div></details>
 <details class="review-divider"><summary>调整同款规则（可选）</summary><label for="plain-rule">第一层 · 文字筛选要求（通俗版）</label><p class="small">只看商品标题和文字介绍：哪些明确差异要排除，哪些可以保留。</p><textarea id="plain-rule" placeholder="例如：文字没有明确写材质时先保留，不要直接排除。"></textarea><button id="apply-plain" type="button">解释 / 应用第一层要求</button><div id="plain-status-stage1" class="notice" role="status" aria-live="polite" hidden></div>
 <label for="plain-rule3">第三层 · 图片同款判断要求（通俗版）</label><p class="small">先看整体是不是同一基础款，再看具体图案、结构和套装构成。两边对应部位都清楚，一边有关键特征、另一边确实没有，就是不同款；关键身份部位被挡住、无法辨认款式才保留未知；主体已能清楚辨认时，局部遮挡不自动降为待复核。模块分数只作辅助，明确差异不能被高分抵消。允许的颜色、包装或花纹变化按品类规则判断：浴巾主体织法、构造及阴刻位置布局对应时可允许花纹变化；浴帘整幅印花不同仍属不同款。</p><textarea id="plain-rule3" placeholder="例如：图案和结构必须一致；拍摄角度、背景和光线不同可以接受；被遮挡的部分不要猜。" style="min-height:190px"></textarea><button id="apply-plain3" type="button">解释 / 应用第三层要求</button><div id="plain-status-stage3" class="notice" role="status" aria-live="polite" hidden></div><div id="plain-changes" class="notice" role="status">两个框独立应用。留空点击对应按钮可解释当前规则；应用后仍需手动运行。</div>
@@ -1228,13 +1219,6 @@ window.addEventListener('online',poll);
 updateControls();poll();setInterval(poll,1500);
 </script>
 <script>document.getElementById('local-proxy-save').addEventListener('click',async()=>{const output=document.getElementById('local-proxy-choice-result');try{const endpoint=JSON.parse(document.getElementById('local-proxy-endpoint').value);const response=await fetch('/api/network/proxy-choice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(endpoint)});const result=await response.json();output.textContent=result.message||result.error?.message||'选择未保存，请重试';}catch{output.textContent='选择未保存，请重试';}});
-</script>
-<script>
-(()=>{const byId=id=>document.getElementById(id);let loaded=false;
-const display=data=>{byId('captcha-enabled').checked=data.enabled;byId('captcha-max').value=data.max_requests;byId('captcha-budget').value=data.budget_usd;byId('captcha-key').placeholder=data.key_configured?'已加密保存；留空保留原 Key':'尚未配置';byId('captcha-settings-status').textContent=data.status==='READY'?'自动解题已启用；遇到验证码时由程序后台处理。':data.status==='DISABLED'?'自动解题已关闭。':'未配置 Key；遇到验证码保留现场。';loaded=true;};
-fetch('/api/captcha',{cache:'no-store'}).then(r=>r.json()).then(data=>{if(data.ok)display(data);else throw Error();}).catch(()=>{byId('captcha-settings-status').textContent='验证码配置读取失败，请刷新后重试。';});
-byId('captcha-save').addEventListener('click',async()=>{if(!loaded)return;const button=byId('captcha-save');button.disabled=true;const body={enabled:byId('captcha-enabled').checked,max_requests:Number(byId('captcha-max').value),budget_usd:Number(byId('captcha-budget').value)};const key=byId('captcha-key').value.trim();if(key)body.key=key;byId('captcha-key').value='';try{const response=await fetch('/api/captcha',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok||!data.ok)throw Error();display(data);}catch{byId('captcha-settings-status').textContent='保存失败，请检查次数、预算与本机服务。';}finally{button.disabled=false;}});
-})();
 </script>
 </body></html>
 

@@ -121,16 +121,30 @@ def test_balance_delta_stops_new_spending(tmp_path, challenge_request, config):
     assert captcha.step(tmp_path, {**challenge_request, 'fingerprint': 'b' * 64}, config=config, client=client)['status'] == 'BUDGET_LIMIT'
 
 
-def test_portable_bundle_reencrypts_and_public_settings_never_return_key(tmp_path, config):
-    bundle = {'adspower_api_key': 'TEST_ONLY_ADSPOWER', 'proxy_architecture': 'LOCAL_VPN', 'twocaptcha': config}
-    exported = portable(bundle)
-    import_bundle(tmp_path, exported, store)
-    assert load(tmp_path / 'runtime/secrets/twocaptcha.dpapi') == config
-    assert 'twocaptcha' not in load(tmp_path / 'runtime/secrets/company.dpapi')
-    assert b'TEST_ONLY_CAPTCHA' not in (tmp_path / 'runtime/secrets/twocaptcha.dpapi').read_bytes()
-    view = captcha.configure(tmp_path, {'budget_usd': 0.20, 'key': ''})
-    assert view['key_configured'] and 'key' not in view and 'TEST_ONLY' not in json.dumps(view)
-    assert captcha.settings(tmp_path)['key'] == config['key']
+def test_full_private_bundle_automatically_provisions_key_and_enables_service(tmp_path, config):
+    import sys
+    import zipfile
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+    from package_company_wizard import write_bundle
+    # Even an old disabled setting must deploy as the built-in automatic service.
+    bundle = {'adspower_api_key': 'TEST_ONLY_ADSPOWER', 'proxy_architecture': 'LOCAL_VPN',
+              'twocaptcha': {**config, 'enabled': False}}
+    base = tmp_path / 'internal-base.zip'; packaged = tmp_path / 'company.zip'
+    with zipfile.ZipFile(base, 'w') as archive:
+        archive.writestr('BUILD_INFO.json', json.dumps({'channel': 'internal', 'contains_company_credentials': False}))
+    write_bundle(base, packaged, bundle)
+    with zipfile.ZipFile(packaged) as archive:
+        exported = json.loads(archive.read('company.local.json'))
+        assert json.loads(archive.read('BUILD_INFO.json'))['unattended_company_import']
+        assert not any(name.endswith('.dpapi') for name in archive.namelist())
+    assert exported['twocaptcha']['enabled'] is True
+    target = tmp_path / 'recipient-install'
+    import_bundle(target, exported, store)
+    assert load(target / 'runtime/secrets/twocaptcha.dpapi') == config
+    assert 'twocaptcha' not in load(target / 'runtime/secrets/company.dpapi')
+    assert b'TEST_ONLY_CAPTCHA' not in (target / 'runtime/secrets/twocaptcha.dpapi').read_bytes()
+    assert captcha.settings(target)['enabled'] is True
+    assert captcha.settings(target)['key'] == config['key']
 
 
 def test_public_filter_rejects_captcha_keys_and_runtime_data():
@@ -194,28 +208,8 @@ def test_supervisor_resumes_paid_task_in_same_session_without_rotation(tmp_path,
         assert saved['status'] == 'RESUMING' and saved['output'] == str(output)
 
 
-def test_local_configuration_api_preserves_key_and_rejects_foreign_origin(tmp_path):
-    import http.client
-    import sys
-    import threading
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-    import web_console as web
-    server = web.ThreadingHTTPServer(('127.0.0.1', 0), web.Handler)
-    server.console = SimpleNamespace(root=tmp_path)
-    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-    try:
-        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=5)
-        origin = f'http://127.0.0.1:{server.server_port}'
-        headers = {'Content-Type': 'application/json', 'Origin': origin}
-        connection.request('POST', '/api/captcha', json.dumps({'key': 'TEST_ONLY_CAPTCHA', 'enabled': True}), headers)
-        response = connection.getresponse(); result = response.read().decode()
-        assert response.status == 200 and json.loads(result)['key_configured']
-        assert 'TEST_ONLY_CAPTCHA' not in result
-        connection.request('GET', '/api/captcha')
-        response = connection.getresponse(); assert 'TEST_ONLY_CAPTCHA' not in response.read().decode()
-        connection.request('POST', '/api/captcha', '{"enabled":false}', {**headers, 'Origin': 'https://foreign.invalid'})
-        response = connection.getresponse(); assert response.status == 403; response.read()
-        assert captcha.settings(tmp_path)['enabled']
-        connection.close()
-    finally:
-        server.shutdown(); server.server_close(); thread.join()
+def test_workbench_has_no_manual_captcha_setup_ui_or_api():
+    root = Path(__file__).resolve().parents[1]
+    assert '/api/captcha' not in (root / 'scripts/web_console.py').read_text('utf-8')
+    assert 'captcha-settings' not in (root / 'web/index.html').read_text('utf-8')
+    assert 'captcha-save' not in (root / 'web/index.html').read_text('utf-8')

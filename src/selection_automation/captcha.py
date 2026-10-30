@@ -7,7 +7,7 @@ import re
 import sqlite3
 import time
 
-from .secrets import load, store, transform
+from .secrets import load, transform
 
 DEFAULTS = {'enabled': False, 'max_requests': 10, 'budget_usd': 0.10,
             'reserve_usd': 0.01, 'timeout_seconds': 180}
@@ -21,8 +21,8 @@ MESSAGES = {
     'VERIFIED': '网站已解除验证码；采集将沿原断点继续。',
     'REJECTED': '网站未确认放行；停止本题自动付费重试，保留当前现场。',
     'TIMEOUT': '2Captcha 等待超时；保留任务编号和断点，不重复付费提交。',
-    'ZERO_BALANCE': '2Captcha 余额不足；保留现场，充值后在工作台保存配置并继续。',
-    'INVALID_KEY': '2Captcha Key 无效或未获授权；请更新配置，当前断点保留。',
+    'ZERO_BALANCE': '2Captcha 余额不足；已保留现场，等待余额恢复。',
+    'INVALID_KEY': '2Captcha Key 无效或未获授权；请由维护者更新内部包配置，当前断点保留。',
     'BUDGET_LIMIT': '2Captcha 已达到次数或预算预留限制；保留当前断点。',
     'SUBMIT_UNKNOWN': '解题提交结果未知；已停止重复提交，保留现场以避免重复扣费。',
     'SERVICE_FAILED': '2Captcha 服务失败；本题自动重试已停止，当前现场保留。',
@@ -58,19 +58,6 @@ def normalize(value):
 def settings(root):
     path = Path(root) / 'runtime/secrets/twocaptcha.dpapi'
     return normalize(load(path)) if path.is_file() else normalize({})
-
-
-def configure(root, value):
-    previous = settings(root)
-    # Empty form fields retain an existing key; disabling never deletes it.
-    result = normalize({**previous, **value, 'key': value.get('key') or previous['key']})
-    store(Path(root) / 'runtime/secrets/twocaptcha.dpapi', result)
-    return public_settings(result)
-
-
-def public_settings(value):
-    return {**{k: value[k] for k in DEFAULTS}, 'key_configured': bool(value['key']),
-            'status': 'READY' if value['enabled'] and value['key'] else 'NOT_CONFIGURED' if not value['key'] else 'DISABLED'}
 
 
 def reply(status, **extra):

@@ -2591,9 +2591,6 @@ class Handler(BaseHTTPRequestHandler):
             self.trusted()
             if self.path=='/api/health':
                 return self.send_json({'ok':True,'service':'selection-workbench','pid':os.getpid(),'time':time.time()})
-            if self.path=='/api/captcha':
-                from selection_automation.captcha import settings,public_settings
-                return self.send_json({'ok':True,**public_settings(settings(self.server.console.root))})
             if self.path=='/api/local-models/scan':
                 from selection_automation.local_model_inventory import scan_status
                 return self.send_json({'ok':True,**scan_status(self.server.console.root)})
@@ -2670,9 +2667,6 @@ class Handler(BaseHTTPRequestHandler):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
             if self.path in ('/api/start','/api/generate'): return self.send_json(self.server.console.start(body),202)
-            if self.path=='/api/captcha':
-                from selection_automation.captcha import configure
-                return self.send_json({'ok':True,**configure(self.server.console.root,body)})
             if self.path=='/api/restore': return self.send_json(self.server.console.restore_history(body))
             if self.path=='/api/network/proxy-choice': return self.send_json(self.server.console.select_local_proxy(body))
             if self.path=='/api/operator/subscribe': return self.send_json(self.server.console.operator_subscribe(body))

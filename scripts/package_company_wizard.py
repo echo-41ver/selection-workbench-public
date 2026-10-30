@@ -55,7 +55,6 @@ def wizard(root,base,output,company_json=None):
     fields=[('AdsPower API 地址','adspower_api_url',company.get('adspower_api_url','http://127.0.0.1:50325'),False),('AdsPower API Key','adspower_api_key',company.get('adspower_api_key',''),True),('代理服务器','host',proxy.get('host','proxy.proxyshare.com'),False),('代理端口','port',proxy.get('port',5959),False),('代理账号（含 _session-）','username',proxy.get('username',''),False),('代理密码','password',proxy.get('password',''),True),('DeepSeek 地址','base_url',model.get('base_url','https://api.deepseek.com'),False),('DeepSeek 模型','model',model.get('model','deepseek-flash'),False),('DeepSeek API Key','key',model.get('key',''),True)]
     window.title('生成完整内部一键部署包');window.deiconify();entries={}
     fields.append(('D1 API Key','d1_key',decision.get('key',''),True))
-    fields.append(('2Captcha Key（可留空）','captcha_key',captcha.get('key',''),True))
     fields.extend([('GeekBI 账号（可选）','geekbi_username',geekbi.get('username',''),False),('GeekBI 密码（可选）','geekbi_password',geekbi.get('password',''),True)])
     tk.Label(window,text='已保存配置自动填写；密钥仅在本机。缺项可在这里补充，无需手写 JSON。').grid(row=0,column=0,columnspan=2,padx=12,pady=10)
     for n,(label,key,value,secret) in enumerate(fields,1):
@@ -70,7 +69,7 @@ def wizard(root,base,output,company_json=None):
             if 'preproxy_mode' in company:payload['preproxy_mode']=company['preproxy_mode']
             if 'local_proxy_endpoint' in company:payload['local_proxy_endpoint']=company['local_proxy_endpoint']
             if values['d1_key'].strip():payload['liquid_d1']={'key':values['d1_key'],'base_url':'https://api.liquid.ai/decisions/v1/systemone','model':'d1'}
-            if values['captcha_key'].strip():payload['twocaptcha']={**captcha,'key':values['captcha_key'],'enabled':captcha.get('enabled',True)}
+            if captcha.get('key'):payload['twocaptcha']=captcha
             if values['geekbi_username'].strip() or values['geekbi_password'].strip():
                 payload['geekbi']={'username':values['geekbi_username'],'password':values['geekbi_password']}
                 if values['geekbi_username'].strip()==geekbi.get('username','').strip():

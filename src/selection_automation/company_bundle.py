@@ -72,6 +72,9 @@ def normalize(value,require_model=False):
     if 'twocaptcha' in value:
         from .captcha import normalize as captcha_settings
         out['twocaptcha']=captcha_settings(value['twocaptcha'])
+        # The full private package provisions this built-in service. Recipients
+        # never enter the key or enable it in a workbench form.
+        out['twocaptcha']['enabled']=bool(out['twocaptcha']['key'])
     return out
 
 def import_bundle(root,value,store):
