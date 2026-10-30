@@ -180,12 +180,12 @@ def test_explicit_single_image_400_retry_preserves_rejection_and_is_only_once(tm
         calls.append(1)
         raise generator.CategoryGenerationError('invalid_request_error: Failed to download image from '+snapshot['records'][0]['main_image_url'],'MODEL_HTTP_400')
     extract(category,snapshot,reject,path)
-    original=deepcopy(json.loads(path.read_text())['batches'])
+    original=deepcopy(json.loads(path.read_text(encoding='utf-8'))['batches'])
     extract(category,snapshot,reject,path)
     assert len(calls)==1
     result=extract(category,snapshot,response,path,retry_http400=True)
     assert result['match_criteria']['state']=='ready'
-    batch=next(iter(json.loads(path.read_text())['batches'].values()))
+    batch=next(iter(json.loads(path.read_text(encoding='utf-8'))['batches'].values()))
     assert batch['history']==list(original.values()) and batch['http400_retries']==1
     assert batch['history'][0]['state']=='uncertain' and batch['history'][0]['error']=='MODEL_HTTP_400'
 
