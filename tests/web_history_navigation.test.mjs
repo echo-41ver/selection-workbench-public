@@ -14,12 +14,14 @@ test('returning to history resumes the selected result after its hidden retry wa
  const context=vm.createContext({$:get,AbortController,encodeURIComponent,Date,JSON,
   document:{createElement:element,querySelectorAll:()=>[]},location:{hash:'#history'},
   history:{replaceState(_state,_title,hash){context.location.hash=hash;}},placeDraftEditor(){},
-  renderFrontendMarket(){},renderBusiness(){},safe:value=>value,
+  renderFrontendMarket(){},renderBusiness(){},safe:value=>value,statusLabels:{RUNNING:'采集中'},
   setTimeout(callback,delay){timers.set(++nextTimer,{callback,delay});return nextTimer;},
   clearTimeout(id){timers.delete(id);},
   fetch:async path=>({ok:true,json:async()=>path==='/api/history'?{ok:true,runs:[]}:
    ++detailCalls===1?{ok:true,history_loading:true}:
-    {ok:true,scope:{category:'保存的品类'},phase:'已保存',excel_files:{}}})});
+    {ok:true,scope:{category:'保存的品类'},phase:'已保存',excel_files:{},
+     workers:[{name:'worker-01-new',status:'RUNNING'}],
+     details:{阶段:{'worker-01-new':{状态:'等待人工验证，保留浏览器'}}}}})});
  const source=html.slice(html.indexOf('function showPage(page)'),html.indexOf('async function loadVisualReview('));
  vm.runInContext(source,context);
  await context.openHistory('saved_task');
@@ -32,4 +34,6 @@ test('returning to history resumes the selected result after its hidden retry wa
  assert.equal(detailCalls,2,'returning must resume without another View Results click');
  assert.equal(get('history-detail').children[0].textContent,'保存的品类 · 历史结果');
  assert.equal(get('history-detail').textContent,'');
+ assert.ok(get('history-detail').children.some(item=>item.textContent==='第 1 路：等待人工验证，保留浏览器'),
+  'saved collector state must describe the CAPTCHA wait even while its supervisor is running');
 });
