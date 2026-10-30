@@ -785,10 +785,7 @@ def main():
     try:
         repair_file=args.output.with_suffix('.policy-repair.json')
         saved_repair=json.loads(repair_file.read_text('utf-8')) if not args.fresh_rules and repair_file.is_file() else None
-        listing_url=args.bestsellers_url
-        if saved_repair is not None and not listing_url and args.status_file and args.status_file.is_file():
-            listing_url=json.loads(args.status_file.read_text('utf-8')).get('verified_listing_url','')
-        config = generate_category(args.category_name, args.amazon_count, args.temu_count, progress=report, bestsellers_url=listing_url,reuse_approved=not args.fresh_rules,
+        config = generate_category(args.category_name, args.amazon_count, args.temu_count, progress=report, bestsellers_url=args.bestsellers_url,reuse_approved=not args.fresh_rules,
             draft_store=args.output.parent/'generated-rule-drafts',policy_repair=saved_repair)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         temporary = args.output.with_suffix('.tmp')
