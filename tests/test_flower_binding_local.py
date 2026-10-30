@@ -91,6 +91,7 @@ public static class OwnedFlowerForeground {
 "@
 $WaitSeconds=2
 $script:windowReads=0
+function Start-Sleep { param($Milliseconds) } # Simulated window transitions below need no wall-clock delay.
 function Get-ProfileBrowserTree { return @(90000,62788) }
 function Get-Process {
  param($Id)
