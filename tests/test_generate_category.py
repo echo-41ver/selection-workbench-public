@@ -165,6 +165,31 @@ def test_rules_and_recall_threshold_share_one_configured_api_generation(monkeypa
     assert out['stage1']['attributes']
 
 
+@pytest.mark.parametrize('category,node,proposed,expected',[
+    ('削皮器','16439871',60,55),('削皮器','16439871',43,43),
+    ('削皮器','123',60,60),('其他品类','16439871',60,60)])
+def test_reviewed_recall_ceiling_applies_only_to_exact_category_and_listing(monkeypatch,category,node,proposed,expected):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/kitchen/'+node,'title':'Best Sellers',
+              'heading':'Best Sellers in Peelers','rank_count':30,'links':[]}
+    monkeypatch.setattr(generator,'resolve_listing',lambda *a,**kw:evidence)
+    config=fixture_config();config.update(category_name_zh=category,category_key='peeler')
+    config['stage2']['candidate_threshold']=proposed
+    monkeypatch.setattr(generator,'model_json',lambda *a,**kw:config)
+    out=generator.generate_category(category,1,40)
+    assert out['stage2']['candidate_threshold']==expected
+    assert out['stage2']['model_recommended_threshold']==proposed
+    assert out['stage2']['threshold_source']==('reviewed_category_recall' if expected!=proposed else 'configured_rule_api')
+    assert out['stage3']['identity_policy']==config['stage3']['identity_policy']
+
+
+def test_reviewed_recall_does_not_override_an_explicit_manual_threshold():
+    config=fixture_config();config['category_name_zh']='削皮器'
+    config['amazon']['bestsellers_url']='https://www.amazon.com/zgbs/kitchen/16439871'
+    config['stage2'].update(candidate_threshold=60,threshold_source='manual')
+    assert generator.apply_reviewed_recall_aliases(config)['stage2']['candidate_threshold']==60
+
+
 @pytest.mark.parametrize('change', ['empty_attributes','bad_weights','python'])
 def test_invalid_rules_fail_without_template_fallback(monkeypatch,change):
     c=fixture_config()

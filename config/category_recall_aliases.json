@@ -2,6 +2,18 @@
   "schema_version": "reviewed-category-recall-aliases-v1",
   "categories": [
     {
+      "category_names": ["削皮器"],
+      "listing_identity": "https://www.amazon.com/zgbs/kitchen/16439871",
+      "aliases": ["削皮器", "vegetable peeler"],
+      "basis": "削皮器同一商品主体的中英文名称；只用于候选召回，不代表同款结论。",
+      "reviewed_at": "2026-10-30",
+      "stage2_recall_review": {
+        "max_candidate_threshold": 55,
+        "basis": "本品类已验证的同款主图存在背景与拍摄构图变化；候选阈值不高于55，避免规则模型重新生成更严门槛导致召回回退。最终同款关系仍由原第三层规则判断。",
+        "reviewed_at": "2026-10-30"
+      }
+    },
+    {
       "category_names": ["鼠标", "鼠標", "滑鼠"],
       "listing_identity": "https://www.amazon.com/Best-Sellers-Computer-Mice/zgbs/pc/11036491",
       "aliases": ["鼠标", "鼠標", "滑鼠", "computer mouse", "computer mice", "轨道球鼠", "軌道球鼠", "轨迹球鼠", "軌跡球鼠"],

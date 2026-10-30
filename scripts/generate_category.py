@@ -501,6 +501,12 @@ def apply_reviewed_recall_aliases(config):
         config['temu']['category_aliases']=list(dict.fromkeys([word for word in current+entry['aliases'] if isinstance(word,str) and word.strip()]))
         config['temu']['category_aliases_review']={'basis':entry['basis'],'reviewed_at':entry['reviewed_at'],'listing_identity':entry['listing_identity']}
         if entry.get('subject_filter'):config['temu']['subject_filter']=deepcopy(entry['subject_filter'])
+        review=entry.get('stage2_recall_review');stage=config.get('stage2',{})
+        if (review and stage.get('threshold_source')=='configured_rule_api'
+                and stage['candidate_threshold']>review['max_candidate_threshold']):
+            stage.update(candidate_threshold=review['max_candidate_threshold'],threshold_reason_zh=review['basis'],
+                threshold_source='reviewed_category_recall',threshold_status='REVIEWED_POSITIVE_RECALL_CEILING',
+                threshold_review=deepcopy(review))
         break
     return config
 
@@ -628,10 +634,10 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
             raise ValueError()
         config['stage3'].update(provider='deepseek', model='deepseek-flash', base_url='https://api.deepseek.com')
         config = compile_generated_policy(config)
+        config = generated_threshold(config)
         config = apply_reviewed_recall_aliases(config)
         config = ensure_subject_rules(config,evidence,allow_model=False)
         config = compile_stage1_rules(config)
-        config = generated_threshold(config)
         validate(config)
     except CategoryGenerationError:
         raise

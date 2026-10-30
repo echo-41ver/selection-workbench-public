@@ -1018,6 +1018,9 @@ class IncrementalStage12:
                 continue
             retry_count = int(known["retry_count"] if known else 0)
             scheduled=self.image_retry.get(image_key)
+            if scheduled and scheduled['status']=='INACTIVE':
+                self.image_retry.legacy(image_key,ref,product,retry_count,scheduled['last_error'])
+                scheduled=self.image_retry.get(image_key)
             if scheduled and scheduled['status']!='READY' and image_key not in due_keys:
                 errors[image_key] = self.image_retry.deferred(image_key)
                 continue

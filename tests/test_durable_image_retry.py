@@ -74,6 +74,53 @@ def test_stop_does_not_download_or_erase_durable_retry(tmp_path):
     assert before==[tuple(r) for r in e.con.execute('select * from image_retry_queue')]
     e.close()
 
+def test_reappearing_snapshot_asset_resumes_its_existing_retry(tmp_path):
+    e,clock,data=setup(tmp_path,2);hits=[]
+    snapshot=tmp_path/'temu.jsonl';original=snapshot.read_text()
+    e.configure([SourceSpec('a','AMAZON','amazon_generic',tmp_path/'amazon.jsonl'),
+                 SourceSpec('t','TEMU','temu_frontend',snapshot,snapshot_mode='replace')],
+                [PathSpec('p','a','t','test')])
+    def download(product):
+        if product['product_id']=='T0':
+            hits.append(product['product_id'])
+            if len(hits)==1:raise TimeoutError('temporary timeout')
+        return data
+    e._download_image_bytes=download;e.process_batch(100)
+    key=e._image_identity(e._product('t','T0'))[1]
+    snapshot.write_text(original.splitlines()[1]+'\n');e.ingest_source('t')
+    clock[0]=e.image_retry.get(key)['next_due']+1;e.process_batch(100)
+    assert e.image_retry.get(key)['status']=='INACTIVE'
+    snapshot.write_text(original);e.ingest_source('t')
+    e.process_batch(100);e.process_batch(100);e.process_batch(100)
+    assert len(hits)==2 and e.image_retry.get(key)['status']=='READY'
+    assert e.image_retry.get(key)['attempts']==2
+    assert e.con.execute("select count(*) from pairs where status='CANDIDATE'").fetchone()[0]==60
+    e.close()
+
+
+def test_restart_recovers_active_asset_left_inactive_without_resetting_attempts(tmp_path):
+    e,clock,data=setup(tmp_path)
+    def fail(product):
+        if product['platform']=='TEMU':raise TimeoutError('temporary timeout')
+        return data
+    e._download_image_bytes=fail;e.process_batch(100)
+    key=e._image_identity(e._product('t','T0'))[1]
+    e.con.execute("update image_retry_queue set status='INACTIVE' where image_key=?",(key,));e.con.commit()
+    revisions=[r[0] for r in e.con.execute('select pair_revision from pairs')]
+    lease=WatchInstance(e.root);lease.acquire()
+    try:
+        e.migrate_image_retries(lease)
+        assert e.image_retry.get(key)['status']=='RETRY'
+        assert e.image_retry.get(key)['attempts']==1
+        clock[0]=e.image_retry.get(key)['next_due']+1
+        e._download_image_bytes=lambda product:data
+        e.process_batch(100);e.process_batch(100)
+        assert e.image_retry.get(key)['attempts']==2
+        assert revisions==[r[0] for r in e.con.execute('select pair_revision from pairs')]
+        assert e.con.execute("select count(*) from pairs where status='CANDIDATE'").fetchone()[0]==30
+    finally:e.close();lease.release()
+
+
 def test_legacy_failure_migration_keeps_pair_revision_attempts_and_audit(tmp_path):
     e,clock,data=setup(tmp_path)
     product=e._product('t','T0');ref,key=e._image_identity(product)

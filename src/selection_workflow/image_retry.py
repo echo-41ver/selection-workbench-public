@@ -43,7 +43,15 @@ class ImageRetryQueue:
         base=min(self.max_delay,self.base_delay*2**min(max(0,attempt-1),20))
         return min(self.max_delay,max(1,base*(.85+.3*self.jitter())))
     def legacy(self,key,ref,product,attempts,error):
-        if self.get(key):return
+        row=self.get(key)
+        if row:
+            if row['status']=='INACTIVE':
+                now=self.clock()
+                self.con.execute("""UPDATE image_retry_queue SET status='RETRY',next_due=?,lease_until=NULL,
+                  product_json=?,updated_at=? WHERE image_key=?""",
+                  (max(now,row['next_due']),json.dumps(product,ensure_ascii=False),now,key))
+                self._event(key,row['attempts'],'ASSET_REFERENCED_AGAIN')
+            return
         classification=classify_failure(error);now=self.clock()
         status='RETRY' if classification=='TRANSIENT_NETWORK' else 'ACTION_REQUIRED'
         self.con.execute('INSERT INTO image_retry_queue VALUES(?,?,?,?,?,?,?,?,?,?)',
