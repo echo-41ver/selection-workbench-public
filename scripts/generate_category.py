@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / 'src'))
 from selection_automation.category_contract import category_contract
 from selection_automation.stage1_authoring import compile_stage1_rules
 from selection_automation.stage2_authoring import generated_threshold
-from selection_automation.rules import validate
+from selection_automation.rules import validate, validate_rules, validate_execution_inputs
 from selection_automation.identity_policy import compile_policy
 from selection_automation.identity_profiles import reviewed_profile
 from selection_automation.merge_temu_snapshots import atomic_write
@@ -75,7 +75,9 @@ def compile_generated_policy(config, *, model=None, policy_repair=None, on_repai
     from selection_automation.compact_authoring import apply_policy_repair
     model = model or model_json
     def compile_authoring(value):
-        return compile_stage1_rules(compile_policy(value))
+        result=compile_stage1_rules(compile_policy(value))
+        validate_rules(result)
+        return result
     try:
         result = compile_authoring(apply_policy_repair(config,policy_repair) if policy_repair is not None else config)
         repaired = policy_repair is not None
@@ -84,6 +86,7 @@ def compile_generated_policy(config, *, model=None, policy_repair=None, on_repai
                   'attributes': config['stage1'].get('attributes'),
                   'modules': config['stage3'].get('modules'),
                   'identity_policy': config['stage3'].get('identity_policy')}
+        contract=category_contract()
         prompt=('修复当前品类的同款边界，只返回JSON对象，字段identity_policy和attributes。'
             '保留品类主体，不改采集参数，不引入其他品类模板。精简格式的文字属性与图片特征独立，不必同名。'
             'required_visual仅标主图通常可见且足以辨认款式的最小集合；背部接口、底部与配件未展示不自动阻断。'
@@ -93,7 +96,9 @@ def compile_generated_policy(config, *, model=None, policy_repair=None, on_repai
             '按实际影响填写region/effects/preserves，不用换特征名字绕过结构检查。'
             '文字属性values每个取值返回短语数组；同义词不能与其他取值完全相同，歧义短语不能遮掉该属性所有明确冲突。'
             '\n已确认品类依据：' + json.dumps(reviewed_profile(config), ensure_ascii=False) +
-            '\n契约：' + json.dumps(category_contract()['field_requirements']['stage3.identity_policy'], ensure_ascii=False) +
+            '\n文字属性契约：' + json.dumps({'requirements':contract['field_requirements']['stage1.attributes'],
+                'example':contract['attribute_shape']}, ensure_ascii=False, separators=(',', ':')) +
+            '\n契约：' + json.dumps(contract['field_requirements']['stage3.identity_policy'], ensure_ascii=False) +
             '\n校验失败：' + str(error)[:220] + '\n当前草稿：' + json.dumps(source, ensure_ascii=False))
         for attempt in range(2):
             proposal=model(prompt,max_tokens=6000,retry_truncated=False)
@@ -719,9 +724,6 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         for name in ('base_queries', 'include_terms'):
             if not config['temu'].get(name) or not all(isinstance(x,str) and x.strip() for x in config['temu'][name]):
                 raise ValueError()
-        for attr in config['stage1']['attributes']:
-            if not attr.get('name') or type(attr.get('hard_conflict')) is not bool or not attr.get('values'):
-                raise ValueError()
         if not config['stage3'].get('visual_instructions'):
             raise ValueError()
         config['stage3'].update(provider='deepseek', model='deepseek-flash', base_url='https://api.deepseek.com')
@@ -731,7 +733,7 @@ def generate_category(category_name: str, amazon_count: int, temu_count: int, *,
         config = apply_reviewed_recall_aliases(config)
         config = ensure_subject_rules(config,evidence,allow_model=False)
         config = compile_stage1_rules(config)
-        validate(config)
+        validate_execution_inputs(config)
     except CategoryGenerationError:
         raise
     except ValueError as exc:

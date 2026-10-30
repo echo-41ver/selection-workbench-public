@@ -49,7 +49,7 @@ def category_contract() -> dict:
             "temu.max_products_per_keyword": "必填用户数量，正整数",
             "temu.merge_key": "固定goods_id",
             "stage1.text_gate": "新品类固定declarative；不生成或执行Python代码",
-            "stage1.attributes": "非空列表；每项name、hard_conflict布尔、values属性值到非空字面同义词列表；ambiguous_phrases为歧义短语列表",
+            "stage1.attributes": "非空JSON数组；每项完整给出name非空字符串、hard_conflict布尔true或false、values非空JSON对象、ambiguous_phrases字符串数组。values的键是规范取值，值是非空字面同义短语数组，不能使用冒号拼接的字符串数组。hard_conflict不得省略、使用字符串或猜默认值；修正同名属性时保留未改动的已声明字段，新建或改名属性必须完整给出。",
             "stage1.rule_version": "Agent维护第一层规则版本，改变规则时升级",
             "stage2": "candidate_threshold必须按本品类生成0..100的有限数值；threshold_reason_zh说明按本品类形态与图片变化保守召回的中文依据；不得用固定模板回退。与第一层规则在同一响应输出；未校准建议不能作最终不同款结论，人工可覆盖。",
             "stage3.modules": "Agent设计1..12个视觉模块，权重均>0、合计100",

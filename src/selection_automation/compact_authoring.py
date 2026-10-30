@@ -7,14 +7,15 @@ FORMAT = 'compact-category-v1'
 
 
 def authoring_prompt(name, intent, evidence, reviewed):
-    policy = category_contract()['field_requirements']['stage3.identity_policy']
+    contract = category_contract()
+    policy = contract['field_requirements']['stage3.identity_policy']
     listing = {k: evidence.get(k) for k in ('url', 'title', 'heading', 'rank_count')}
     return (
         '为 Amazon–TEMU 同款核验生成精简品类规则，只返回一个 JSON。不要返回程序配置、模块、权重、提示词或长篇说明。'
         '字段：format="compact-category-v1",category_key(英文下划线标识),product_scope(出售主体/套装范围),'
         'queries(1–3个英文主体关键词),aliases(主体英文/简体/繁体及地区称呼),'
         'exclude_terms(明确其他出售主体的中英文名词，不能排除共享功能词),keyword_features(有标题依据才使用的英文细化词),'
-        'attributes(独立文字属性列表：name属性标识,hard_conflict布尔,values字面值到同义短语数组,ambiguous_phrases数组；不要求与图片特征同名),'
+        'attributes(独立文字属性数组，完整格式见下述文字属性契约；不要求与图片特征同名),'
         'threshold(本品类第二层0–100保守召回阈值),threshold_reason_zh(一句中文依据),features(1–8项必要特征)。'
         'features沿用下述特征契约，但省略version和modules；不重复描述同一部位，scope和rule各用一句短语。'
         'attributes只列必要互斥属性，每个取值最多3个常用字面同义词；不要穷举规格、型号或数值。整体回答控制在2000中文字以内。'
@@ -23,6 +24,8 @@ def authoring_prompt(name, intent, evidence, reviewed):
         '结构、部件位置和构成不能整项设为变体；局部颜色/装饰变化须界定范围并用preserves引用保留的结构。'
         '文字仅双边明确互斥才排除，缺失/多值/否定/适配语境不硬排除；歧义短语绑定具体属性，不能单独填for/适用于。'
         '阈值优先减少不同角度/背景造成的漏检，不照抄固定模板，不声称实测最优。'
+        '\n文字属性契约：' + json.dumps({'requirements':contract['field_requirements']['stage1.attributes'],
+            'example':contract['attribute_shape']}, ensure_ascii=False, separators=(',', ':')) +
         '\n特征契约：' + policy + '\n品类：' + name + '\n目标：' + intent +
         '\n已核实榜单：' + json.dumps(listing, ensure_ascii=False, separators=(',', ':')) +
         '\n已确认品类边界：' + json.dumps(reviewed, ensure_ascii=False, separators=(',', ':')))
@@ -127,6 +130,11 @@ def apply_policy_repair(config, reply):
     features=choose([node['features'] for node in (reply,policy or {}) if 'features' in node])
     if not isinstance(features,list) or not features or not isinstance(attributes,list):
         raise ValueError('同款边界修正缺少有效特征或文字属性')
+    previous=config['stage1'].get('attributes')
+    existing={attr['name']:attr for attr in previous
+              if isinstance(attr,dict) and isinstance(attr.get('name'),str)} if isinstance(previous,list) else {}
+    attributes=[{**deepcopy(existing.get(attr['name'],{})),**attr}
+                if isinstance(attr,dict) and isinstance(attr.get('name'),str) else attr for attr in attributes]
     from .identity_policy import VERSION
     if policy and policy.get('version',VERSION)!=VERSION:
         raise ValueError('同款边界修正版本无效')
