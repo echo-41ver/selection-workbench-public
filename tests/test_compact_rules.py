@@ -96,6 +96,59 @@ def test_compact_authoring_keeps_meaning_but_omits_mechanical_config_and_navigat
     with pytest.raises(ValueError):expand(bad,'电钻','https://www.amazon.com/zgbs/tools/123',3,40)
 
 
+def test_authoring_distinguishes_optional_structural_identity_from_context():
+    prompt=authoring_prompt('测试袋','袋体',{},None)
+    assert '可见结构不得设为context' in prompt
+    assert '未展示用未知，不改变身份作用' in prompt
+    assert 'identity且required_visual=false' in prompt
+
+
+def test_context_structure_is_repaired_as_optional_identity_without_relaxing_matching():
+    from test_identity_policy import visual_facts
+    raw=proposal()
+    raw['features'].append({'id':'carry_loop','label':'附加提环','role':'context',
+        'evidence':'both','region':'component','effects':['connection'],'preserves':[],
+        'scope':'袋体侧边提环的连接形式','rule':'记录提环形式，不作为确认必需项',
+        'required_visual':False})
+    config=expand(raw,'测试袋','https://www.amazon.com/zgbs/tools/123',3,40)
+    calls=[]
+    def repair(prompt,**kwargs):
+        calls.append(prompt)
+        assert '可见结构不得设为context' in prompt
+        assert 'identity且required_visual=false' in prompt
+        fixed=deepcopy(config['stage3']['identity_policy'])
+        fixed['features'][-1].update(role='identity',
+            rule='双方提环均清晰可见时连接形式不同判不同款；未展示记未知，不作为确认必需项')
+        return {'identity_policy':fixed,'attributes':config['stage1']['attributes']}
+    result=generator.compile_generated_policy(config,model=repair)
+    assert len(calls)==1
+    assert config['stage3']['identity_policy']['features'][-1]['role']=='context'
+    assert result['stage3']['identity_policy']['features'][-1]['role']=='identity'
+    assert 'view_carry_loop' not in result['stage3']['identity_required_modules']
+    assert 'IDENTITY_CARRY_LOOP' in result['stage3']['identity_hard_conflicts']
+    facts=visual_facts(result)
+    facts['feature_comparisons']['carry_loop'].update(relation='UNKNOWN',amazon='',temu='')
+    facts['modules']['view_carry_loop'].update(relation='UNKNOWN',amazon_evidence='',temu_evidence='')
+    assert score(result,facts)['state']=='确认同款'
+    facts['feature_comparisons']['carry_loop'].update(relation='DIFFERENT',
+        amazon='单段固定环扣',temu='双段铰接环扣')
+    assert score(result,facts)['state']=='不同款'
+
+
+def test_repair_cannot_keep_visible_structure_as_context():
+    raw=proposal();feature=deepcopy(raw['features'][0])
+    feature.update(id='carry_loop',role='context',required_visual=False)
+    raw['features'].append(feature)
+    config=expand(raw,'测试袋','https://www.amazon.com/zgbs/tools/123',3,40)
+    calls=[]
+    def repair(prompt,**kwargs):
+        calls.append(prompt)
+        return {'identity_policy':config['stage3']['identity_policy']}
+    with pytest.raises(ValueError,match='可见结构差异'):
+        generator.compile_generated_policy(config,model=repair)
+    assert len(calls)==2
+
+
 def test_independent_text_attribute_does_not_require_a_same_named_image_feature(monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
     evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
