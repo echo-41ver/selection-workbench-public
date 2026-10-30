@@ -176,7 +176,7 @@ def cleanup_ended_task(task_key, *, preparing_task=None):
         if not shell:raise RuntimeError('缺少 PowerShell，未能停止任务代理链')
         for number in sorted(chains):
             subprocess.run([shell,'-NoProfile','-File',str(ROOT/'scripts'/'proxyshare_chain_manager.ps1'),
-                            '-Action','stop','-Worker',str(number)],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
+                            '-Action','stop','-Worker',str(number)],cwd=ROOT,check=True,stdout=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     from selection_automation.proxy_activity import revoke_worker_activity
     for number in numbers:revoke_worker_activity(ROOT,number)
     manifest['used']=True
@@ -204,7 +204,7 @@ def restore_closed_task_workers(task_key, workers):
         if closed_used_profile(ROOT,worker.get('profile_id')):
             number=int(worker['name'].split('-')[1])
             subprocess.run([sys.executable,str(ROOT/'scripts/replace_proxyshare_worker_environment.py'),
-                '--worker',str(number),'--task-key',task_key],cwd=ROOT,check=True)
+                '--worker',str(number),'--task-key',task_key],cwd=ROOT,check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             state_path=ROOT/'runs'/task_key/'temu/supervisors'/f"{worker['name']}.json"
             state=read(state_path,{})
             if state:save(state_path,{**state,'status':'RESUMING','query_status':'RESUMING',
@@ -308,7 +308,7 @@ def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,pre
             raise RuntimeError('本任务环境路数与请求不一致，请重新创建任务')
         # Restart local proxy chains; never infer browser readiness from a saved manifest.
         if not local_vpn(company):
-            subprocess.run([shutil.which('pwsh'),' -NoProfile'.strip(),'-File',str(ROOT/'scripts'/'proxyshare_chain_manager.ps1'),'-Action','start'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
+            subprocess.run([shutil.which('pwsh'),' -NoProfile'.strip(),'-File',str(ROOT/'scripts'/'proxyshare_chain_manager.ps1'),'-Action','start'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         import urllib.request, urllib.parse
         policy=read(ROOT/'runtime'/'proxy_policy.json')
         for index,worker in enumerate(manifest['workers']):
@@ -334,13 +334,13 @@ def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,pre
         if bootstrap.get('machine_id')!=identity(): raise RuntimeError('不能续建其他安装的环境')
         if bootstrap.get('requested_worker_count',worker_count)!=worker_count:
             raise RuntimeError('断点路数与请求不一致，请重新创建任务')
-        subprocess.run([sys.executable,str(ROOT/'scripts'/'setup_proxyshare_adspower_workers.py'),*task_args],cwd=ROOT,check=True)
+        subprocess.run([sys.executable,str(ROOT/'scripts'/'setup_proxyshare_adspower_workers.py'),*task_args],cwd=ROOT,check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         if not (ROOT/'config'/'sessions.json').exists(): raise RuntimeError('续建未生成浏览器清单')
         verify_prepared_bindings(ROOT,read)
         return
     proxy=company.get('proxy',{})
     if new_task and (ROOT/'runtime'/'proxy_policy.json').exists():
-        subprocess.run([shutil.which('pwsh'),'-NoProfile','-File',str(ROOT/'scripts'/'proxyshare_chain_manager.ps1'),'-Action','stop'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
+        subprocess.run([shutil.which('pwsh'),'-NoProfile','-File',str(ROOT/'scripts'/'proxyshare_chain_manager.ps1'),'-Action','stop'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     ports=free_block(17891,worker_count); drivers=free_block(4451,worker_count)
     policy=read(ROOT/'config'/'proxy_policy.json'); policy['worker_chain_ports']=ports; policy['webdriver_ports']=drivers
     policy['worker_count']=worker_count
@@ -353,8 +353,8 @@ def ensure_company(start=False,new_task=None,worker_count=4,resume_task=None,pre
     # Pipe credentials into PowerShell; never put them in command arguments or logs.
     command="$v=[Console]::In.ReadToEnd()|ConvertFrom-Json; $p=ConvertTo-SecureString $v.password -AsPlainText -Force; [PSCredential]::new($v.username,$p)|Export-Clixml -LiteralPath $v.path"
     if not local_vpn(company):
-        subprocess.run([shutil.which('pwsh'),'-NoProfile','-Command',command],input=json.dumps({'username':proxy['username'],'password':proxy['password'],'path':str(ROOT/'runtime'/'secrets'/'proxyshare.credential.xml')}),text=True,check=True,stdout=subprocess.DEVNULL)
-    subprocess.run([sys.executable,str(ROOT/'scripts'/'setup_proxyshare_adspower_workers.py'),*task_args],cwd=ROOT,check=True)
+        subprocess.run([shutil.which('pwsh'),'-NoProfile','-Command',command],input=json.dumps({'username':proxy['username'],'password':proxy['password'],'path':str(ROOT/'runtime'/'secrets'/'proxyshare.credential.xml')}),text=True,check=True,stdout=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    subprocess.run([sys.executable,str(ROOT/'scripts'/'setup_proxyshare_adspower_workers.py'),*task_args],cwd=ROOT,check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if not (ROOT/'config'/'sessions.json').exists(): raise RuntimeError('初始化未生成浏览器清单')
     verify_prepared_bindings(ROOT,read)
 

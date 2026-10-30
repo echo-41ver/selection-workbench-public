@@ -119,7 +119,7 @@ def run_collector(command: list[str], *, lease: WorkerLease, cwd: Path, stream,
                   health_check=None, health_interval: float = 10) -> int:
     """Only stop the child owned by this supervisor; other workers stay alive."""
     lease.check_stop()
-    child = subprocess.Popen(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT)
+    child = subprocess.Popen(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     next_health = time.monotonic() + health_interval
     try:
         while child.poll() is None:

@@ -18,6 +18,39 @@ from selection_automation.background_launch import run_background_launcher
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows console visibility")
+@pytest.mark.parametrize("entry", ["launcher", "web", "collector"])
+def test_background_commands_have_no_console_and_keep_native_results(tmp_path, entry):
+    from selection_automation.worker_runtime import WorkerLease, run_collector
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import web_console
+
+    observation = tmp_path / "console.json"
+    script = tmp_path / "command.py"
+    code = 0 if entry == "web" else 37
+    script.write_text(
+        "import ctypes,json,pathlib,sys\n"
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps({'console':ctypes.windll.kernel32.GetConsoleWindow()}))\n"
+        "print('stdout preserved',flush=True)\n"
+        "print('stderr preserved',file=sys.stderr,flush=True)\n"
+        f"sys.exit({code})\n", encoding="utf-8")
+    command = [sys.executable, str(script), str(observation)]
+    if entry == "launcher":
+        result = run_background_launcher(command, cwd=tmp_path, timeout=15)
+        assert result.returncode == code
+        assert "stdout preserved" in result.stdout and "stderr preserved" in result.stderr
+    elif entry == "web":
+        result = web_console.Console(tmp_path).invoke(command[1:])
+        assert result.returncode == code
+    else:
+        with WorkerLease(tmp_path, "worker-01-new") as lease, (tmp_path / "collector.log").open("w") as stream:
+            result = run_collector(command, lease=lease, cwd=tmp_path, stream=stream)
+        assert result == code
+        assert "stdout preserved" in (tmp_path / "collector.log").read_text()
+        assert "stderr preserved" in (tmp_path / "collector.log").read_text()
+    assert json.loads(observation.read_text())["console"] == 0
+
+
 def launcher(tmp_path: Path, *, keep_parent_alive: bool) -> tuple[list[str], Path]:
     owned_pid = tmp_path / "owned-child.json"
     script = tmp_path / "spawn_daemon.py"

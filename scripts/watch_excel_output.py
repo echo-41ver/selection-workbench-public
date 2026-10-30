@@ -134,7 +134,7 @@ def atomic_json(path: Path, value: dict) -> None:
 def call(command: list[str]) -> str:
     env = os.environ.copy()
     env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
-    completed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, encoding="utf-8", errors="replace", env=env)
+    completed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, encoding="utf-8", errors="replace", env=env, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if completed.returncode:
         raise RuntimeError((completed.stderr or completed.stdout)[-2000:])
     return completed.stdout.strip()

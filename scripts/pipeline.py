@@ -39,7 +39,7 @@ def resolved(path: str | Path) -> Path:
 
 
 def run(command: list[str]) -> None:
-    completed = subprocess.run(command, cwd=ROOT)
+    completed = subprocess.run(command, cwd=ROOT, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if completed.returncode:
         raise SystemExit(completed.returncode)
 
@@ -735,7 +735,7 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                                 "--worker", str(worker_number), "--sessions", str(sessions_path),
                                 "--supervisor-token", lease.token,
                                 "--task-key", run_root(category).name,
-                            ], cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT)
+                            ], cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
                             if replacement.returncode == 0: break
                             if local_attempt == 0:
                                 recovery_event(run_root(category), session['name'], 'REPLACEMENT_LOCAL_RETRY',

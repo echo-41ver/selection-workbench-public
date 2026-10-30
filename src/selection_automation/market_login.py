@@ -107,7 +107,7 @@ def complete_company_login(auth, error, timeout, root):
             result = subprocess.run([node, str(root / 'scripts/geekbi_company_login.mjs')],
                                     cwd=root, env=env, input=json.dumps(request),
                                     capture_output=True, text=True, encoding='utf-8',
-                                    timeout=remaining + 5)
+                                    timeout=remaining + 5, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             reply = json.loads(result.stdout) if result.returncode == 0 else {}
             status = reply.get('status', 'LOGIN_FAILED') if isinstance(reply, dict) else 'LOGIN_FAILED'
             if status not in {*LOGIN_MESSAGES, 'AUTHORIZATION_SENT'}:

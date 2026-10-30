@@ -40,7 +40,8 @@ def ensure_node_runtime(root, *, run=subprocess.run, which=shutil.which, progres
     def probe():
         try:
             result = run([node, '-e', PROBE], cwd=root, capture_output=True,
-                         text=True, encoding='utf-8', timeout=15)
+                         text=True, encoding='utf-8', timeout=15,
+                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             if result.returncode:
                 return 'BROKEN'
             value=json.loads(result.stdout)
@@ -77,7 +78,8 @@ def ensure_node_runtime(root, *, run=subprocess.run, which=shutil.which, progres
             record(status='INSTALLING',step=label,download_proxy=proxy_enabled)
             try:
                 result = run(command, cwd=root, capture_output=True, text=True,
-                             encoding='utf-8', timeout=120,env=env)
+                             encoding='utf-8', timeout=120,env=env,
+                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             except (OSError, subprocess.TimeoutExpired) as error:
                 record(status='ERROR',step=label,error=type(error).__name__,download_proxy=proxy_enabled)
                 raise NodeRuntimeError(f'{label}未完成；请检查网络后重试，或运行 deploy.cmd。') from error

@@ -1,4 +1,5 @@
 """Use the collector's exact subject rules before publishing category goods."""
+import os
 import hashlib
 import json
 from pathlib import Path
@@ -16,7 +17,7 @@ def filter_category_union(root, category, rows, summary, union):
     if not node:raise RuntimeError('商品主体筛选需要Node，旧汇总已保留')
     result=subprocess.run([node,str(Path(root)/'scripts/filter_category_products.mjs')],
         input=json.dumps({'category':category,'rows':rows},ensure_ascii=False),
-        capture_output=True,text=True,encoding='utf-8',timeout=30,cwd=root)
+        capture_output=True,text=True,encoding='utf-8',timeout=30,cwd=root, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if result.returncode:raise RuntimeError('商品主体筛选失败，旧汇总已保留：'+result.stderr[:200])
     data=json.loads(result.stdout)
     accepted=data['accepted'];excluded=data['excluded'];unknown=data['unclassified']

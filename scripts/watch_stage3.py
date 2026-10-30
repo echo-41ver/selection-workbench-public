@@ -78,7 +78,7 @@ def watch(category_path):
                 child=subprocess.Popen([sys.executable,str(ROOT/'scripts/run_category_layer3.py'),
                     '--category',str(category_path),'--candidates',str(candidate_path(base)),
                     '--results',str(folder/'results.jsonl'),'--independent',
-                    *(['--retry-local-errors'] if retry_local_errors else [])],cwd=ROOT)
+                    *(['--retry-local-errors'] if retry_local_errors else [])],cwd=ROOT, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
                 retry_local_errors = False
                 while True:
                     try:

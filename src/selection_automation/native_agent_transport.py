@@ -1,4 +1,5 @@
 """Job-scoped desktop-agent transports. No account credentials are exported."""
+import os
 from pathlib import Path
 import json
 import re
@@ -594,7 +595,7 @@ def workbuddy_run(root,job,prompt,timeout=900,model=None):
         '--no-session-persistence','--max-turns',str(max(20,2*len(files)+8)),'--permission-mode','acceptEdits','--tools','Read,StructuredOutput',
         '--allowedTools','Read,StructuredOutput','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--add-dir',str(job)]
     if model:command+=['--model',model]
-    result=subprocess.run(command,input=request,cwd=job,env=env,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=timeout)
+    result=subprocess.run(command,input=request,cwd=job,env=env,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     atomic_write(job/'workbuddy-response.log',result.stdout)
     if result.returncode:raise RuntimeError('WorkBuddy 结构化任务未完成，请检查客户端模型权限与额度')
     events=[]

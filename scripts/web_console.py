@@ -662,7 +662,7 @@ class Console:
         provider_runtime=str(python) if argv and Path(argv[0]).name=='collect_market_evidence.py' and python.is_file() else sys.executable
         command=([shutil.which('node') or 'node',*argv[1:]] if argv and argv[0]=='node'
                  else [provider_runtime,*argv])
-        child=subprocess.Popen(command,cwd=self.root,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        child=subprocess.Popen(command,cwd=self.root,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         deadline=time.monotonic()+timeout
         while child.poll() is None:
             if (env is not None or cancellable) and self.cancel.is_set():
@@ -1407,7 +1407,7 @@ class Console:
                                      '--category', str(category), '--kind',
                                      'layer123' if kind == 'layer12' else kind], cwd=self.root,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                    timeout=180, check=False)
+                                    timeout=180, check=False, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         except (OSError, subprocess.TimeoutExpired):
             raise ConsoleError('EXCEL_UPDATE_FAILED', 'Excel 更新超时或启动失败，请稍后重试', 500) from None
         state = selection.read(base / 'publish_state.json', {})

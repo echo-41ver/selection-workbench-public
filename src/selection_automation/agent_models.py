@@ -88,7 +88,7 @@ def _acp(root,agent):
         env.update(workbuddy_environment(agent['executable']))
         args=['--acp','--no-session-persistence','--strict-mcp-config','--mcp-config','{"mcpServers":{}}']
     else:
-        help_text=subprocess.run(prefix+['--help'],capture_output=True,text=True,encoding='utf-8',errors='replace',env=env,timeout=15).stdout
+        help_text=subprocess.run(prefix+['--help'],capture_output=True,text=True,encoding='utf-8',errors='replace',env=env,timeout=15, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0).stdout
         flag='--acp' if re.search(r'--acp\b',help_text) else '--experimental-acp'
         if flag not in help_text:raise RuntimeError('此版本 Agent 尚未提供模型读取接口，请更新客户端')
         args=[flag]
@@ -127,7 +127,7 @@ def _claude(root,agent):
 def _opencode(root,agent):
     from .local_agents import command_prefix,environment
     result=subprocess.run(command_prefix(agent['executable'],'opencode')+['models'],cwd=root,env=environment(),
-        capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
+        capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if result.returncode:raise RuntimeError('OpenCode 模型列表读取失败，请检查已配置的服务商')
     text=re.sub(r'\x1b\[[0-9;]*m','',result.stdout)
     rows=[_model(line.strip()) for line in text.splitlines() if re.fullmatch(r'[\w.-]+/[\w./:-]+',line.strip())]

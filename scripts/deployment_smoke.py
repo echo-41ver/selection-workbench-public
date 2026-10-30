@@ -308,7 +308,7 @@ if(await page.locator('#proof').innerText()!=='Deployment OK')throw Error('DOM_R
 console.log(JSON.stringify({ready:true,version:browser.version(),dom_read:true}));
 }finally{if(browser)await browser.close();}})().catch(()=>process.exit(1));"""
     result = subprocess.run([shutil.which('node') or 'node', '-e', script], cwd=root,
-        capture_output=True, text=True, encoding='utf-8', timeout=60)
+        capture_output=True, text=True, encoding='utf-8', timeout=60, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if result.returncode:
         raise RuntimeError('CHROMIUM_LAUNCH_FAILED')
     return json.loads(result.stdout)

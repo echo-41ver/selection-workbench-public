@@ -478,7 +478,7 @@ def doctor():
             probe=subprocess.run([node,'-e',
                 "const fs=require('fs'); const p=require('playwright').chromium.executablePath(); "
                 "console.log(JSON.stringify({ready:fs.existsSync(p),path:p,status:fs.existsSync(p)?'READY':'BROWSER_MISSING'}));"],
-                cwd=ROOT,capture_output=True,text=True,timeout=10)
+                cwd=ROOT,capture_output=True,text=True,timeout=10, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             browser=json.loads(probe.stdout) if probe.returncode==0 else {'ready':False,'status':'PLAYWRIGHT_PROBE_FAILED'}
         except (OSError,ValueError,subprocess.TimeoutExpired):
             browser={'ready':False,'status':'PLAYWRIGHT_PROBE_FAILED'}
@@ -1247,7 +1247,7 @@ def supervise(category_path, paid,*,preserve_prepared=False):
                     last_completion=time.monotonic(); done=source_completion(base,cat) if only_collection else completion(cfg,stage3_authorized)
                     if done and 'stage3' not in children and 'market' in finished:
                         if 'excel' in children: terminate_owned(children.pop('excel'))
-                        result=subprocess.run(py('publish_all.py','--category',category_path),cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                        result=subprocess.run(py('publish_all.py','--category',category_path),cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
                         publication=read(base/'publish_state.json',{})
                         if result.returncode==0 and not publication.get('pending_views'):
                             market_complete=read(base/'market/status.json',{}).get('status')=='COMPLETE'

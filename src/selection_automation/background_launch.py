@@ -36,7 +36,7 @@ def run_background_launcher(
             result = subprocess.run(
                 list(command), cwd=cwd, timeout=timeout, stdin=subprocess.DEVNULL,
                 stdout=stdout, stderr=stderr, env=environment,
-            )
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     except subprocess.TimeoutExpired as error:
         # No PIPE handles exist, so run() kills/waits only for its direct child;
         # retained daemon handles cannot make the timeout cleanup await EOF.

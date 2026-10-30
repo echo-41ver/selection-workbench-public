@@ -27,7 +27,7 @@ def file_version(path):
 
 def command_version(args):
     try:
-        result=subprocess.run(args,capture_output=True,text=True,timeout=10)
+        result=subprocess.run(args,capture_output=True,text=True,timeout=10, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         return result.stdout.strip().lstrip('v') if result.returncode==0 else None
     except (OSError,subprocess.SubprocessError): return None
 

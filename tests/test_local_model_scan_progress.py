@@ -4,6 +4,7 @@ Every endpoint and metadata reader is fake. Never inspect actual listening
 ports, walk real disks, start a model server, or send inference requests.
 """
 from concurrent.futures import Future, TimeoutError as FuturesTimeout
+from types import SimpleNamespace
 import threading
 import time
 
@@ -172,6 +173,8 @@ def test_whole_scan_budget_preserves_early_model_and_reports_partial(tmp_path, m
 def test_files_phase_budget_retains_service_and_file_discoveries(tmp_path, monkeypatch):
     metadata = ready_catalog()
     (tmp_path / "pending-child").mkdir()
+    clock = [0.0]
+    monkeypatch.setattr(inventory, "time", SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
     monkeypatch.setattr(inventory, "_SCAN_SECONDS", 0.03)
     monkeypatch.setattr(inventory, "scan_roots", lambda: [tmp_path])
     def catalog(root, **kwargs):
@@ -182,7 +185,7 @@ def test_files_phase_budget_retains_service_and_file_discoveries(tmp_path, monke
     def inspect(path, files, cancel=None):
         visited.append(path)
         assert inventory.scan_status(tmp_path)["phase"] == "files"
-        threading.Event().wait(0.06)
+        clock[0] = 0.06  # Expire the same 30ms budget only after this read starts.
         return [{"name": "fixture.gguf", "path": str(tmp_path / "fixture.gguf"),
                  "source": "GGUF", "vision": None, "status": "files_only"}]
     monkeypatch.setattr(inventory, "inspect_directory", inspect)

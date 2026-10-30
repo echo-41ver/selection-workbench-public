@@ -45,6 +45,8 @@ def local_server(monkeypatch):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     address = f'http://127.0.0.1:{server.server_address[1]}'
+    probe = service._probe
+    monkeypatch.setattr(service, '_probe', lambda base: probe(base) if base == address else None)
     monkeypatch.setattr(service, '_endpoints', lambda: [address])
     monkeypatch.setattr(service, '_installed', lambda: None)
     monkeypatch.setattr(service, '_start', lambda root: pytest.fail('Running service must not be restarted'))

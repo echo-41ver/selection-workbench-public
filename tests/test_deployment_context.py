@@ -6,6 +6,7 @@ import ctypes
 import os
 import shutil
 import subprocess
+import sys
 import time
 import tempfile
 import unittest
@@ -60,6 +61,7 @@ def invoke(root: Path, *args: str, wait_seconds: int = 30, env_overrides: dict |
     return subprocess.run(
         [str(PS), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(root / "scripts/deployment_entry.ps1"), *args],
         cwd=root, env=env, capture_output=True, encoding="utf-8", errors="replace", timeout=70,
+        creationflags=subprocess.CREATE_NO_WINDOW,
     )
 
 
@@ -127,7 +129,7 @@ $f.DeleteTask($r.task_name,0)
 """
     helper = folder / "cleanup-fixture-task.ps1"
     helper.write_text(code, encoding="utf-8-sig")
-    p = subprocess.run([str(PS), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper), str(folder / "request.json")], capture_output=True, timeout=15)
+    p = subprocess.run([str(PS), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper), str(folder / "request.json")], capture_output=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
     assert p.returncode == 0, p.stderr.decode("utf-8", "replace")
 
 
@@ -277,7 +279,7 @@ exit 124
 ''', encoding="utf-8-sig")
     process = subprocess.Popen([str(PS), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(observer),
                                 "-Root", str(probe), "-Worker", str(worker), "-Entry", str(root / "scripts/deployment_entry.ps1")],
-                               cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                               cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
     observation = {"fixture_only": True, "worker_killed": False}
     try:
         code = process.wait(timeout=15)
@@ -346,8 +348,18 @@ $name='SelectionDeploymentOuterFixture-'+[Guid]::NewGuid().ToString('N')
 $description='read-only deploy.cmd outer fixture '+$name
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $session=[Diagnostics.Process]::GetCurrentProcess().SessionId
-$exe=Join-Path $env:SystemRoot 'System32\cmd.exe'
-$arguments='/d /s /c ""'+(Join-Path $FixtureRoot 'deploy.cmd')+'" -PreflightOnly -SkipAdsPower -CompanyConfig "配置 & 同事''s 文件.json""'
+$launcher=Join-Path $FixtureRoot 'hidden-deploy-fixture.py'
+@'
+import os, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+command = '"' + os.environ['ComSpec'] + '" /d /s /c ""' + str(root / 'deploy.cmd') + '" -PreflightOnly -SkipAdsPower -CompanyConfig "配置 & 同事\'s 文件.json""'
+with (root / 'outer.stdout.log').open('wb') as output, (root / 'outer.stderr.log').open('wb') as errors:
+    result = subprocess.run(command, cwd=root, stdout=output, stderr=errors,
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+raise SystemExit(result.returncode)
+'@ | Set-Content -LiteralPath $launcher -Encoding UTF8
+$exe=$env:SELECTION_FIXTURE_PYTHONW
+$arguments='"'+$launcher+'" "'+$FixtureRoot+'"'
 $record=[ordered]@{task_name=$name;fixture_only=$true;installer_executed=$false;session_id=$session;sid=$sid;cleaned=$false}
 $created=$false
 try {
@@ -368,7 +380,8 @@ try {
  [IO.File]::WriteAllText((Join-Path $FixtureRoot 'outer-fixture-result.json'),($record|ConvertTo-Json),(New-Object Text.UTF8Encoding($true)))
 }
 ''', encoding="utf-8-sig")
-    p = subprocess.run([str(PS), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper), "-FixtureRoot", str(root)], capture_output=True, timeout=60)
+    env = {**os.environ, "SELECTION_FIXTURE_PYTHONW": str(Path(sys.executable).with_name("pythonw.exe"))}
+    p = subprocess.run([str(PS), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper), "-FixtureRoot", str(root)], capture_output=True, timeout=60, creationflags=subprocess.CREATE_NO_WINDOW, env=env)
     assert p.returncode == 0, p.stderr.decode("utf-8", "replace")
     outer = read(root / "outer-fixture-result.json")
     assert outer["cleaned"] is True and outer["last_task_result"] == 0

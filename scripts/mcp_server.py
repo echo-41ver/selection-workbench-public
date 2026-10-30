@@ -78,7 +78,7 @@ def execute(name,args):
     else: command+=['--category-key',key]
     if action=='rotate': command+=['--workers',','.join(map(str,args['workers']))]
     result=subprocess.run(command,cwd=ROOT,text=True,capture_output=True,encoding='utf-8',timeout=30,
-                          env={**os.environ,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'})
+                          env={**os.environ,'PYTHONUTF8':'1','PYTHONIOENCODING':'utf-8'}, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     if result.returncode: raise RuntimeError(result.stderr[-1500:])
     return {'结果':result.stdout.strip()}
 

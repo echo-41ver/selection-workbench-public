@@ -196,7 +196,7 @@ def publish(category_path):
                 'snapshot', '--config', str(base / 'stage12_config.json'),
                 '--snapshot-dir', str(frozen), '--path-key', key], cwd=ROOT,
                 check=True, stdout=subprocess.DEVNULL,
-                env={k: v for k, v in os.environ.items() if k not in {'DEEPSEEK_API_KEY','SELECTION_STAGE3_API_KEY'}})
+                env={k: v for k, v in os.environ.items() if k not in {'DEEPSEEK_API_KEY','SELECTION_STAGE3_API_KEY'}}, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         if not summary.exists():
             return False
         before = signature(source_paths(category_path, base))

@@ -1,6 +1,7 @@
 """Check that this installation can start the complete local selection workflow."""
 from __future__ import annotations
 
+import os
 import importlib.util
 import argparse
 import json
@@ -35,7 +36,7 @@ def inspect(root: Path = ROOT) -> dict:
             probe = subprocess.run(
                 [node, "-e", "const fs=require('fs');const p=require('playwright').chromium.executablePath();process.exit(fs.existsSync(p)?0:1)"],
                 cwd=root, capture_output=True, timeout=15,
-            )
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             if probe.returncode:
                 missing.append("Playwright Chromium 未就绪；请重新运行 deploy.cmd")
         except (OSError, subprocess.TimeoutExpired):

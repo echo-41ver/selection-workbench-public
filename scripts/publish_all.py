@@ -123,7 +123,7 @@ def publish(category_path, *, kind=None):
                     if not files_ready or database_before != prior.get('analysis_database'):
                         subprocess.run([sys.executable, str(ROOT / 'scripts' / 'run_incremental_stage12.py'),
                                     'snapshot', '--config', str(config), '--snapshot-dir', str(frozen),
-                                    '--path-key', key], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+                                    '--path-key', key], cwd=ROOT, check=True, stdout=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
                         current['analysis_database']=database_before
                     analysis_changed = True
                 except Exception as exc:

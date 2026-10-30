@@ -304,7 +304,7 @@ def _read_listing_once(url):
 def _read_amazon_category(arguments, *, timeout):
     from selection_automation.browser_transport import amazon_environment
     result = subprocess.run(['node', str(ROOT/'scripts/discover_amazon_category.mjs'), *arguments],
-        cwd=ROOT, env={**os.environ,**amazon_environment(ROOT)},capture_output=True, text=True, encoding='utf-8', timeout=timeout, check=True)
+        cwd=ROOT, env={**os.environ,**amazon_environment(ROOT)},capture_output=True, text=True, encoding='utf-8', timeout=timeout, check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     evidence = json.loads(result.stdout)
     if (arguments[0] != '--query' and not valid_url(evidence['url'])) or evidence.get('blocked'):
         raise ValueError('榜单证据无效或页面要求验证')

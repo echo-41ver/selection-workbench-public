@@ -409,7 +409,7 @@ def export_excel(pipeline: IncrementalStage12, config: dict) -> list[dict]:
         completed = subprocess.run(
             command, cwd=ROOT, text=True, capture_output=True,
             encoding="utf-8", errors="replace", env=child_env,
-        )
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         if completed.returncode:
             raise RuntimeError(f"Excel导出失败: {completed.stderr[-1000:]}")
         delivery = publish_view_copies(data_destination, destination)

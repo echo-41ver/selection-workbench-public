@@ -1,4 +1,5 @@
 """Release only profiles belonging to fully completed collection lanes."""
+import os
 import json
 import shutil
 import subprocess
@@ -46,7 +47,7 @@ def cleanup_completed_worker(root, run, worker):
                 if not shell:raise RuntimeError('PowerShell unavailable for owned proxy chain cleanup')
                 subprocess.run([shell,'-NoProfile','-File',str(root/'scripts'/'proxyshare_chain_manager.ps1'),
                                 '-Action','stop','-Worker',str(lane_number)],cwd=root,check=True,
-                               stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             from selection_automation.proxy_activity import revoke_worker_activity
             revoke_worker_activity(root,lane_number)
             if state.get('deleted_profile_id') != profile:
