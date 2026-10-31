@@ -26,6 +26,7 @@ from selection_automation.stage3_admission import admitted, concurrency
 from selection_automation.visual_text_evidence import evidence_block
 from selection_automation.local_visual_wire import LocalVisualFormatError
 from selection_automation.stage3_billing import billing_hold, retry_authorizations, authorized_retry_attempt
+from selection_automation.stage3_provider import from_category
 from selection_workflow.bath_towel_deepseek import _data_url
 from selection_automation.visual_batch import data_url, grid_data_url, amazon_key
 from selection_automation.stage3_current_input import CurrentInputGuard, CurrentInputUnavailable
@@ -193,7 +194,7 @@ def run(args, candidate_path):
     cached = result_index(args.results)
     authorization=retry_authorizations(args.results.with_name('request_intents.jsonl'),args.results)
     schema_retry=authorization.get('schema_retry')
-    held_pairs = set() if args.validate_only else billing_hold(
+    held_pairs = set() if args.validate_only or from_category(cat)['mode']=='local_model' else billing_hold(
         args.results.with_name('request_intents.jsonl'), args.results)['pairs']
     fatal_file=args.results.with_name('provider_blocked.json')
     key_identity=__import__('hashlib').sha256((os.getenv('SELECTION_STAGE3_ENDPOINT','')+'\n'+
@@ -245,6 +246,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
         from selection_automation.stage3_runtime import dispatch_allowed
         return dispatch_allowed(args.results.parent) and (marker is None or (marker.is_file() and not (marker.parent/'STOP').exists()))
     stage = cat['stage3']
+    provider=from_category(cat)
     width = concurrency(stage)
     timeout_seconds = request_timeout_seconds(stage)
     initial_effort = stage.get('reasoning_effort', 'low')
@@ -257,7 +259,8 @@ def consume(args, cat, fatal_file, key_identity, pending):
     held = billing_hold(intent_log, args.results)
     if held['fail_closed']:
         raise SystemExit('检测到未结算视觉请求，已暂停付费重发；请先核对 request_intents.jsonl 和供应商用量，已保存结果仍可导出')
-    pending = (row for row in pending if (row.get('asin'),row.get('goods_id')) not in held['pairs'])
+    pending = (row for row in pending if provider['mode']=='local_model' or
+               (row.get('asin'),row.get('goods_id')) not in held['pairs'])
     retry_scope=retry_authorizations(intent_log,args.results)
     schema_retry=retry_scope.get('schema_retry')
     if schema_retry:
@@ -273,8 +276,7 @@ def consume(args, cat, fatal_file, key_identity, pending):
             raise SystemExit('未结算视觉请求对应商品对已隔离，费用待核对；本轮无可运行候选，API请求数为0')
         return
     if not authorized():return
-    from selection_automation.stage3_provider import from_category, request_key, VisualClient
-    provider=from_category(cat)
+    from selection_automation.stage3_provider import request_key, VisualClient
     from selection_automation.local_d1 import native_endpoint
     native_d1=native_endpoint(provider)
     if provider['mode']=='multimodal_api' and 'reasoning_effort' in provider:

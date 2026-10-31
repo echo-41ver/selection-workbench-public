@@ -361,7 +361,7 @@ def snapshot(base, category, *, history=True, on_phase=None):
         if agent_mode and pair in authorization['by_pair']:
             pending_blocked += 1
             continue
-        if is_held:
+        if is_held and provider['mode']!='local_model':
             pending_blocked += 1
             continue
         if authorization.get('schema_retry') and pair not in authorization['by_pair']:
