@@ -720,7 +720,7 @@ function stage3Button(data){
  const providerChanged=JSON.stringify(stage3ProviderSettings())!==JSON.stringify(data?.stage3_provider);
  const active=running||Boolean(state.codex_review?.running),runtime=data?.stage3_runtime||{};
  const blocked=Object.keys(runtime.agent_blocks||{}).some(id=>(data?.stage3_provider?.agent_ids||[]).includes(id));
- $('start-stage3').textContent=runtime.switch_pending?'正在保存断点并切换':active&&providerChanged?'保存断点并切换到所选方案':runtime.paused?'按所选方案继续第三层':active?'第三层分析中':$('stage3-mode').value==='local_agent'?'开始分析':'启动 / 继续第三层';
+ $('start-stage3').textContent=runtime.switch_pending?'正在保存断点并切换':active&&providerChanged?'保存断点并切换到所选方案':runtime.paused?'按所选方案继续第三层':state.error_code==='CURRENT_INPUT_UNAVAILABLE'&&!active?'按所选方案重试第三层':active?'第三层分析中':$('stage3-mode').value==='local_agent'?'开始分析':'启动 / 继续第三层';
  $('start-stage3').title='应用上方所选模型与设置，启动、继续或切换第三层';
  $('start-stage3').disabled=unavailable||!statusFresh||Boolean(data?.release_update?.pending)||runtime.switch_pending||active&&!providerChanged&&!runtime.paused||(!active&&state.can_start===false&&!providerChanged)||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||($('stage3-mode').value==='local_agent'&&!stage3AgentInputsReady())||($('stage3-mode').value==='local_model'&&!$('stage3-model').value.trim());
  $('configure-stage3').disabled=unavailable||active||runtime.switch_pending;
@@ -728,7 +728,7 @@ function stage3Button(data){
  let pause=$('pause-stage3');if(!pause){pause=document.createElement('button');pause.type='button';pause.id='pause-stage3';$('stop-stage3').before(pause);pause.addEventListener('click',()=>action('/api/control-stage3',{action:stage3ResumeRequired(lastStatus)?'resume':'pause'}));}
  const resumeRequired=stage3ResumeRequired(data);
  if(blocked)$('start-stage3').textContent='等待处理后继续';
- pause.textContent=resumeRequired?'恢复当前方案':'暂停第三层';pause.title=resumeRequired?'沿用当前已保存的第三层方案恢复派发':'暂停当前方案派发新组';pause.disabled=unavailable||runtime.switch_pending||!active&&!resumeRequired;
+ pause.textContent=resumeRequired?(state.error_code==='CURRENT_INPUT_UNAVAILABLE'?'重试当前方案':'恢复当前方案'):'暂停第三层';pause.title=resumeRequired?'沿用已保存方案重新读取输入并继续；保留已完成结果和断点':'暂停当前方案派发新组';pause.disabled=unavailable||runtime.switch_pending||!active&&!resumeRequired;
  let agentsBox=$('stage3-runtime-agents');if(!agentsBox){agentsBox=document.createElement('div');agentsBox.id='stage3-runtime-agents';$('stage3-phase').after(agentsBox);}agentsBox.replaceChildren();
  for(const agent of state.codex_review?.pool?.agents||[]){const row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button'),paused=(runtime.paused_agents||[]).includes(agent.id);row.className='agent-runtime-row';label.textContent=`${agent.name||agent.id} · ${Number(agent.running||0)} 组处理中${paused?' · 已暂停新组':''}`;button.type='button';button.textContent=paused?'继续此 Agent':'暂停此 Agent';button.disabled=unavailable||runtime.switch_pending;button.addEventListener('click',()=>action('/api/control-stage3',{action:paused?'resume_agent':'pause_agent',agent_id:agent.id}));row.append(label,button);agentsBox.append(row);}
  $('stop-stage3').disabled=unavailable||!state.can_stop;
@@ -762,7 +762,7 @@ function stage3Button(data){
  codexReviewPanel(data);
 }
 function stage3ResumeRequired(data){
- return Boolean(data?.stage3_runtime?.paused||data?.stage3_provider?.mode==='local_agent'&&(data.stage3_provider.agent_ids||[]).some(id=>data?.stage3_runtime?.agent_blocks?.[id]?.code==='HUMAN_VERIFICATION_REQUIRED'));
+ return Boolean(data?.stage3_control?.error_code==='CURRENT_INPUT_UNAVAILABLE'&&!data.stage3_control.running||data?.stage3_runtime?.paused||data?.stage3_provider?.mode==='local_agent'&&(data.stage3_provider.agent_ids||[]).some(id=>data?.stage3_runtime?.agent_blocks?.[id]?.code==='HUMAN_VERIFICATION_REQUIRED'));
 }
 function codexReviewPanel(data){
  const state=data?.stage3_control||{},p=state.progress||{},c=state.codex_review||{};

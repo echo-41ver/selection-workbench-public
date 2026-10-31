@@ -24,7 +24,11 @@ export async function browserControlRequest({base,session,method,suffix,body,
       :error instanceof SyntaxError?'INVALID_RESPONSE':'CONNECTION_FAILED';
     throw new BrowserControlError(kind,method,route);
   } finally {clearTimeout(timer);}
-  if(!response.ok||json?.value?.error)throw new Error(`${method} ${route}: ${json?.value?.error||response.status} ${json?.value?.message||''}`);
+  if(!response.ok||json?.value?.error){
+    const error=new BrowserControlError('DRIVER_ERROR',method,route);
+    error.message+=': '+(json?.value?.error||response.status);
+    throw error;
+  }
   return json.value;
 }
 

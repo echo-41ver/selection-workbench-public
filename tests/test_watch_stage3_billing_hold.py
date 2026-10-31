@@ -85,4 +85,7 @@ def test_input_publication_wait_recovers_but_permanent_errors_stop(tmp_path, mon
     assert len(launches)==expected_launches
     assert bool(state.get('error')) is error
     if error:assert state['child_exit_code']==exit_codes[-1]
+    if error and exit_codes[-1]==75:
+        assert state['error_code']=='CURRENT_INPUT_UNAVAILABLE'
+        assert '重试当前方案' in state['phase']
     assert not (folder/'request_intents.jsonl').exists()

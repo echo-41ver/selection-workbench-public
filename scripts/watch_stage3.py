@@ -95,7 +95,7 @@ def watch(category_path):
                     if input_waits < 3:
                         state('前两层输入正在更新，等待当前批次后自动继续')
                         time.sleep(2); continue
-                    state('前两层输入持续不可读取，分析已暂停；已完成结果保留，请导出诊断记录',error=True,child_exit_code=returncode)
+                    state('前两层输入持续不可读取，分析已暂停；已完成结果保留，可点击“重试当前方案”重新读取；仍失败可导出诊断记录',error=True,error_code='CURRENT_INPUT_UNAVAILABLE',child_exit_code=returncode)
                     return
                 input_waits = 0
                 if returncode:

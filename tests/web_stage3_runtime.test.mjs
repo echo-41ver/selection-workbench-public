@@ -52,7 +52,7 @@ test('running concurrency remains editable when models or candidate counts are u
 test('human verification is visible instead of a generic running phase',()=>{const {get,context}=view();context.data={category_key:'task',stage3_provider:{mode:'local_agent',agent_ids:['doubao']},stage3_control:{running:false,can_start:false,phase:'已暂停',progress:{total:24,pending:12}},stage3_runtime:{agent_blocks:{doubao:{code:'HUMAN_VERIFICATION_REQUIRED',message:'豆包出现验证码，请本人完成验证后继续'}}}};vm.runInContext('stage3Button(data)',context);assert.match(get('stage3-phase').textContent,/验证码/);assert.match(get('start-stage3').textContent,/等待处理/);assert.match(get('stage3-speed').textContent,/新组派发已暂停/);assert.doesNotMatch(get('stage3-speed').textContent,/正在进行/);});
 test('paused running analysis exposes resume while ordinary running disables duplicate start',()=>{const {get,context}=view();context.data={category_key:'task',stage3_control:{running:true,can_start:true,progress:{total:24,pending:12}},stage3_runtime:{paused:true}};vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,false);assert.match(get('start-stage3').textContent,/继续/);context.data.stage3_runtime.paused=false;vm.runInContext('stage3Button(data)',context);assert.equal(get('start-stage3').disabled,true);});
 
-for(const running of [false,true])test(`paused ${running?'active':'stopped'} analysis distinguishes applying a changed draft from resuming the saved provider`,()=>{
+for(const [running,inputError] of [[false,false],[true,false],[false,true]])test(`${inputError?'input failure':running?'paused active':'paused stopped'} analysis distinguishes applying a changed draft from resuming the saved provider`,()=>{
  const nodes=new Map(),requests=[];
  const node=()=>({value:'',checked:false,dataset:{},style:{},replaceChildren(){},setAttribute(){},
   before(child){nodes.set(child.id,child);},addEventListener(event,callback){this[event]=callback;}});
@@ -68,9 +68,9 @@ for(const running of [false,true])test(`paused ${running?'active':'stopped'} ana
   'stage3-model':'saved-api-model','stage3-protocol':'responses','stage3-workers':'1','stage3-confidence':'90'}))get(id).value=value;
  const saved=vm.runInContext('stage3ProviderSettings()',context);
  context.data=context.lastStatus={category_key:'task',stage3_provider:saved,
-  stage3_control:{running,can_start:true,can_stop:running,progress:{total:10,pending:10}},stage3_runtime:{paused:true}};
+  stage3_control:{running,can_start:true,can_stop:running,progress:{total:10,pending:10},...(inputError?{error:true,error_code:'CURRENT_INPUT_UNAVAILABLE'}:{})},stage3_runtime:{paused:!inputError}};
  vm.runInContext('stage3Button(data)',context);
- assert.match(get('start-stage3').textContent,/所选方案/);assert.equal(get('pause-stage3').textContent,'恢复当前方案');
+ assert.match(get('start-stage3').textContent,/所选方案/);assert.equal(get('pause-stage3').textContent,inputError?'重试当前方案':'恢复当前方案');
  assert.notEqual(get('start-stage3').textContent,get('pause-stage3').textContent);
  // Changing the controls is only a draft. Both actual click routes must remain distinct.
  get('stage3-mode').value='local_model';get('stage3-base-url').value='http://127.0.0.1:11434/v1';
@@ -78,7 +78,7 @@ for(const running of [false,true])test(`paused ${running?'active':'stopped'} ana
  vm.runInContext('stage3Button(data)',context);
  assert.equal(requests.length,0);
  assert.equal(get('start-stage3').disabled,false);assert.equal(get('pause-stage3').disabled,false);
- assert.match(get('start-stage3').textContent,/所选方案/);assert.equal(get('pause-stage3').textContent,'恢复当前方案');
+ assert.match(get('start-stage3').textContent,/所选方案/);assert.equal(get('pause-stage3').textContent,inputError?'重试当前方案':'恢复当前方案');
  assert.notEqual(get('start-stage3').textContent,get('pause-stage3').textContent);
  assert.match(get('stage3-current').textContent,/saved-api-model/);assert.doesNotMatch(get('stage3-current').textContent,/LiquidAI/);
  get('start-stage3').click();assert.equal(requests[0].path,'/api/start-stage3');
