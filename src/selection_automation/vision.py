@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
+from contextlib import closing
 from copy import deepcopy
 from pathlib import Path
 from .rules import revision, score
@@ -388,6 +390,7 @@ class VisionRevisionContext:
     """One caller's fixed configuration, never an image or cross-report cache."""
     def __init__(self, category):
         self._category = deepcopy(category)
+        self._commerce_versions = {}
         stage = self._category['stage3']
         fixed_protocol = protocol(self._category, 1)
         self._legacy = _RevisionTemplate({'rules': stage, 'protocol': fixed_protocol,
@@ -454,6 +457,26 @@ def compatible_vision_keys(category: dict, pair: dict, *, context=None) -> tuple
     # Legacy reuse is accepted only when the full original frozen rule hash agrees.
     images = _pair_image_digests(pair)
     keys=[_vision_revision(category, pair, images, context)]
+    # A refreshed price/sales card does not invalidate paid visual evidence.
+    # Recover its exact original text from the existing ingestion history;
+    # the original image bytes, questions and provider still bind every key.
+    from .visual_text_evidence import used_product_text, price_sales_only_change
+    source = (pair.get('temu_product_facts') or {}).get('source_key') or pair.get('_vision_history_source')
+    database = Path(pair['temu_image_path']).parent.parent/'stage12.sqlite3'
+    if source and database.is_file():
+        versions = context._commerce_versions if context is not None else {}
+        identity = (str(database), source, pair['goods_id'])
+        if identity not in versions:
+            with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro', uri=True)) as connection:
+                versions[identity] = [json.loads(row[0]) for row in connection.execute(
+                    'SELECT record_json FROM product_versions WHERE source_key=? AND product_id=?',
+                    (source, pair['goods_id']))]
+        current_text = used_product_text(pair)
+        for record in versions[identity]:
+            previous_text = used_product_text({'goods_id':pair['goods_id'], 'temu_product_facts':record})
+            previous = {**pair, '_vision_product_text':{**current_text, 'temu':previous_text['temu']}}
+            if price_sales_only_change(previous, pair):
+                keys.append(_vision_revision(category, previous, images, context))
     if not isinstance(category['stage3'].get('provider'),dict) and category['stage3'].get('reasoning_effort','low')=='low':
         keys.append(_legacy_vision_revision(category,pair,images,context))
     # Only an explicit runtime provider change grants checkpoint reuse. Rules,

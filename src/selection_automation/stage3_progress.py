@@ -34,6 +34,7 @@ def candidates(path):
     rows=[]; texts={}
     for r in records(path):
         row={k:r.get(k) for k in ('asin','goods_id','amazon_image_path','temu_image_path','vision_revision_key','pair_revision','vector_score')}
+        row['_vision_history_source'] = (r.get('temu_product_facts') or {}).get('source_key')
         value=used_product_text(r)
         if value:
             # Intern identical text sides, retaining the exact revision input
