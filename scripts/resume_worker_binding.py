@@ -24,13 +24,19 @@ def resume(worker, allow_rebind=False, expected_task=None, expected_profile=None
     if expected_profile and row.get('profile_id')!=expected_profile:
         raise RuntimeError('Profile changed before local binding recovery')
     path=r.ROOT/'runtime'/'proxyshare-chains'/f'replacement-worker-{worker}.json'
-    journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
-    if allow_rebind and not journal:journal={'phase':'REPLACED','new_profile_id':row['profile_id']}
-    phases={'PROFILE_CREATED','BIND_FAILED'} | ({'REPLACED'} if allow_rebind else set())
-    if journal.get('phase') not in phases or journal.get('new_profile_id')!=row['profile_id']:
-        raise RuntimeError('No matching unfinished binding; refusing to change profiles')
-    with ProcessLock(r.ROOT/'runtime'/f'replacement-{worker}.lock'):
-        with replacement_guard(r.ROOT/'runtime'/'worker-leases',name,None):
+    with replacement_guard(r.ROOT/'runtime'/'worker-leases',name,None):
+        with ProcessLock(r.ROOT/'runtime'/f'replacement-{worker}.lock'):
+            current=json.loads(r.SESSIONS.read_text('utf-8'))
+            current_row=next(x for x in current['workers'] if x['name']==name)
+            if (current.get('machine_id'),current.get('task_key'),current_row.get('profile_id')) != (
+                    manifest.get('machine_id'),manifest.get('task_key'),row.get('profile_id')):
+                raise RuntimeError('Local binding target changed during handoff; retry the current binding')
+            row=current_row
+            journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
+            if allow_rebind and not journal:journal={'phase':'REPLACED','new_profile_id':row['profile_id']}
+            phases={'PROFILE_CREATED','BIND_FAILED'} | ({'REPLACED'} if allow_rebind else set())
+            if journal.get('phase') not in phases or journal.get('new_profile_id')!=row['profile_id']:
+                raise RuntimeError('No matching unfinished binding; refusing to change profiles')
             try:
                 for attempt in range(1):
                     started=r.start_profile_with_retry(r.api_base(),row['profile_id'],attempts=1)

@@ -9,6 +9,58 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import resume_worker_binding as binding
 
 
+def test_binding_handoff_rechecks_target_after_owner_finishes_replacement(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    import pytest
+    import selection
+    from selection_automation.process_lock import ProcessLock
+    monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'identity', lambda: 'machine')
+    manifest = tmp_path / 'sessions.json'
+    row = {'name': 'worker-01-new', 'profile_id': 'old-profile'}
+    document = {'machine_id': 'machine', 'task_key': 'task', 'workers': [row]}
+    manifest.write_text(json.dumps(document), encoding='utf-8')
+    monkeypatch.setattr(binding.r, 'SESSIONS', manifest)
+    journal = tmp_path / 'runtime/proxyshare-chains/replacement-worker-1.json'
+    journal.parent.mkdir(parents=True)
+    completed = {'phase': 'REPLACED', 'new_profile_id': 'new-profile'}
+
+    @contextmanager
+    def owner_finishes_before_yielding(*args):
+        # The current owner still needs this real OS lock to finish handing off.
+        with ProcessLock(tmp_path / 'runtime/replacement-1.lock'):
+            document['workers'][0]['profile_id'] = 'new-profile'
+            manifest.write_text(json.dumps(document), encoding='utf-8')
+            journal.write_text(json.dumps(completed), encoding='utf-8')
+        yield
+
+    monkeypatch.setattr(binding, 'replacement_guard', owner_finishes_before_yielding)
+    monkeypatch.setattr(binding.r, 'start_profile_with_retry', lambda *a, **k: pytest.fail('stale profile must not be opened'))
+    with pytest.raises(RuntimeError, match='target changed during handoff'):
+        binding.resume(1, allow_rebind=True, expected_task='task', expected_profile='old-profile')
+    assert json.loads(manifest.read_text('utf-8'))['workers'][0]['profile_id'] == 'new-profile'
+    assert json.loads(journal.read_text('utf-8')) == completed
+
+
+def test_replacement_entry_allows_pending_owner_to_finish_before_transaction_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from selection_automation.process_lock import ProcessLock
+    monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['replace_proxyshare_worker_environment.py', '--worker', '1'])
+    finished = []
+
+    @contextmanager
+    def owner_finishes_before_yielding(*args):
+        with ProcessLock(tmp_path / 'runtime/replacement-1.lock'):
+            finished.append('owner transaction completed')
+        yield
+
+    monkeypatch.setattr(binding.r, 'replacement_guard', owner_finishes_before_yielding)
+    monkeypatch.setattr(binding.r, 'replace_worker', lambda args: {'worker': args.worker})
+    binding.r.main()
+    assert finished == ['owner transaction completed']
+
+
 def test_driver_repair_does_not_erase_exhausted_site_recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
     manifest=tmp_path/'sessions.json';manifest.write_text('{"task_key":"task"}')

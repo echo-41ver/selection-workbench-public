@@ -468,8 +468,8 @@ def main():
     SESSIONS = args.sessions.resolve()
     worker_name = f"worker-{args.worker:02d}-new"
     from selection_automation.process_lock import ProcessLock
-    with ProcessLock(ROOT / 'runtime' / f'replacement-{args.worker}.lock'):
-        with replacement_guard(ROOT / 'runtime' / 'worker-leases', worker_name, args.supervisor_token):
+    with replacement_guard(ROOT / 'runtime' / 'worker-leases', worker_name, args.supervisor_token):
+        with ProcessLock(ROOT / 'runtime' / f'replacement-{args.worker}.lock'):
             result = replace_worker(args)
     if args.start_collector:
         child = subprocess.Popen(
