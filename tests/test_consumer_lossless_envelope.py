@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import openai
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import run_category_layer3 as runner
-def test_complete_extra_brace_scored_once_without_paid_tail_retry(tmp_path,monkeypatch):
+def test_complete_extra_brace_scored_once_without_paid_tail_retry(tmp_path,monkeypatch,offline_api_transport):
     monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY')
     monkeypatch.setattr(runner,'_data_url',lambda *a:'data:image/png;base64,fixture')
     monkeypatch.setattr(runner,'protocol',lambda *a:('unchanged-protocol',{}));calls=[]
