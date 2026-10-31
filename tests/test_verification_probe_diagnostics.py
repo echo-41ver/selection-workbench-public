@@ -126,6 +126,26 @@ def test_failed_check_is_visible_then_clears_to_normal_wait_and_resumes_same_ses
 
 
 
+@pytest.mark.parametrize('started',[False,True])
+def test_recovered_bootstrap_network_page_can_resume_empty_search_only_before_collection(probe,started):
+    output=probe.root/'temu/workers/worker1/query'
+    output.mkdir(parents=True)
+    selection.save(output/'progress.json',{'status':'STOPPED_PROXY_OR_NETWORK_FAILURE','scroll_collection_started':started})
+    checkpoint=output/'products.jsonl'; checkpoint.write_text('{"goods_id":"retained"}\n',encoding='utf-8')
+    path=probe.root/'temu/supervisors/worker1.json'
+    selection.save(path,{'status':'HUMAN_ACTION_REQUIRED','query_status':'STOPPED_PROXY_OR_NETWORK_FAILURE',
+                         'output':str(output),'current_query':SECRET,'completed_passes':['retained'],
+                         'manual_action_required':True,'browser_preserved':True})
+    probe.replies.append(b'{"value":true}')
+    assert selection.hold_blocked_worker(probe.root,probe.session,children={},finished=set(),
+        attempts={'worker1':2},next_at={'worker1':999},state={}) is False
+    body=json.loads(probe.requests[0][0].data)
+    assert body['args']==[SECRET,not started]
+    worker=selection.read(path)
+    assert worker['status']=='RESUMING' and worker['completed_passes']==['retained']
+    assert checkpoint.read_text(encoding='utf-8')=='{"goods_id":"retained"}\n'
+
+
 def values(probe, *rows):
     probe.replies.extend(json.dumps({'value':value}).encode() for value in rows)
 

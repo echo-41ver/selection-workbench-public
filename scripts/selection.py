@@ -839,7 +839,8 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
         ready=recovery_page_ready(ROOT,session,worker.get('current_query')) if verify is ready_after_verification else verify(session,worker.get('current_query'))
     else:
         probe={}
-        ready=recovery['verify_to_resume'] and (verify(session,worker.get('current_query'),allow_empty_search=verification_wait,diagnostic=probe)
+        ready=recovery['verify_to_resume'] and (verify(session,worker.get('current_query'),allow_empty_search=verification_wait or (
+            view['采集状态']=='STOPPED_PROXY_OR_NETWORK_FAILURE' and progress.get('scroll_collection_started') is False),diagnostic=probe)
             if verify is ready_after_verification else verify(session,worker.get('current_query')))
         if probe:
             worker={**worker,'verification_probe':probe}
