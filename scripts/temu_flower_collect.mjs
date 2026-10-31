@@ -127,7 +127,16 @@ const initialWd=async(...args)=>{
   if(Date.now()>=initialWindowDeadline)throw Object.assign(new Error('Initial window selection budget exhausted'),{code:'WINDOW_SELECTION_DEADLINE'});
   return initialWindowClient(...args);
 };
-async function execute(script, args = [], commandLabel = 'execute_sync') { return wd('POST', '/execute/sync', { script, args }, {commandLabel}); }
+async function execute(script, args = [], commandLabel = 'execute_sync') {
+  // A confirmed standalone challenge resumes only after its existing BiDi URL leaves it.
+  while (humanVerificationActive && bidiStatus === 'ACTIVE'
+    && /^https:\/\/(?:www\.)?temu\.com\/bgn_verification\.html(?:[?#]|$)/i.test(currentDocumentUrl)) {
+    await sleep(1000);
+  }
+  // Embedded challenges and a disconnected BiDi channel still need a slow DOM probe.
+  if (humanVerificationActive) await sleep(5000);
+  return wd('POST', '/execute/sync', { script, args }, {commandLabel});
+}
 async function atomic(file, text) {
   await atomicSnapshot(file,text);
 }
@@ -439,6 +448,7 @@ function startBidi() {
       }
     };
     ws.onclose = () => {
+      bidiStatus = 'CLOSED';
       clearTimeout(connectTimer);
       for (const p of pending.values()) { clearTimeout(p.timer); p.bad(new Error('BiDi disconnected')); }
       pending.clear();
@@ -1999,6 +2009,7 @@ while (!finalStatus && rawCounter.count < MAX_PRODUCTS) {
   const roundBaselineRaw=rawCounter.count;
   let before = await visibleScrollToLearnedSeeMoreZone();
   const block = classify(before);
+  humanVerificationActive = block === 'HUMAN_VERIFICATION';
 
   if (block || httpBlock) {
     const effectiveBlock = block || 'HTTP_BLOCK';
@@ -2110,6 +2121,7 @@ while (!finalStatus && rawCounter.count < MAX_PRODUCTS) {
     see_more_bottom_offset_px: Math.round(seeMoreBottomOffset || 0) });
   const after = await waitForExpansionToSettle(countBefore,expansionBefore);
   const blockAfterClick = classify(after);
+  humanVerificationActive = blockAfterClick === 'HUMAN_VERIFICATION';
 
   if (blockAfterClick || httpBlock) {
     consecutiveNoNewRounds = 0;
