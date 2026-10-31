@@ -68,7 +68,7 @@ def test_old_service_rejects_new_tasks_but_still_accepts_stop(tmp_path,monkeypat
         read_version=lambda root:{'commit':'new','source_sha256':'new'})
     thread=threading.Thread(target=server.serve_forever);thread.start()
     try:
-        for endpoint,expected in (('/api/generate',409),('/api/resume',409),('/api/stop',200),('/api/refresh-market',202),
+        for endpoint,expected in (('/api/generate',409),('/api/resume',409),('/api/stop',200),('/api/change-session',200),('/api/refresh-market',202),
                 ('/api/local-agents/models',200),('/api/local-agents/refresh',200),('/api/stage3/concurrency',200)):
             conn=http.client.HTTPConnection(*server.server_address,timeout=3)
             conn.request('POST',endpoint,'{}',{'Content-Type':'application/json',
@@ -77,7 +77,7 @@ def test_old_service_rejects_new_tasks_but_still_accepts_stop(tmp_path,monkeypat
             assert response.status==expected
             if expected==409:assert payload['error']['code']=='UPDATE_PENDING'
             conn.close()
-        assert called==['stop','market','concurrency']
+        assert called==['stop','rotate','market','concurrency']
     finally:server.shutdown();server.server_close();thread.join(3)
 
 

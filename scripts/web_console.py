@@ -2668,7 +2668,7 @@ class Handler(BaseHTTPRequestHandler):
             body=json.loads(self.rfile.read(length))
             body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
-            if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market',
+            if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/change-session','/api/stop-stage3','/api/open-excel','/api/refresh-market',
                     '/api/local-agents/models','/api/local-agents/refresh','/api/local-models/repair','/api/local-models/scan','/api/stage3/api-reasoning','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)
