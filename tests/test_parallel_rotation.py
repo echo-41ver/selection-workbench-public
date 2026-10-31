@@ -25,6 +25,41 @@ def test_binding_child_publishes_failure_for_an_already_running_supervisor(tmp_p
     assert not (path.parent/'worker-02-new.json').exists()
 
 
+def test_manual_replacement_resets_all_lane_recovery_budgets_without_losing_goods(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(selection, 'ROOT', tmp_path)
+    base = tmp_path / 'runs/fixture'
+    name = 'worker-01-new'
+    sessions = [{'name': name}]
+    selection.save(tmp_path / 'config/sessions.json', {'workers': sessions})
+    output = base / 'temu/workers' / name / 'pump'
+    for filename in ('automatic_recovery.json', 'browser_control_recovery.json', 'binding_recovery.json'):
+        selection.save(output / filename, {'attempts_without_progress': 3})
+    goods = output / 'products.jsonl'
+    goods.write_text('{"goods_id":"saved"}\n')
+    other = base / 'temu/workers/worker-02-new/pump/browser_control_recovery.json'
+    selection.save(other, {'attempts_without_progress': 3})
+    path = base / 'temu/supervisors' / (name + '.json')
+    selection.save(path, {'status': 'HUMAN_ACTION_REQUIRED', 'current_query': 'pump',
+                          'recovery_budget_exhausted': True, 'unique_goods': 30})
+    request = q.enqueue(base, [1], OWNER)
+    request = q.claim(base, OWNER)
+    result = base / 'commands/rotation-results' / (request['id'] + '.json')
+    selection.save(result, {'workers': [1], 'results': [{'worker': 1, 'status': 'REPLACED'}]})
+    jobs = {request['id']: {'request': request, 'child': 'rotation', 'result': result}}
+    children = {'rotation': SimpleNamespace(poll=lambda: 0, returncode=0)}
+    selection.rotation_step(base, base/'category.json', sessions, OWNER,
+        jobs=jobs, children=children, state={}, finished={name}, attempts={name: 3}, next_at={},
+        manual_leases={}, launch=lambda *a: pytest.fail('unexpected replacement'), py=lambda *a: a)
+    assert not list(output.glob('*recovery.json'))
+    assert goods.read_text() == '{"goods_id":"saved"}\n'
+    assert selection.read(other)['attempts_without_progress'] == 3
+    worker = selection.read(path)
+    assert not worker['recovery_budget_exhausted']
+    assert worker['current_query'] == 'pump' and worker['unique_goods'] == 30
+    assert q.worker_requests(base)[name]['status'] == 'COMPLETE'
+
+
 def test_failed_new_profile_binding_enters_local_recovery_instead_of_stale_running(tmp_path,monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(selection,'ROOT',tmp_path)

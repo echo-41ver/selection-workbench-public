@@ -1027,15 +1027,16 @@ def rotation_step(base,category_path,sessions,owner,*,jobs,children,state,finish
             else:
                 finished.discard(name);attempts[name]=0;next_at[name]=0
                 # Only explicit manual replacement resets the durable automatic budget.
-                for ledger in (base/'temu/workers'/name).glob('*/automatic_recovery.json'):
-                    ledger.unlink(missing_ok=True)
+                for filename in ('automatic_recovery.json','browser_control_recovery.json','binding_recovery.json'):
+                    for ledger in (base/'temu/workers'/name).glob('*/'+filename):
+                        ledger.unlink(missing_ok=True)
                 recovery_event(base,name,'MANUAL_REPLACEMENT_COMPLETE',request_id=job['request']['id'])
                 prior=read(base/'temu/supervisors'/f'{name}.json',{})
                 from selection_automation import work_dispatch
                 lane_passes=[(r,order,state) for r in work_dispatch.read(base).get('jobs',[])
                     for order,state in (r.get('sort_passes') or {}).items() if state.get('owner')==name]
                 lane_done=bool(lane_passes) and all(state.get('complete') for _,_,state in lane_passes)
-                save(base/'temu/supervisors'/f'{name}.json',{**prior,'status':'WORKER_COMPLETE' if lane_done else 'SESSION_REPLACED','manual_action_required':False})
+                save(base/'temu/supervisors'/f'{name}.json',{**prior,'status':'WORKER_COMPLETE' if lane_done else 'SESSION_REPLACED','manual_action_required':False,'recovery_budget_exhausted':False})
         sessions=read(ROOT/'config/sessions.json')['workers']
         del jobs[request_id]
     while True:
