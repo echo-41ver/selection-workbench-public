@@ -194,6 +194,21 @@ def test_hung_control_driver_is_rebound_even_without_invalid_session_error(tmp_p
     assert not binding.repair_waiting(tmp_path,row,attempts,110)
 
 
+def test_exhausted_control_recovery_waits_for_explicit_lane_restart(tmp_path,monkeypatch):
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    path=folder/'worker-03-new.json'
+    path.write_text(json.dumps({'status':'BINDING_RETRY_WAIT',
+        'query_status':'STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET',
+        'recovery_budget_exhausted':True,'current_query':'silicone spatula'}))
+    before=path.read_bytes();attempts={}
+    def must_not_repair(*args,**kwargs):
+        raise AssertionError('automatic recovery must stop when its budget is exhausted')
+    monkeypatch.setattr(binding,'driver_connected',must_not_repair)
+    monkeypatch.setattr(binding,'resume',must_not_repair)
+    assert not binding.repair_waiting(tmp_path,{'name':'worker-03-new'},attempts,100)
+    assert path.read_bytes()==before and not attempts
+
+
 def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_path,monkeypatch):
     monkeypatch.setattr(binding.r,'ROOT',tmp_path)
     manifest=tmp_path/'sessions.json';manifest.write_text('{"task_key":"task"}')

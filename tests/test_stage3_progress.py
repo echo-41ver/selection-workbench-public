@@ -143,6 +143,24 @@ def test_incremental_queue_uses_current_revision_and_preserves_retries(tmp_path,
     assert progress.snapshot(base,{},history=False)['pending']==3
 
 
+@pytest.mark.parametrize('mode,expected',[('local_model',1),('multimodal_api',0)])
+def test_only_current_exhausted_no_charge_local_failures_are_explicitly_retryable(tmp_path,monkeypatch,mode,expected):
+    base=tmp_path/'task';base.mkdir()
+    monkeypatch.setattr(progress,'compatible_vision_keys',lambda _,r,**kw:(r['pair_revision'],))
+    rows=[{'asin':'A','goods_id':str(i),'pair_revision':str(i)} for i in range(5)]
+    write(progress.candidate_path(base),rows)
+    write(base/'stage123/results.jsonl',[
+        {**rows[0],'vision_revision_key':'0','api_status':'failed','attempt':2,'billing_state':'NO_CHARGE'},
+        {**rows[1],'vision_revision_key':'1','api_status':'failed','attempt':2,'billing_state':'KNOWN'},
+        {**rows[2],'vision_revision_key':'old','api_status':'failed','attempt':2,'billing_state':'NO_CHARGE'},
+        {**rows[3],'vision_revision_key':'3','api_status':'failed','attempt':1,'billing_state':'NO_CHARGE'},
+        {**rows[4],'vision_revision_key':'4','api_status':'failed','attempt':2,'billing_state':'NO_CHARGE'},
+        {**rows[4],'vision_revision_key':'4','api_status':'success','attempt':2,'billing_state':'KNOWN'}])
+    result=progress.snapshot(base,{'stage3':{'provider':{'mode':mode}}},history=False)
+    assert result['retryable_local_failed']==expected
+    assert (result['completed'],result['failed'],result['pending'])==(1,2,2)
+
+
 def test_observed_speed_merges_concurrent_requests_and_estimates_remaining(tmp_path,monkeypatch):
     base=tmp_path/'task';base.mkdir()
     write(progress.candidate_path(base),[{'asin':'A','goods_id':str(i)} for i in range(20)])

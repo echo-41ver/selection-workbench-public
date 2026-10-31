@@ -120,6 +120,7 @@ def repair_waiting(base, row, last_attempt, now=None):
     now=time.monotonic() if now is None else now
     name=row['name']
     state=json.loads((base/'temu/supervisors'/f'{name}.json').read_text(encoding='utf-8'))
+    if state.get('recovery_budget_exhausted'):return False
     if state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED','BINDING_RETRY_WAIT','RUNNING','RESUMING','STARTING'}:return False
     control_stop=state.get('query_status') in {'STOPPED_BROWSER_COMMAND_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'}
     urgent=control_stop or state.get('status') in {'BINDING_FAILED','BINDING_RETRY_WAIT'}

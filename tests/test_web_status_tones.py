@@ -90,3 +90,30 @@ def test_terminal_supervisor_failure_overrides_only_web_display_and_preserves_pr
  current=console.status();assert current['workers'][0]['live_snapshot']['采集状态']=='RUNNING'
  assert current['severity']==('green' if owner_active else 'yellow') and not current['workers'][0]['live_snapshot']['阻断']
  assert current['active'] is owner_active and current['can_resume'] is (not owner_active)
+
+
+@pytest.mark.parametrize('query_status',['STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'])
+@pytest.mark.parametrize('owner_active',[True,False])
+def test_exhausted_browser_recovery_is_terminal_only_in_web_projection(tmp_path,monkeypatch,query_status,owner_active):
+ console=web.Console(tmp_path);console.key='new_task'
+ monkeypatch.setattr(console,'owner',lambda:{'category_key':'new_task'} if owner_active else None)
+ monkeypatch.setattr(console,'matching_snapshot',lambda *a,**kw:{})
+ base=tmp_path/'runs/new_task';supervisor=base/'temu/supervisors/worker-01-new.json'
+ supervisor.parent.mkdir(parents=True)
+ worker={'worker':'worker-01-new','status':'BINDING_RETRY_WAIT','query_status':query_status,
+         'updated_at':'2026-10-22T04:19:44+0800','completed_queries':['retained']}
+ supervisor.write_text(json.dumps(worker),encoding='utf8')
+ (base/'category.json').write_text(json.dumps({'category_key':'new_task','execution_mode':'collection','temu':{},'amazon':{}}),encoding='utf8')
+ before={path:path.read_bytes() for path in base.rglob('*') if path.is_file()}
+ old_live={'状态':'连接中，正在自动重连','采集状态':'BINDING_RETRY_WAIT','automatic_recovery':True,
+           '需人工介入':False,'唯一商品数':7,'采集条数':9}
+ monkeypatch.setattr(web.selection,'worker_snapshot',lambda *a:({},old_live,None))
+ payload=console.status();reported=payload['workers'][0];live=reported['live_snapshot']
+ assert reported['status']=='BINDING_RETRY_WAIT' and reported['query_status']==query_status
+ assert live['采集状态']==query_status and '自动恢复已停止' in live['状态']
+ assert live['需人工介入'] and live['阻断'] and not live.get('automatic_recovery')
+ assert ('重启' if owner_active else '开始 / 继续采集') in live['建议动作']
+ assert live['唯一商品数']==7 and live['采集条数']==9 and payload['severity']=='red'
+ assert reported['status_updated_at']==worker['updated_at']
+ assert all(path.read_bytes()==data for path,data in before.items())
+ assert old_live['状态']=='连接中，正在自动重连' and old_live['automatic_recovery']
