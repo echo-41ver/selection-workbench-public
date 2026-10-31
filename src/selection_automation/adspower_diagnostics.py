@@ -23,7 +23,7 @@ def provider_error(path,code,message):
  elif re.search(r'(?:SunBrowser|FlowerBrowser) \d{2,3} is not ready,\s*please to download!',text,re.I):category,reason='KERNEL_MISSING','required AdsPower browser kernel missing; run deployment kernel preparation'
  elif re.search(r'(?:kernel|firefox|chrome|内核).{0,45}(?:not (?:found|installed|available)|missing|download|不存在|未安装|下载)|(?:missing|download).{0,30}(?:kernel|firefox|chrome|内核)',text,re.I):category,reason='KERNEL_UNAVAILABLE','requested browser kernel unavailable; verify the configured kernel in AdsPower'
  elif re.search(r'proxy.{0,30}(?:fail|invalid|unavailable)|代理.{0,20}(?:失败|无效)',text,re.I):category,reason='PROXY_CONFIGURATION','proxy configuration rejected; inspect local proxy preparation'
- elif path.split('?',1)[0]=='/api/v1/browser/start' and re.search(r'\bstart browser timeout\b',text,re.I):
+ elif path.split('?',1)[0]=='/api/v1/browser/start' and re.search(r'(?:start browser|browser.{0,24}start).{0,8}timeout',text,re.I):
   return AdsPowerAPIError(path,'START_TIMEOUT','browser startup timed out; retain the existing profile and wait for readiness',provider_code=code,retryable=True)
  elif upstream:=re.search(r'Request failed with status code (502|503|504)\b',text,re.I):
   return AdsPowerAPIError(path,'CONNECTIVITY','upstream service unavailable; request outcome unconfirmed',provider_code=code,http_status=int(upstream[1]))

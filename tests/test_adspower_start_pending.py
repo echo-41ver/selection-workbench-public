@@ -12,8 +12,9 @@ from selection_automation import profile_single_use as profiles
 from selection_automation.adspower_diagnostics import AdsPowerAPIError, provider_error
 
 
-def test_explicit_start_timeout_is_retryable_only_for_browser_start_and_is_redacted():
-    message = 'start browser timeout; password=TEST_ONLY_SECRET'
+@pytest.mark.parametrize('message', ['start browser timeout; password=TEST_ONLY_SECRET',
+    'Browser execution startup timeout; password=TEST_ONLY_SECRET'])
+def test_explicit_start_timeout_is_retryable_only_for_browser_start_and_is_redacted(message):
     error = provider_error('/api/v1/browser/start?user_id=TEST_ONLY_PRIVATE', -1, message)
     assert error.diagnostic['category'] == 'START_TIMEOUT' and error.diagnostic['retryable']
     assert error.diagnostic['provider_code'] == -1
@@ -45,7 +46,7 @@ def test_start_timeout_uses_three_existing_attempts_without_resending_a_pending_
             ready = becomes_active and sum(name == 'active' for name, _ in calls) == 2
             result = {'code': 0, 'data': {'status': 'Active' if ready else 'Inactive'}}
         elif endpoint == 'start':
-            result = ({'code': -1, 'msg': 'start browser timeout; password=TEST_ONLY_SECRET'}
+            result = ({'code': -1, 'msg': 'Browser execution startup timeout; password=TEST_ONLY_SECRET'}
                 if sum(name == 'start' for name, _ in calls) == 1
                 else {'code': 0, 'data': {'marionette_port': 1234, 'webdriver': 'fixture-driver'}})
         else:
