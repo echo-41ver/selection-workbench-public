@@ -163,7 +163,7 @@ def stop_profile_and_wait(base, profile_id, *, api=None, timeout=25):
 
 
 def start_profile_with_retry(base, profile_id, attempts=3, api=None):
-    """Retry opening the already-created profile; never create another profile."""
+    """Wait for the same profile's startup; never create another profile."""
     endpoint='/api/v1/browser/start?'+urllib.parse.urlencode({
         'user_id':profile_id,'ip_tab':'0','last_opened_tabs':'0',
         'proxy_detection':'0','headless':'0'})
@@ -173,6 +173,7 @@ def start_profile_with_retry(base, profile_id, attempts=3, api=None):
         except RuntimeError as error:
             if isinstance(error,AdsPowerAPIError) and not error.diagnostic['retryable']:raise
             if attempt+1==attempts: raise
+            # reserve_start blocks another launch while a live profile is not Active.
             time.sleep(2*(attempt+1))
 
 
