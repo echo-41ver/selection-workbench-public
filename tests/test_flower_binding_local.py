@@ -29,7 +29,8 @@ $previous.profile_id='selected';$previous.browser_started_ticks=201
 '''+decision+'''
 if($incompleteOwnedBinding){throw 'restarted browser identity was ignored'}
 ''',encoding='utf-8-sig')
-    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=15)
+    # Hosted Windows startup may exceed 15s; bounded browser retry counts stay asserted above.
+    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=60)
     assert result.returncode==0,result.stderr
 
 def test_binding_rest_is_loopback_only_and_bypasses_proxy(tmp_path):
