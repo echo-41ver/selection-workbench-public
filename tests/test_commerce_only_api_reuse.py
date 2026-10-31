@@ -10,7 +10,7 @@ from test_vision_cache_identity import CAT, fixture
 
 
 @pytest.mark.parametrize('change,can_reuse', [
-    ('price', True), ('sales', True), ('title', False), ('quantity', False),
+    ('price', True), ('sales', True), ('ad', True), ('viewed', True), ('title', False), ('quantity', False),
     ('size', False), ('image', False), ('questions', False), ('model', False)])
 def test_paid_api_reuses_only_commerce_changes_from_real_product_history(tmp_path, change, can_reuse):
     cache = tmp_path/'stage12/image_cache'
@@ -19,6 +19,8 @@ def test_paid_api_reuses_only_commerce_changes_from_real_product_history(tmp_pat
     original.update(temu_title='Whisk set', temu_product_facts={
         'source_key':'frontend', 'title':'Whisk set',
         'fields':{'card_text':'Whisk set\n12 inches\nOriginal price $4.94\n31\nsold\n31sold'}})
+    if change=='ad':original['temu_product_facts']['fields']['card_text'] += '\nAD'
+    elif change=='viewed':original['temu_product_facts']['fields']['card_text'] = original['temu_product_facts']['fields']['card_text'].replace('31\nsold\n31sold','4viewed')
     category = deepcopy(CAT)
     saved_key = vision_revision(category, original)
     with sqlite3.connect(tmp_path/'stage12/stage12.sqlite3') as connection:
@@ -29,6 +31,8 @@ def test_paid_api_reuses_only_commerce_changes_from_real_product_history(tmp_pat
     card = current['temu_product_facts']['fields']['card_text']
     current['temu_product_facts']['fields']['card_text'] = card.replace('$4.94','$5.50')
     if change=='sales':current['temu_product_facts']['fields']['card_text'] = card.replace('31','42')
+    elif change=='ad':current['temu_product_facts']['fields']['card_text'] = card.replace('\nAD','')
+    elif change=='viewed':current['temu_product_facts']['fields']['card_text'] = card.replace('4viewed','1\nsold\n1sold')
     elif change=='title':current['temu_title']='Different whisk'
     elif change=='quantity':current['temu_product_facts']['fields']['card_text'] += '\n3 pack'
     elif change=='size':current['temu_product_facts']['fields']['size']='18 inches'
