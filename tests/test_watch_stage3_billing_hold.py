@@ -55,3 +55,34 @@ def test_web_continue_grants_local_retry_only_on_first_consumer_pass(tmp_path, m
     module.watch(category)
     assert len(passes)==2
     assert '--retry-local-errors' in passes[0] and '--retry-local-errors' not in passes[1]
+
+
+@pytest.mark.parametrize('exit_codes,expected_launches,error', [([75, 0], 2, False), ([75, 75, 75], 3, True), ([1], 1, True)])
+def test_input_publication_wait_recovers_but_permanent_errors_stop(tmp_path, monkeypatch, exit_codes, expected_launches, error):
+    spec=importlib.util.spec_from_file_location('watch_input_wait_test',Path(__file__).parents[1]/'scripts/watch_stage3.py')
+    module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    monkeypatch.setattr(module,'ROOT',tmp_path)
+    monkeypatch.setattr(module,'ensure_publisher',lambda *a:None)
+    from selection_automation import stage3_provider
+    monkeypatch.setattr(stage3_provider,'from_category',lambda category:{'mode':'multimodal_api'})
+    folder=tmp_path/'runs'/'input_test'/'stage123';folder.mkdir(parents=True)
+    (folder/'paid_enabled.json').write_text('{}')
+    category=tmp_path/'category.json';category.write_text(json.dumps({'category_key':'input_test'}))
+    monkeypatch.setattr(module,'snapshot',lambda *a,**kw:{'total':1,'pending':1})
+    launches=[]
+    class Child:
+        def __init__(self,code):self.code=code
+        def wait(self,**kwargs):
+            if self.code==0:(folder/'STOP').touch()
+            return self.code
+    def launch(command,**kwargs):
+        launches.append(command)
+        return Child(exit_codes[len(launches)-1])
+    monkeypatch.setattr(module.subprocess,'Popen',launch)
+    monkeypatch.setattr(module.time,'sleep',lambda seconds:None)
+    module.watch(category)
+    state=json.loads((folder/'controller.json').read_text(encoding='utf-8'))
+    assert len(launches)==expected_launches
+    assert bool(state.get('error')) is error
+    if error:assert state['child_exit_code']==exit_codes[-1]
+    assert not (folder/'request_intents.jsonl').exists()

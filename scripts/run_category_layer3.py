@@ -235,7 +235,8 @@ def run(args, candidate_path):
     try:
         consume(args, cat, fatal_file, key_identity, pending)
     except CurrentInputUnavailable as exc:
-        raise SystemExit(str(exc)) from None
+        print(str(exc),file=sys.stderr,flush=True)
+        raise SystemExit(75) from None
     finally:
         pending.close()
 
