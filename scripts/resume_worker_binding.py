@@ -3,9 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
-import sys
 import time
-import os
 from concurrent.futures import ThreadPoolExecutor
 import urllib.error
 import urllib.request
@@ -78,38 +76,6 @@ def mark_rebound_worker(row):
         'manual_action_required':False,'automatic_retry':True,'automatic_resume_pending':True})
 
 
-def ensure_collector_resumed(base,row):
-    """A recovered lane must have a collector, even after supervisor retry exhaustion."""
-    from selection import live_owner
-    import psutil
-    owner=live_owner()
-    if not owner or owner.get('category_key')!=base.name or (base/'STOP').exists():return False
-    state_path=base/'temu/supervisors'/f"{row['name']}.json"
-    state=json.loads(state_path.read_text(encoding='utf-8'))
-    if state.get('status')!='RESUMING':return False
-    lease=r.ROOT/'runtime/worker-leases'/f"{row['name']}.owner.json"
-    try:
-        active=json.loads(lease.read_text(encoding='utf-8'));process=psutil.Process(active['pid'])
-        args=process.cmdline()
-        if (process.is_running() and active.get('worker')==row['name'] and active.get('purpose')=='collector'
-                and len(args)>1 and Path(args[1]).resolve()==(r.ROOT/'scripts/pipeline.py').resolve()
-                and '--worker-name' in args and args[args.index('--worker-name')+1]==row['name']
-                and '--category' in args and Path(args[args.index('--category')+1]).resolve()==(base/'category.json').resolve()):return False
-    except (OSError,ValueError,KeyError,IndexError,psutil.Error):pass
-    logs=base/'logs';logs.mkdir(exist_ok=True)
-    command=[sys.executable,str(r.ROOT/'scripts/pipeline.py'),'collect-temu','--category',str(base/'category.json'),
-             '--sessions',str(r.SESSIONS),'--worker-name',row['name']]
-    r.atomic_json(state_path,{**state,'status':'STARTING','manual_action_required':False,'automatic_resume_pending':True})
-    try:
-        with (logs/f"{row['name']}.log").open('ab') as stream:
-            subprocess.Popen(command,cwd=r.ROOT,stdin=subprocess.DEVNULL,stdout=stream,stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
-    except OSError:
-        r.atomic_json(state_path,state)
-        raise
-    return True
-
-
 def driver_connected(row):
     try:
         sid=(r.ROOT/row['session_id_file']).read_text(encoding='utf-8').strip()
@@ -177,7 +143,7 @@ def monitor(category, worker=None):
                     or current.get('task_key')!=base.name
                     or not any(x.get('name')==row['name'] and x.get('profile_id')==row.get('profile_id') for x in current.get('workers',[]))):return
             result=repair_waiting(base,row,last_attempt)
-            if result=='BOUND_EXISTING_PROFILE' or not result:ensure_collector_resumed(base,row)
+            # RESUMING hands collection back to selection's tracked child process.
             if result:
                 r.atomic_json(base/'temu/supervisors'/f"binding-recovery-{row['name']}.json",{'worker':row['name'],'status':result,'updated_at':time.time()})
         except (OSError,ValueError,RuntimeError,KeyError,subprocess.SubprocessError) as error:

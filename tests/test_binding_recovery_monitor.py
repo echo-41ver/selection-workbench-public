@@ -101,22 +101,32 @@ def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_
     assert json.loads(path.read_text())['current_sort']=='sales'
 
 
-def test_recovered_lane_restarts_only_current_task_without_a_live_collector(tmp_path,monkeypatch):
-    import selection,psutil
+def test_monitor_hands_recovered_lane_to_supervisor_without_launching_collector(tmp_path,monkeypatch):
+    import selection
+    from threading import Event
     monkeypatch.setattr(binding.r,'ROOT',tmp_path)
     monkeypatch.setattr(selection,'live_owner',lambda:{'category_key':'task'})
+    monkeypatch.setattr(selection,'identity',lambda:'local')
+    manifest=tmp_path/'sessions.json'
+    row={'name':'worker-04-new','profile_id':'existing'}
+    manifest.write_text(json.dumps({'machine_id':'local','task_key':'task','workers':[row]}))
+    monkeypatch.setattr(binding.r,'SESSIONS',manifest)
     base=tmp_path/'runs/task';folder=base/'temu/supervisors';folder.mkdir(parents=True)
-    path=folder/'worker-04-new.json';path.write_text('{"status":"RESUMING"}')
-    row={'name':'worker-04-new'};calls=[]
+    path=folder/'worker-04-new.json'
+    path.write_text(json.dumps({'status':'HUMAN_ACTION_REQUIRED','query_status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT'}))
+    calls=[];repaired=Event();repair=binding.repair_waiting
     monkeypatch.setattr(binding.subprocess,'Popen',lambda command,**kwargs:calls.append(command) or SimpleNamespace(pid=123))
-    lease=tmp_path/'runtime/worker-leases/worker-04-new.owner.json';lease.parent.mkdir(parents=True)
-    lease.write_text(json.dumps({'pid':123,'worker':row['name'],'purpose':'collector'}))
-    args=['python',str(tmp_path/'scripts/pipeline.py'),'collect-temu','--worker-name',row['name'],'--category',str(base/'category.json')]
-    monkeypatch.setattr(psutil,'Process',lambda _:SimpleNamespace(is_running=lambda:True,cmdline=lambda:args))
-    assert not binding.ensure_collector_resumed(base,row) and not calls
-    lease.unlink()
-    assert binding.ensure_collector_resumed(base,row) and len(calls)==1
-    assert '--worker-name' in calls[0] and calls[0][-1]==row['name']
-    assert not binding.ensure_collector_resumed(base,row)
-    path.write_text('{"status":"RESUMING"}');(base/'STOP').touch()
-    assert not binding.ensure_collector_resumed(base,row) and len(calls)==1
+    monkeypatch.setattr(binding,'driver_connected',lambda row:True)
+    def observe_repair(*args):
+        result=repair(*args);repaired.set();return result
+    def stop_after_repair(seconds):
+        assert repaired.wait(2)
+        (base/'STOP').touch()
+    monkeypatch.setattr(binding,'repair_waiting',observe_repair)
+    monkeypatch.setattr(binding,'time',SimpleNamespace(monotonic=lambda:100,sleep=stop_after_repair))
+    binding.monitor(base/'category.json')
+    assert repaired.is_set() and not calls
+    assert json.loads(path.read_text())['status']=='RESUMING'
+    before=path.read_bytes()
+    binding.monitor(base/'category.json')
+    assert path.read_bytes()==before and not calls

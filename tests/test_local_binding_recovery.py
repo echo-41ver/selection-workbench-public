@@ -41,10 +41,18 @@ def test_local_bind_failures_are_bounded(tmp_path,monkeypatch):
     assert '自动重连' in state[name]['状态']
 
 
-def test_rebound_lane_resets_exhausted_supervisor_attempts(tmp_path):
+def test_rebound_lane_resets_exhausted_attempts_and_supervisor_launches_once(tmp_path):
     name='worker-04-new';path=tmp_path/'temu/supervisors'/f'{name}.json'
     selection.save(path,{'status':'RESUMING'})
-    finished={name};attempts={name:3};next_at={name:float('inf')};state={}
-    assert not selection.hold_blocked_worker(tmp_path,{'name':name},children={},finished=finished,
-        attempts=attempts,next_at=next_at,state=state)
+    finished={name};attempts={name:3};next_at={name:float('inf')};state={};calls=[]
+    children={name:SimpleNamespace(poll=lambda:1,returncode=1)}
+    shared=dict(children=children,finished=finished,attempts=attempts,next_at=next_at,state=state)
+    assert not selection.hold_blocked_worker(tmp_path,{'name':name},**shared)
     assert not finished and attempts[name]==0 and next_at[name]==0
+    def launch(worker,command):
+        calls.append(command);children[worker]=SimpleNamespace(poll=lambda:None,pid=123)
+    selection.service_step(name,['collector'],**shared,launch=launch,log=tmp_path)
+    assert len(calls)==1 and children[name].pid==123
+    assert not selection.hold_blocked_worker(tmp_path,{'name':name},**shared)
+    selection.service_step(name,['collector'],**shared,launch=launch,log=tmp_path)
+    assert len(calls)==1
