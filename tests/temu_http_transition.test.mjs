@@ -42,25 +42,32 @@ test('transient driver navigation errors survive and usable products end observa
   assert.equal(r.reason,'VISIBLE_RESULTS');assert.equal(r.waitedMs,500);
 });
 
-test('actual bootstrap guard clears preceding 429 and returns manual verification without stopping',async()=>{
+test('actual bootstrap guard clears preceding 429 and hands first-screen verification to the supervisor',async()=>{
   const source=fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs',import.meta.url),'utf8');
   const start=source.indexOf('async function guardInitialProducts(');
   const end=source.indexOf('\nasync function navigateConfirmed',start);
-  const events=[];const snapshots=[];
+  const events=[];const snapshots=[];let cleanups=0,exitCode=null;
+  const manualExit={};
   const context=vm.createContext({httpBlock:{status:429,document_endpoint:blank.url},
     classify:classifyPageState,observeHttpPageTransition,supersededByVerification,terminalCollectionStop,
-    decideInitialProductsWait,decideEmptyQueryResults,emptyResultsWait:null,lastInitialWaitingSnapshot:0,products:new Map(),humanVerificationActive:false,initialProductsWait:null,finalStatus:null,
+    decideInitialProductsWait,decideEmptyQueryResults,emptyResultsWait:null,lastInitialWaitingSnapshot:0,products:new Map(),humanVerificationActive:false,scrollingCollectionStarted:false,initialProductsWait:null,finalStatus:null,
+    cleanupOwnedInterception:async()=>{cleanups++;},process:{exit:code=>{exitCode=code;throw manualExit;}},
     QUERY:'remote control',INITIAL_PRODUCTS_TIMEOUT_SECONDS:180,Date,URL,now:()=>new Date().toISOString(),
     sleep:async()=>{},bootstrapPageState:async()=>({...blank,url:'https://www.temu.com/bgn_verification.html',readyState:'loading'}),
     appendEvent:async(type,data)=>events.push({type,...data}),writeSnapshot:async(status,data)=>snapshots.push({status,...data}),
     confirmedLoginRedirect:()=>false});
-  const result=await vm.runInContext('class InitialProductsStopped extends Error {}\n'+source.slice(start,end)+
+  const promise=vm.runInContext('class InitialProductsStopped extends Error {}\n'+source.slice(start,end)+
     '\nguardInitialProducts('+JSON.stringify(blank)+',"empty_search_stability")',context);
-  assert.equal(result.manual,true);assert.equal(context.httpBlock,null);assert.equal(context.finalStatus,null);
+  await assert.rejects(promise,error=>error===manualExit);
+  assert.equal(cleanups,1);assert.equal(exitCode,2);
+  assert.equal(context.httpBlock,null);assert.equal(context.finalStatus,'WAITING_HUMAN_VERIFICATION');
   assert.equal(context.humanVerificationActive,true);
   assert.ok(events.some(e=>e.type==='HTTP_SIGNAL_SUPERSEDED_BY_VERIFICATION'));
   assert.ok(!events.some(e=>e.type.startsWith('STOPPED_')));
   assert.ok(snapshots.every(s=>s.browser_preserved===true));
+  assert.equal(snapshots.at(-1).status,'WAITING_HUMAN_VERIFICATION');
+  assert.equal(snapshots.at(-1).collector_paused,true);
+  assert.ok(!snapshots.some(s=>['RUNNING','KEYWORD_COMPLETE','KEYWORD_LIMIT_REACHED'].includes(s.status)));
 });
 
 test('homepage sales, review counts and prices are not HTTP error evidence',()=>{
@@ -85,12 +92,14 @@ for(const challenge of [true,false])test(`text-only HTTP guard rechecks once; ch
   const source=fs.readFileSync(new URL('../scripts/temu_flower_collect.mjs',import.meta.url),'utf8');
   const start=source.indexOf('async function guardInitialProducts(');
   const end=source.indexOf('\nasync function navigateConfirmed',start);
-  const events=[];const snapshots=[];let reads=0;
+  const events=[];const snapshots=[];let reads=0,cleanups=0,exitCode=null;
+  const manualExit={};
   const initial={...blank,text:'Error 429',title:'429 Too Many Requests'};
   const current=challenge?{...blank,url:'https://www.temu.com/bgn_verification.html',text:'',title:'Temu'}:initial;
   const context=vm.createContext({httpBlock:null,classify:classifyPageState,
     observeHttpPageTransition,supersededByVerification,terminalCollectionStop,
-    decideInitialProductsWait,decideEmptyQueryResults,emptyResultsWait:null,lastInitialWaitingSnapshot:0,products:new Map(),humanVerificationActive:false,initialProductsWait:null,finalStatus:null,
+    decideInitialProductsWait,decideEmptyQueryResults,emptyResultsWait:null,lastInitialWaitingSnapshot:0,products:new Map(),humanVerificationActive:false,scrollingCollectionStarted:false,initialProductsWait:null,finalStatus:null,
+    cleanupOwnedInterception:async()=>{cleanups++;},process:{exit:code=>{exitCode=code;throw manualExit;}},
     QUERY:'mouse',INITIAL_PRODUCTS_TIMEOUT_SECONDS:180,Date,URL,now:()=>new Date().toISOString(),
     sleep:async()=>{},bootstrapPageState:async()=>{reads++;return current;},
     appendEvent:async(type,data)=>events.push({type,...data}),writeSnapshot:async(status,data)=>snapshots.push({status,...data}),
@@ -98,14 +107,20 @@ for(const challenge of [true,false])test(`text-only HTTP guard rechecks once; ch
   const promise=vm.runInContext('class InitialProductsStopped extends Error {}\n'+source.slice(start,end)+
     '\nguardInitialProducts('+JSON.stringify(initial)+',"home_search_stability")',context);
   if(challenge) {
-    const decision=await promise;assert.equal(decision.manual,true);
-    assert.equal(decision.status,'WAITING_CAPTCHA');assert.equal(context.finalStatus,null);
+    await assert.rejects(promise,error=>error===manualExit);
+    assert.equal(cleanups,1);assert.equal(exitCode,2);
+    assert.equal(context.finalStatus,'WAITING_HUMAN_VERIFICATION');
+    assert.equal(snapshots.at(-1).status,'WAITING_HUMAN_VERIFICATION');
+    assert.equal(snapshots.at(-1).collector_paused,true);
+    assert.ok(!snapshots.some(s=>['RUNNING','KEYWORD_COMPLETE','KEYWORD_LIMIT_REACHED'].includes(s.status)));
   } else {
     await assert.rejects(promise,/STOPPED_HTTP_BLOCK/);
+    assert.equal(cleanups,0);assert.equal(exitCode,null);
     const event=events.find(e=>e.type==='STOPPED_HTTP_BLOCK');
     assert.equal(event.page_url,initial.url);assert.equal(event.network_http_status,null);
     assert.equal(event.page_classification,'HTTP_BLOCK');
   }
   assert.equal(reads,1);
   assert.equal(events[0].type,'DOM_HTTP_BLOCK_RECHECK');
+  assert.ok(snapshots.every(s=>s.browser_preserved===true));
 });
