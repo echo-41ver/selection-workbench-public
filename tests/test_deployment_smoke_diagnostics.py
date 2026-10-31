@@ -212,8 +212,8 @@ class DeploymentSmokeDiagnosticsTests(unittest.TestCase):
 
     def test_flower_navigates_local_http_and_requires_exact_dom_marker(self):
         # Real local HTTP only; profile, browser and WebDriver are isolated stubs.
-        for marker_matches, delete_fails in ((True, False), (False, False), (True, True), (False, True)):
-            with self.subTest(marker_matches=marker_matches, delete_fails=delete_fails), tempfile.TemporaryDirectory(prefix='mock-flower-http-only-') as directory:
+        for marker_matches, delete_fails, foreground in ((True, False, True), (True, False, False), (False, False, True), (True, True, True), (False, True, True)):
+            with self.subTest(marker_matches=marker_matches, delete_fails=delete_fails, foreground=foreground), tempfile.TemporaryDirectory(prefix='mock-flower-http-only-') as directory:
                 root = Path(directory)
                 driver = root / 'geckodriver.exe'
                 driver.touch()
@@ -244,7 +244,7 @@ class DeploymentSmokeDiagnosticsTests(unittest.TestCase):
                     folder.mkdir(parents=True)
                     (folder / 'flower_session_id.txt').write_text('fixture-session', encoding='utf-8')
                     (folder / 'flower_bidi_url.txt').write_text('ws://127.0.0.1/fixture', encoding='utf-8')
-                    (folder / 'binding.json').write_text('{"foreground":{"activated":true}}', encoding='utf-8')
+                    (folder / 'binding.json').write_text(json.dumps({'foreground': {'activated': foreground, 'visible': True}}), encoding='utf-8')
                     (folder / 'driver.json').write_text(json.dumps({'pid': 123, 'profile_id': 'fixture-profile',
                         'port': 41000, 'started_ticks': 621355968010000000}), encoding='utf-8')
                     return SimpleNamespace(returncode=0)
@@ -277,7 +277,8 @@ class DeploymentSmokeDiagnosticsTests(unittest.TestCase):
                         patch.object(smoke.time, 'monotonic', side_effect=itertools.chain((0, 1), itertools.repeat(16))), patch.object(smoke.time, 'sleep'):
                     if marker_matches and not delete_fails:
                         result = smoke.check_flower(root)
-                        self.assertTrue(all(result[key] for key in ('ready', 'webdriver', 'bidi', 'foreground', 'dom_read')))
+                        self.assertTrue(all(result[key] for key in ('ready', 'webdriver', 'bidi', 'window_visible', 'dom_read')))
+                        self.assertEqual(result['foreground'], foreground)
                         self.assertTrue(result['cleanup']['ready'])
                         self.assertEqual(result['cleanup']['readback_api_calls'], 1)
                     else:

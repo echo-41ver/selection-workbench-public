@@ -82,6 +82,8 @@ public static class OwnedFlowerForeground {
  public static bool SetForegroundWindow(IntPtr h){Sets++;return !Blocked && Sets>=3;}
  public static bool ShowWindowAsync(IntPtr h,int c){return true;}
  public static bool IsIconic(IntPtr h){return false;}
+ public static bool Visible=true;
+ public static bool IsWindowVisible(IntPtr h){return Visible;}
  public static IntPtr GetForegroundWindow(){return new IntPtr(!Blocked && Sets>=3?401288:123);}
  public static bool BringWindowToTop(IntPtr h){return true;}
  public static uint GetWindowThreadProcessId(IntPtr h,out uint pid){pid=h.ToInt64()==401288?(Lost?999u:62788u):100u;return h.ToInt64()==401288?22u:11u;}
@@ -113,22 +115,21 @@ if(-not $refused){throw 'ownership change was ignored'}
 $script:prompts=0
 function Request-BrowserDisplayConfirmation {
     $script:prompts++
-    [OwnedFlowerForeground]::Blocked=$false
-    return 0.25
+    throw 'Foreground permission is not a browser control requirement'
 }
 $r=Show-VerifiedProfileWindow 62788
-if($script:prompts -ne 1 -or [OwnedFlowerForeground]::Sets -ne 13 -or $r.confirmation_seconds -ne 0.25 -or -not $r.activated){throw 'confirmation did not return to actual foreground verification'}
-[OwnedFlowerForeground]::Blocked=$true
+if($script:prompts -ne 0 -or [OwnedFlowerForeground]::Sets -ne 12 -or $r.activated -or -not $r.visible){throw 'blocked focus must preserve the visible owned browser without a prompt'}
 [OwnedFlowerForeground]::Sets=0
-function Request-BrowserDisplayConfirmation {throw 'TEST_ONLY_CANCELLED'}
+[OwnedFlowerForeground]::Visible=$false
 $refused=$false
-try{Show-VerifiedProfileWindow 62788}catch{if($_.Exception.Message -ne 'TEST_ONLY_CANCELLED'){throw};$refused=$true}
-if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'cancelled confirmation was ignored or retried'}
+try{Show-VerifiedProfileWindow 62788}catch{if($_.Exception.Message -notmatch 'not visible'){throw};$refused=$true}
+if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'hidden browser incorrectly accepted'}
+[OwnedFlowerForeground]::Visible=$true
 [OwnedFlowerForeground]::Sets=0
-function Request-BrowserDisplayConfirmation {[OwnedFlowerForeground]::Lost=$true;return 0.1}
+[OwnedFlowerForeground]::Lost=$true
 $refused=$false
 try{Show-VerifiedProfileWindow 62788}catch{if($_.Exception.Message -notmatch 'ownership changed'){throw};$refused=$true}
-if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'window changed during confirmation was activated'}
+if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 0){throw 'changed window owner was activated'}
 ''',encoding='utf-8-sig')
     result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=15)
     assert result.returncode==0,result.stderr

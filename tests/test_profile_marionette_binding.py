@@ -111,7 +111,8 @@ def test_binding_is_profile_scoped_and_requires_verified_desktop_activation():
     assert 'started_ticks' in source
 
 
-def test_binding_writes_session_after_verified_foreground_activation(tmp_path):
+@pytest.mark.parametrize('foreground', [True, False])
+def test_binding_writes_session_for_verified_visible_browser(tmp_path, foreground):
     source=(ROOT/'scripts/bind_flower_worker.ps1').read_text('utf-8-sig')
     source=source.replace(". (Join-Path $PSScriptRoot 'windows_tcp_listener.ps1')", ". '"+str(ROOT/'scripts/windows_tcp_listener.ps1')+"'")
     source=source.replace('$root = Split-Path -Parent $PSScriptRoot', "$root = '"+str(tmp_path)+"'")
@@ -132,7 +133,7 @@ function Start-Process { param($FilePath,$ArgumentList,[switch]$PassThru,$Window
  [pscustomobject]@{Id=123;StartTime=$script:fixtureCreated;HasExited=$false}
 }
 function Start-Sleep { param($Milliseconds) }
-function Show-VerifiedProfileWindow { param($RootPid) if ($RootPid -ne 7) { throw 'wrong foreground owner' }; return @{window_pid=7;activated=$true} }
+function Show-VerifiedProfileWindow { param($RootPid) if ($RootPid -ne 7) { throw 'wrong window owner' }; return @{window_pid=7;activated=FOREGROUND;visible=$true} }
 function Stop-Process { throw 'test must never terminate a real process' }
 function Invoke-LocalDriverRest { param($Uri,$Method,$Body,$TimeoutSeconds)
  if($Uri -like '*/status'){return @{value=@{ready=$true}}}
@@ -141,7 +142,7 @@ function Invoke-LocalDriverRest { param($Uri,$Method,$Body,$TimeoutSeconds)
  }
  throw 'unexpected endpoint'
 }
-""".replace('PORT',str(port))
+""".replace('PORT',str(port)).replace('FOREGROUND', '$true' if foreground else '$false')
     anchor='$bindingDeadline = (Get-Date).AddSeconds($WaitSeconds)'
     assert source.count(anchor)==1
     source=source.replace(anchor,mocks+'\n'+anchor)
@@ -152,7 +153,8 @@ function Invoke-LocalDriverRest { param($Uri,$Method,$Body,$TimeoutSeconds)
     assert (tmp_path/'runtime/fixture/flower_session_id.txt').exists(), (result.stdout, result.stderr)
     assert (tmp_path/'runtime/fixture/flower_session_id.txt').read_text()=='offline-session'
     assert (tmp_path/'runtime/fixture/flower_bidi_url.txt').read_text()=='ws://127.0.0.1:9222/offline'
-    assert json.loads((tmp_path/'runtime/fixture/binding.json').read_text('utf-8-sig'))['foreground']['activated'] is True
+    window = json.loads((tmp_path/'runtime/fixture/binding.json').read_text('utf-8-sig'))['foreground']
+    assert window['activated'] is foreground and window['visible'] is True
     import hashlib
     identity = json.loads((tmp_path/'runtime/fixture/driver.json').read_text('utf-8-sig'))
     assert Path(identity['exe_path']).resolve() == driver.resolve()

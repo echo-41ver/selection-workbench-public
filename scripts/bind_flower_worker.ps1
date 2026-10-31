@@ -50,26 +50,6 @@ function Invoke-LocalDriverRest([string]$Uri, [string]$Method = 'GET', [string]$
         return ($text | ConvertFrom-Json)
     } finally { $client.Dispose(); $handler.Dispose() }
 }
-function Request-BrowserDisplayConfirmation {
-    $pythonw = Join-Path $root '.venv\Scripts\pythonw.exe'
-    $promptScript = Join-Path $PSScriptRoot 'confirm_browser_display.py'
-    if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf) -or -not (Test-Path -LiteralPath $promptScript -PathType Leaf)) {
-        throw '无法显示浏览器确认窗口；请双击导出诊断.cmd交给维护者。'
-    }
-    Write-BindingTiming 'waiting_browser_display_confirmation'
-    $confirmationClock = [Diagnostics.Stopwatch]::StartNew()
-    $callerTicks = (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
-    $prompt = Start-Process -FilePath $pythonw -ArgumentList @(('"' + $promptScript + '"'), $PID, $callerTicks) -PassThru -WindowStyle Hidden
-    if (-not $prompt.WaitForExit(65000)) {
-        # Retained process object, never a later PID lookup.
-        if (-not $prompt.HasExited) { $prompt.Kill() }
-        throw '浏览器显示确认已超时；当前浏览器已保留，请回到工作台后继续。'
-    }
-    Write-BindingTiming ('browser_display_confirmation_exit_' + $prompt.ExitCode)
-    if ($prompt.ExitCode -ne 0) { throw '浏览器显示确认未完成；当前浏览器已保留，请回到工作台后继续。' }
-    Write-BindingTiming 'browser_display_confirmation_completed'
-    return $confirmationClock.Elapsed.TotalSeconds
-}
 function Show-VerifiedProfileWindow([int]$RootPid) {
     if (-not ('OwnedFlowerForeground' -as [type])) {
         Add-Type @"
@@ -79,6 +59,7 @@ public static class OwnedFlowerForeground {
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr handle);
  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr handle, int command);
  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr handle);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr handle);
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr handle);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr handle, out uint pid);
@@ -101,8 +82,7 @@ public static class OwnedFlowerForeground {
     if (-not $selected) { throw '所选浏览器窗口尚未就绪，已保留环境，请稍后继续。' }
     $handle = $selected.MainWindowHandle
     $selectedStartedTicks = $selected.StartTime.ToUniversalTime().Ticks
-    $confirmationSeconds = 0.0
-    for ($focusPass = 0; $focusPass -lt 2; $focusPass++) {
+    $activated = $false
     for ($attempt = 1; $attempt -le 12; $attempt++) {
         [uint32]$windowProcessId = 0
         $targetThread = [OwnedFlowerForeground]::GetWindowThreadProcessId($handle, [ref]$windowProcessId)
@@ -121,22 +101,23 @@ public static class OwnedFlowerForeground {
                     $attached.Add($otherThread)
                 }
             }
-            if ([OwnedFlowerForeground]::IsIconic($handle)) { $null = [OwnedFlowerForeground]::ShowWindowAsync($handle, 9) }
+            if ([OwnedFlowerForeground]::IsIconic($handle) -or -not [OwnedFlowerForeground]::IsWindowVisible($handle)) { $null = [OwnedFlowerForeground]::ShowWindowAsync($handle, 9) }
             $null = [OwnedFlowerForeground]::BringWindowToTop($handle)
             $null = [OwnedFlowerForeground]::SetForegroundWindow($handle)
         } finally {
             foreach ($otherThread in $attached) { $null = [OwnedFlowerForeground]::AttachThreadInput($currentThread, $otherThread, $false) }
         }
         if ([OwnedFlowerForeground]::GetForegroundWindow() -eq $handle) {
-            return @{ window_pid = $selected.Id; window_handle = $handle.ToInt64(); activated = $true; attempts = $attempt; confirmation_seconds = $confirmationSeconds }
+            $activated = $true
+            break
         }
         Start-Sleep -Milliseconds 150
     }
-        if ($focusPass -eq 0) {
-            $confirmationSeconds = Request-BrowserDisplayConfirmation
-        }
-    }
-    throw 'Selected profile window could not be activated after bounded retries; browser retained.'
+    $visible = [OwnedFlowerForeground]::IsWindowVisible($handle)
+    if (-not $visible) { throw 'Selected profile window is not visible; browser retained.' }
+    # Windows may refuse focus while the owned browser remains fully controllable.
+    # Actual WebDriver/BiDi and DOM checks below establish control, not desktop focus.
+    return @{ window_pid = $selected.Id; window_handle = $handle.ToInt64(); activated = $activated; visible = $visible; attempts = [Math]::Min($attempt, 12) }
 
 }
 function Resolve-ProfileMarionettePort([string]$Id) {
@@ -289,12 +270,9 @@ do {
 if (-not $ready) { throw "geckodriver未在$WaitSeconds秒内监听$WebDriverPort（PID=$($process.Id)）" }
 Write-BindingTiming 'local_driver_ready'
 
-# First binding must visibly activate ONLY the selected profile's process tree.
+# Show only the selected profile's window; foreground focus is best effort.
 # Port ownership remains the separate authority check above.
 $foreground = if ($ProfileId) { Show-VerifiedProfileWindow $script:expectedProfileBrowserPid } else { $null }
-# User response time is bounded separately and must not consume the existing
-# Marionette/session deadline. Automated focus and driver waits remain bounded.
-if ($foreground -and $foreground.confirmation_seconds) { $bindingDeadline = $bindingDeadline.AddSeconds($foreground.confirmation_seconds) }
 Write-BindingTiming 'activate_selected_profile_window'
 $caps = @{ capabilities = @{ alwaysMatch = @{ webSocketUrl = $true; pageLoadStrategy = 'none' } } } | ConvertTo-Json -Depth 6 -Compress
 $sessionTimeout = [Math]::Max(1, [Math]::Min(60, [Math]::Ceiling(($bindingDeadline - (Get-Date)).TotalSeconds)))
