@@ -110,8 +110,11 @@ async function recordBrowserControlTimeout(error){
     message:'浏览器控制超时，保留断点并自动修复连接后继续'};
   await atomicSnapshot(PROGRESS,JSON.stringify({...previous,...details},null,2));
   await fs.appendFile(EVENTS,JSON.stringify({at:now(),type:details.status,...details})+'\n','utf8');
-  // Remove this collector's owned intercepts and release paused requests before
-  // exiting. The browser/session/proxy are not stopped or reopened.
+  await cleanupOwnedInterception();
+  process.exit(2);
+}
+async function cleanupOwnedInterception(){
+  // Remove only this collector's intercepts and paused requests. Keep the browser/session/proxy.
   if(browserControlCleanup){
     let deadline;
     try{await Promise.race([browserControlCleanup(),new Promise((_,reject)=>{deadline=setTimeout(()=>reject(Object.assign(new Error('BiDi cleanup deadline'),{code:'BIDI_CLEANUP_TIMEOUT'})),15000);})]);}
@@ -120,7 +123,6 @@ async function recordBrowserControlTimeout(error){
       remaining_intercepts:error?.remaining_intercepts??null,remaining_requests:error?.remaining_requests??null});}
     finally{clearTimeout(deadline);}
   }
-  process.exit(2);
 }
 const wd=createBrowserControlClient({base:WD,session:sid,onTimeout:recordBrowserControlTimeout});
 const initialWindowClient=createBrowserControlClient({base:WD,session:sid,commandTimeoutMs:5000,onTimeout:recordBrowserControlTimeout});
@@ -499,7 +501,8 @@ function startBidi() {
           if (/no such request/i.test(String(error))) { imageCancelRaces += 1; lifecycle.released(requestId); }
           else {
             await appendEvent('NETWORK_INTERCEPT_ERROR', { image: isImage, message: String(error).slice(0, 500) });
-            if (!lifecycle.closing && !isImage && error?.code==='BIDI_COMMAND_TIMEOUT' && error.method==='network.continueRequest') {
+            if (!lifecycle.closing && !isImage && error?.code==='BIDI_COMMAND_TIMEOUT' && error.method==='network.continueRequest'
+                && !(humanVerificationActive && !scrollingCollectionStarted)) {
               await recordBrowserControlTimeout({method:'BIDI',route:error.method,commandLabel:'network_continue_request'});
             }
           }
@@ -1270,6 +1273,9 @@ async function guardInitialProducts(state, phase) {
     await appendEvent('HTTP_PAGE_TRANSITION_RESULT', {phase,reason:transition.reason,waited_ms:transition.waitedMs});
   }
   humanVerificationActive = classify(state) === 'HUMAN_VERIFICATION';
+  // A confirmed first-screen challenge is handed to the existing supervisor.
+  // Start releasing interception before any further logging or page checks.
+  const manualCleanup = humanVerificationActive && !scrollingCollectionStarted ? cleanupOwnedInterception() : null;
   // A displayed challenge replaces the preceding failed search request.
   // Do not reuse that old HTTP status after the human completes verification.
   if (supersededByVerification({...state, verificationVisible:humanVerificationActive}, httpBlock)) {
@@ -1314,6 +1320,12 @@ async function guardInitialProducts(state, phase) {
     const fingerprint=JSON.stringify(evidence);
     if(initialProductsWait?.gate_fingerprint!==fingerprint)await appendEvent('MANUAL_GATE_OBSERVED',evidence);
     decision.clock.gate_fingerprint=fingerprint;
+    if(manualCleanup){
+      finalStatus='WAITING_HUMAN_VERIFICATION';
+      await writeSnapshot(finalStatus,{phase,browser_preserved:true,proxy_preserved:true,collector_paused:true});
+      await manualCleanup;
+      process.exit(2);
+    }
   }
   initialProductsWait = decision.clock;
   if(decision.status==='WAITING_INITIAL_PRODUCTS'&&Date.now()-lastInitialWaitingSnapshot>=2000){

@@ -66,6 +66,7 @@ test('only a tagged non-image continueRequest timeout enters the existing bounde
   const stops=[];let calls=0;
   const context=vm.createContext({isImage:image,isNonEssential:false,request:{request:'held'},requestId:'held',
    lifecycle:{closing:false,released(){}},call:async()=>{calls++;throw error;},imageCancelRaces:0,
+   humanVerificationActive:false,scrollingCollectionStarted:false,
    appendEvent:async()=>{},recordBrowserControlTimeout:async details=>stops.push(details)});
   await vm.runInContext('(async()=>{'+handling+'})()',context);
   assert.equal(calls,1);assert.equal(stops.length,expected);

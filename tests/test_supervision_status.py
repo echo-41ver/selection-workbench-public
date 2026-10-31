@@ -245,6 +245,29 @@ def test_completed_human_verification_can_resume_despite_previous_http_signal(tm
     assert selection.read(tmp_path/'temu/supervisors/worker1.json')['status']=='RESUMING'
 
 
+def test_stopped_first_screen_verification_resumes_same_session_without_spending_control_budget(tmp_path, monkeypatch):
+    _,output=worker_fixture(tmp_path,'WAITING_HUMAN_VERIFICATION',worker_status='HUMAN_ACTION_REQUIRED',
+        scroll_collection_started=False,manual_action_required=True,automatic_retry=False,unique_goods=48)
+    budget=output/'browser_control_recovery.json'
+    write(budget,{'attempts_without_progress':2,'unique_goods_high_water':48})
+    before=budget.read_bytes()
+    session={'name':'worker1','profile_id':'existing-profile'}
+    monkeypatch.setattr(selection,'request_rotation',lambda *args:pytest.fail('manual verification must retain its profile'))
+    checks=[]
+    def verify(current,query):
+        assert current is session and query=='power drill'
+        checks.append(query)
+        return len(checks)>1
+    attempts={'worker1':2};next_at={'worker1':999}
+    args=dict(children={},finished={'worker1'},attempts=attempts,next_at=next_at,state={},verify=verify)
+    assert selection.hold_blocked_worker(tmp_path,session,**args)
+    assert selection.read(tmp_path/'temu/supervisors/worker1.json')['status']=='HUMAN_ACTION_REQUIRED'
+    assert not selection.hold_blocked_worker(tmp_path,session,**args)
+    assert selection.read(tmp_path/'temu/supervisors/worker1.json')['status']=='RESUMING'
+    assert session['profile_id']=='existing-profile' and attempts['worker1']==next_at['worker1']==0
+    assert budget.read_bytes()==before
+
+
 def test_recovered_sort_page_resumes_for_collector_sort_confirmation(tmp_path):
     worker_fixture(tmp_path,'STOPPED_SALES_SORT_UNCONFIRMED',worker_status='HUMAN_ACTION_REQUIRED')
     assert not selection.hold_blocked_worker(tmp_path,{'name':'worker1'},children={},
