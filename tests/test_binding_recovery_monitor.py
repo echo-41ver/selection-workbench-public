@@ -9,6 +9,36 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import resume_worker_binding as binding
 
 
+def test_current_binding_can_recover_after_bootstrap_replaced_old_journal_profile(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    import selection
+    monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'identity', lambda: 'machine')
+    manifest = tmp_path / 'sessions.json'
+    row = {'name': 'worker-01-new', 'profile_id': 'bootstrap-profile',
+           'webdriver_url': 'http://127.0.0.1:4451'}
+    manifest.write_text(json.dumps({'machine_id': 'machine', 'task_key': 'task', 'workers': [row]}))
+    monkeypatch.setattr(binding.r, 'SESSIONS', manifest)
+    path = tmp_path / 'runtime/proxyshare-chains/replacement-worker-1.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'phase': 'REPLACED', 'new_profile_id': 'previous-profile'}))
+    driver = tmp_path / 'driver.exe'
+    driver.touch()
+    monkeypatch.setattr(binding, 'replacement_guard', lambda *a: nullcontext())
+    monkeypatch.setattr(binding.r, 'start_profile_with_retry', lambda base, profile, **kw:
+                        {'webdriver': str(driver)} if profile == 'bootstrap-profile' else None)
+    monkeypatch.setattr(binding.r, 'api_base', lambda: 'http://127.0.0.1:50325')
+    monkeypatch.setattr(binding.r, 'powershell', lambda: 'powershell')
+    commands = []
+    monkeypatch.setattr(binding.r, 'run_background_launcher', lambda command, **kw:
+                        commands.append(command) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(binding, 'mark_rebound_worker', lambda current: None)
+    binding.resume(1, allow_rebind=True, expected_task='task', expected_profile='bootstrap-profile')
+    journal = json.loads(path.read_text())
+    assert journal['new_profile_id'] == 'bootstrap-profile' and journal['local_binding_recovered']
+    assert len(commands) == 1 and '-RecoverOwnedDriver' in commands[0]
+
+
 def test_binding_handoff_rechecks_target_after_owner_finishes_replacement(tmp_path, monkeypatch):
     from contextlib import contextmanager
     import pytest

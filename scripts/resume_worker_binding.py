@@ -33,7 +33,8 @@ def resume(worker, allow_rebind=False, expected_task=None, expected_profile=None
                 raise RuntimeError('Local binding target changed during handoff; retry the current binding')
             row=current_row
             journal=json.loads(path.read_text('utf-8')) if path.exists() else {}
-            if allow_rebind and not journal:journal={'phase':'REPLACED','new_profile_id':row['profile_id']}
+            if allow_rebind and journal.get('new_profile_id')!=row['profile_id']:
+                journal={'phase':'REPLACED','new_profile_id':row['profile_id']}
             phases={'PROFILE_CREATED','BIND_FAILED'} | ({'REPLACED'} if allow_rebind else set())
             if journal.get('phase') not in phases or journal.get('new_profile_id')!=row['profile_id']:
                 raise RuntimeError('No matching unfinished binding; refusing to change profiles')
