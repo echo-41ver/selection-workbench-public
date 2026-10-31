@@ -43,3 +43,35 @@ def test_only_unclear_tile_gets_one_automatic_original_recheck(tmp_path,monkeypa
     assert result['1']['automatic_original_recheck']['attempt']==1
     assert len(list(runner.rows(tmp_path/'evidence_rechecks.jsonl')))==1
     assert not runner.unresolved_request_intents(tmp_path/'request_intents.jsonl')
+
+
+def test_received_schema_failure_pauses_without_paid_split_retries(tmp_path,monkeypatch,products):
+    calls=[]
+    class Client:
+        def __init__(self,**kw):self.responses=self
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def create(self,**kw):
+            calls.append(kw)
+            values=[candidate(),candidate('C01')]
+            for value in values:value.pop('q')
+            return N(id='received-missing-condition',status='completed',usage=N(model_dump=lambda:{'total_tokens':110}),
+                     output_text=json.dumps({'candidates':values}))
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_KEY')
+    monkeypatch.setattr('selection_automation.stage3_provider.request_key',lambda _:'TEST_ONLY_KEY')
+    monkeypatch.setattr(openai,'DefaultHttpxClient',OfflineTransport);monkeypatch.setattr(openai,'OpenAI',Client)
+    monkeypatch.setattr(runner,'_data_url',lambda path:'data:image/png;base64,fixture')
+    monkeypatch.setattr(runner,'grid_data_url',grid)
+    category=configured(products);category['stage3'].update(batch_size=12,max_concurrency=1)
+    category['stage3']['provider']={'mode':'multimodal_api','protocol':'responses','base_url':'https://fixture.example/v1','model':'fixture','workers':1}
+    pending=iter([{'asin':'A1','goods_id':str(i),'amazon_image_path':'a','temu_image_path':str(i),
+                  'pair_revision':str(i),'vision_revision_key':str(i),'attempt':1} for i in range(2)])
+    args=N(results=tmp_path/'results.jsonl',validate_only=False,max_requests=10)
+    runner.consume(args,category,tmp_path/'blocked.json','offline',pending)
+    from selection_automation.stage3_runtime import read_control
+    assert len(calls)==1 and read_control(tmp_path)['paused']
+    assert len(list(runner.rows(tmp_path/'response_errors.jsonl')))==1
+    failures=list(runner.rows(args.results))
+    assert len(failures)==2 and all(row['api_status']=='failed' and row['billing_state']=='KNOWN' for row in failures)
+    assert sum(row.get('usage',{}).get('total_tokens',0) for row in failures)==110
+    assert not runner.unresolved_request_intents(tmp_path/'request_intents.jsonl')

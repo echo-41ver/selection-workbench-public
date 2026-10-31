@@ -30,7 +30,8 @@ test('text and image checkboxes are separate and keep per-product evidence',()=>
 test('applied choices use a versioned request, while running tasks are read only',async()=>{
  const {get,context}=setup();context.lastStatus={draft:{id:'draft',match_criteria:catalog}};
  vm.runInContext('renderMatchCriteria(lastStatus);criteriaSelection.delete("size");criteriaDirty=true',context);
- const requests=[];context.fetch=async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({phase:'已保存',match_criteria:{...catalog,revision:'r2',items:catalog.items.map(item=>({...item,selected:item.id==='body'}))}})};};
+ const updated={...catalog,revision:'r2',items:catalog.items.map(item=>({...item,selected:item.id==='body'}))};
+ const requests=[];context.fetch=async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({phase:'已保存',draft:{id:'draft',match_criteria:updated}})};};
  await vm.runInContext('applyMatchCriteria()',context);
  assert.equal(requests[0].url,'/api/match-criteria');assert.deepEqual(requests[0].body.selected_ids,['body']);
  assert.equal(requests[0].body.revision,'r1');
@@ -40,6 +41,16 @@ test('applied choices use a versioned request, while running tasks are read only
  context.running={active:true,category_key:'task',match_criteria:catalog};vm.runInContext('renderMatchCriteria(running)',context);
  assert.equal(get('match-visual-rows').children[0].children[0].children[0].disabled,true);
  assert.equal(get('apply-match-criteria').disabled,true);
+});
+for(const manual of [false,true])test('checkbox save refreshes generated rules while retaining genuine edits: '+manual,async()=>{
+ const {get,context}=setup();context.lastStatus={draft:{id:'draft',stage1_text:'old text rules',stage3_text:'no selected visual evidence',match_criteria:catalog}};
+ get('stage1-rule').value='old text rules';get('stage3-rule').value=manual?'user-written visual instruction':'no selected visual evidence';
+ vm.runInContext('renderMatchCriteria(lastStatus);criteriaDirty=true',context);
+ context.fetch=async()=>({ok:true,json:async()=>({phase:'已保存',draft:{id:'draft',stage1_text:'new selected text rules',stage3_text:'selected body evidence required',match_criteria:{...catalog,revision:'r2'}}})});
+ await vm.runInContext('applyMatchCriteria()',context);
+ assert.equal(get('stage1-rule').value,'new selected text rules');
+ assert.equal(get('stage3-rule').value,manual?'user-written visual instruction':'selected body evidence required');
+ assert.equal(context.lastStatus.draft.stage3_text,'selected body evidence required');
 });
 test('Chinese names appear first and extra conditions stay selectable in a folded group',()=>{
  const {get,context}=setup();const value=structuredClone(catalog);

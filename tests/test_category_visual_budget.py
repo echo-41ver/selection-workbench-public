@@ -212,16 +212,17 @@ def test_initial_request_uses_configured_effort_and_records_it(offline_consumer,
 
 @pytest.mark.parametrize('effort', ['medium', 'high'])
 @pytest.mark.parametrize('limit', [2, 3])
-def test_schema_split_inherits_effort_and_keeps_request_cap(offline_consumer, effort, limit):
+def test_received_schema_failure_preserves_effort_and_stops_below_request_cap(offline_consumer, effort, limit):
     calls, ledger, results = offline_consumer(
         {'reasoning_effort': effort, 'batch_size': 2}, count=2, max_requests=limit,
         responder=lambda number, kwargs: '{invalid JSON' if number == 1 else '{}')
-    assert len(calls) == limit
-    assert [call['reasoning']['effort'] for call in calls] == [effort] * limit
-    assert [row['pairs'] for row in ledger] == [2] + [1] * (limit - 1)
-    assert [row['effort'] for row in ledger] == [effort] * limit
-    assert len(results) == limit - 1
-    assert all(row['api_status'] == 'success' and row['effort'] == effort for row in results)
+    assert len(calls) == 1
+    assert [call['reasoning']['effort'] for call in calls] == [effort]
+    assert [row['pairs'] for row in ledger] == [2]
+    assert [row['effort'] for row in ledger] == [effort]
+    assert len(results) == 2
+    assert all(row['api_status'] == 'failed' and row['effort'] == effort for row in results)
+    assert all(row['failure_reason'].startswith('VISUAL_RESPONSE_SCHEMA_MISMATCH') for row in results)
 
 
 @pytest.mark.parametrize('limit', [1, 2])

@@ -968,7 +968,7 @@ class Console:
             except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
             attach(category,catalog);selection.save(self.draft_path,category)
             self.draft=draft_view(category,self.draft['id'],selection.read(self.draft_plan_path,{}));self.persist_draft()
-            return {'ok':True,'phase':'条件已保存：文字用于第一层，图片用于第三层','match_criteria':catalog}
+            return {'ok':True,'phase':'条件已保存：文字用于第一层，图片用于第三层','match_criteria':catalog,'draft':self.draft}
 
     def _plain_rules(self, instruction, scope="all"):
         from selection_automation.rule_provider import environment

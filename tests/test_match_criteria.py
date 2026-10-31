@@ -305,6 +305,8 @@ def test_web_saves_split_selections_and_freezes_them_after_task_start(products,t
     result=console.select_match_criteria(body)
     saved=web.selection.read(console.draft_path,{})
     assert result['ok'] and selected(saved,'text')==[] and len(selected(saved,'visual'))==1
+    assert result['draft']['stage3_text']==console.draft['stage3_text']
+    assert 'body_type' in result['draft']['stage3_text']
     assert console.draft['match_criteria']['revision']==saved['stage3']['match_criteria_revision']
     with pytest.raises(web.ConsoleError):console.select_match_criteria(body)
     console.draft_used=True;body['revision']=saved['match_criteria']['revision']

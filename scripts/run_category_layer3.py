@@ -526,11 +526,11 @@ def consume(args, cat, fatal_file, key_identity, pending):
                 from selection_automation.stage3_runtime import update_control
                 update_control(args.results.parent,paused=True)
                 atomic_write(args.results.with_name('STOP'),json.dumps({'time':time.time(),'reason':ERROR_CODE}))
-            if received and not isinstance(exc, LocalVisualFormatError) and isinstance(exc, (ValueError, KeyError, TypeError)) and len(batch) > 1:
-                middle = len(batch)//2
-                call(batch[:middle], effort); call(batch[middle:], effort)
-                settle_intent()
-                return
+            if received and not isinstance(exc, LocalVisualFormatError) and isinstance(exc, (ValueError, KeyError, TypeError)):
+                from selection_automation.stage3_runtime import update_control
+                stop.set()
+                update_control(args.results.parent,paused=True)
+                reason = 'VISUAL_RESPONSE_SCHEMA_MISMATCH: 模型响应格式不符合当前规则，已暂停自动请求；原始响应与用量已保留'
             for i, row in enumerate(batch):
                 append(args.results, {**{k: row[k] for k in ('asin','goods_id','pair_revision','vision_revision_key','attempt')},
                                       'api_status': 'failed', 'failure_reason': reason, 'failure_status': status, 'failure_cause_types':cause_types, 'billing_state': billing_state,
