@@ -405,11 +405,17 @@ def test_invalid_rules_fail_without_template_fallback(monkeypatch,change):
 
 def test_invented_link_not_followed(monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
-    monkeypatch.setattr(generator,'read_listing',lambda _:pytest.fail('invalid link was opened'))
+    reads=[]
+    def read(url):
+        reads.append(url)
+        assert url=='https://www.amazon.com/zgbs/tools/123'
+        return {'url':url,'heading':'Best Sellers in Other Tools','rank_count':30,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',read)
     monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':'https://www.amazon.com/zgbs/tools/123'}]})
     monkeypatch.setattr(generator,'model_json',lambda *a,**kw:{'url':'https://www.amazon.com/zgbs/invented'})
     with pytest.raises(generator.CategoryGenerationError,match='真实'):
         generator.generate_category('电钻',3,40)
+    assert reads==['https://www.amazon.com/zgbs/tools/123']
 
 
 def test_missing_key_no_network(monkeypatch):
@@ -533,6 +539,20 @@ def test_listing_scope_uses_real_products_instead_of_shared_storage_heading(monk
     assert bags[0]['title'] in prompts[3] and boxes[0]['title'] in prompts[4]
 
 
+def test_unobserved_model_url_reads_live_candidate_and_still_checks_product_scope(monkeypatch):
+    live='https://www.amazon.com/gp/bestsellers/home-garden/16353541/ref=observed'
+    invented='https://www.amazon.com/zgbs/home-garden/16353551'
+    page={'url':live,'heading':'Best Sellers in Skirt Hangers','rank_count':30,
+          'ranked_products':[{'rank':1,'title':'Clip clothes hangers for skirts'}],'links':[]}
+    answers=iter([{'search_query':'clothes hangers'},{'url':invented},{'matches':True}])
+    reads=[]
+    monkeypatch.setattr(generator,'search_listing_candidates',lambda _:{'candidates':[{'url':live}]})
+    monkeypatch.setattr(generator,'read_listing',lambda url:(reads.append(url) or page))
+    monkeypatch.setattr(generator,'model_json',lambda *a,**k:next(answers))
+    assert generator.resolve_listing('衣架',lambda **k:None)==page
+    assert reads==[live]
+
+
 def test_mismatched_category_can_follow_observed_department_without_accepting_it(monkeypatch):
     bad='https://www.amazon.com/zgbs/office-products/1069646'
     department='https://www.amazon.com/Best-Sellers-Office-Products/zgbs/office-products'
@@ -567,7 +587,7 @@ def test_observed_branch_can_recover_within_the_public_navigation_budget(monkeyp
                ['Specialist Implements','Beauty','Home & Kitchen','Household Supplies','Cleaning Tools','Cleaning Implements'],
                ['Specialist maintenance item','Beauty item','Household item','Mixed household products','Mixed cleaning tools','General cleaning implement']))}
     answers=iter([{'search_query':'cleaning implement'},{'url':'https://www.amazon.com/zgbs/home-garden/999999'},
-        {'url':wrong},{'matches':False},{'url':root},{'url':department},
+        {'matches':False},{'url':root},{'url':department},
         {'url':parent},{'matches':False},{'url':child},{'matches':False},{'url':leaf},{'matches':True}])
     reads=[];searches=[]
     monkeypatch.setattr(generator,'search_listing_candidates',
@@ -609,7 +629,7 @@ def test_direct_api_link_corrected_without_directory_walk_or_revisiting(monkeypa
     monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':wrong},{'url':child}]})
     monkeypatch.setattr(generator,'read_listing',lambda url:(reads.append(url) or pages[url]))
     responses=iter([{'search_query':'remote control'},{'url':wrong},{'matches':False},{'url':'https://www.amazon.com/zgbs/electronics/172493'},
-                    {'url':child},{'matches':True},fixture_config()])
+                    {'matches':True},fixture_config()])
     def model(prompt,**kw):
         prompts.append(prompt)
         return next(responses)
@@ -617,7 +637,7 @@ def test_direct_api_link_corrected_without_directory_walk_or_revisiting(monkeypa
     result=generator.generate_category('遥控器',10,500)
     assert reads==[wrong,child]
     assert result['amazon']['bestsellers_url']==child
-    assert 'already rejected' in prompts[4]
+    assert 'Requested category:' in prompts[4]
 
 
 @pytest.mark.parametrize('category,heading,node', [('鼠标垫','Mouse Pads','49080'),
@@ -705,9 +725,15 @@ def test_short_real_node_retries_amazons_working_rank_link_path(monkeypatch,tmp_
 def test_api_cannot_open_an_invented_node_even_if_url_looks_valid(monkeypatch):
     monkeypatch.setattr(generator,'model_json',lambda *a,**kw:{'url':'https://www.amazon.com/zgbs/pc/99999999999'})
     monkeypatch.setattr(generator,'search_listing_candidates',lambda _: {'candidates':[{'url':'https://www.amazon.com/zgbs/office-products/705323011'}]})
-    monkeypatch.setattr(generator,'read_listing',lambda _:pytest.fail('invented node was opened'))
+    reads=[]
+    def read(url):
+        reads.append(url)
+        assert url=='https://www.amazon.com/zgbs/office-products/705323011'
+        return {'url':url,'heading':'Best Sellers in Other Products','rank_count':30,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',read)
     with pytest.raises(generator.CategoryGenerationError) as error:
         generator.resolve_listing('鼠标垫',lambda **kw:None)
+    assert reads==['https://www.amazon.com/zgbs/office-products/705323011']
     assert error.value.code=='CATEGORY_UNRESOLVED'
 
 

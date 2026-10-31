@@ -509,6 +509,10 @@ def resolve_listing(category_name, report, bestsellers_url=''):
         key = node[1] if node else canonical
         problem = 'The response did not supply a specific Amazon US Best Sellers category URL.'
         evidence = None
+        if key not in allowed_nodes or key in seen:
+            observed = next(((candidate, link) for candidate, link in actual_links.items() if candidate not in seen), None)
+            if observed:
+                key, url = observed
         if key in allowed_nodes and key not in seen:
             url=actual_links.get(key,url)
             seen.add(key)
