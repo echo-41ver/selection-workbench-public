@@ -114,8 +114,10 @@ async function recordBrowserControlTimeout(error){
   // exiting. The browser/session/proxy are not stopped or reopened.
   if(browserControlCleanup){
     let deadline;
-    try{await Promise.race([browserControlCleanup(),new Promise(resolve=>{deadline=setTimeout(resolve,15000);})]);}
-    catch{} // timeout status is durable even if the control channel cannot clean up
+    try{await Promise.race([browserControlCleanup(),new Promise((_,reject)=>{deadline=setTimeout(()=>reject(Object.assign(new Error('BiDi cleanup deadline'),{code:'BIDI_CLEANUP_TIMEOUT'})),15000);})]);}
+    catch(error){await appendEvent('BIDI_CLEANUP_INCOMPLETE',{
+      error_code:['BIDI_CLEANUP_INCOMPLETE','BIDI_CLEANUP_TIMEOUT'].includes(error?.code)?error.code:'BIDI_CLEANUP_ERROR',
+      remaining_intercepts:error?.remaining_intercepts??null,remaining_requests:error?.remaining_requests??null});}
     finally{clearTimeout(deadline);}
   }
   process.exit(2);
@@ -433,7 +435,7 @@ function startBidi() {
     const connectTimer = setTimeout(() => { ws.close(); resolve(null); }, 15000);
     const call = (method, params = {}) => new Promise((ok, bad) => {
       const id = ++seq;
-      const timer = setTimeout(() => { pending.delete(id); bad(new Error(`BiDi timeout: ${method}`)); }, 4000);
+      const timer = setTimeout(() => { pending.delete(id); bad(Object.assign(new Error(`BiDi timeout: ${method}`),{code:'BIDI_COMMAND_TIMEOUT',method})); }, 4000);
       pending.set(id, { ok, bad, timer });
       try { ws.send(JSON.stringify({ id, method, params })); }
       catch (error) { clearTimeout(timer); pending.delete(id); bad(error); }
@@ -495,7 +497,12 @@ function startBidi() {
           // delay the collection loop; count it without writing one event per
           // request.
           if (/no such request/i.test(String(error))) { imageCancelRaces += 1; lifecycle.released(requestId); }
-          else await appendEvent('NETWORK_INTERCEPT_ERROR', { image: isImage, message: String(error).slice(0, 500) });
+          else {
+            await appendEvent('NETWORK_INTERCEPT_ERROR', { image: isImage, message: String(error).slice(0, 500) });
+            if (!lifecycle.closing && !isImage && error?.code==='BIDI_COMMAND_TIMEOUT' && error.method==='network.continueRequest') {
+              await recordBrowserControlTimeout({method:'BIDI',route:error.method,commandLabel:'network_continue_request'});
+            }
+          }
         }
       }
       if (m.method === 'network.responseCompleted') {
@@ -1343,7 +1350,7 @@ async function navigateConfirmed(url, expected, label) {
     return {accepted:expected.test(String(lastState.url || '')), url:String(lastState.url || '')};
   };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try { await wd('POST', '/url', { url }); }
+    try { await wd('POST', '/url', { url }, {commandLabel:label.toLowerCase()}); }
     catch (error) {
       if(error?.kind==='TIMEOUT')throw error; // uncertain queued command: no inspect or resend
       const current = await inspect();
