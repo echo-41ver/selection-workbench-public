@@ -39,6 +39,38 @@ def test_current_binding_can_recover_after_bootstrap_replaced_old_journal_profil
     assert len(commands) == 1 and '-RecoverOwnedDriver' in commands[0]
 
 
+def test_rotation_after_local_binding_failure_starts_fresh_environment(tmp_path, monkeypatch):
+    import pytest
+    import selection
+    r = binding.r
+    monkeypatch.setattr(r, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'identity', lambda: 'machine')
+    policy = tmp_path / 'policy.json'
+    policy.write_text(json.dumps({'session_rotation_policy': 'NEW_ADSPOWER_PROFILE_AND_NEW_PROXY_SESSION',
+                                  'webdriver_ports': [4451]}))
+    monkeypatch.setattr(r, 'POLICY', policy)
+    manifest = tmp_path / 'sessions.json'
+    manifest.write_text(json.dumps({'machine_id': 'machine', 'workers': [
+        {'name': 'worker-01-new', 'profile_id': 'current-profile'}]}))
+    monkeypatch.setattr(r, 'SESSIONS', manifest)
+    journal = tmp_path / 'runtime/proxyshare-chains/replacement-worker-1.json'
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps({'phase': 'BIND_FAILED', 'new_profile_id': 'current-profile'}))
+    (tmp_path / 'runtime/last_run.json').write_text('{"category_key":"task"}')
+    monkeypatch.setattr(r, 'stop_owned_collectors', lambda *a: None)
+    monkeypatch.setattr(r, 'powershell', lambda: 'powershell')
+    monkeypatch.setattr(r, 'api_base', lambda: 'http://127.0.0.1:50325')
+    calls = []
+    monkeypatch.setattr(r, 'api_call', lambda base, endpoint, **kw: calls.append(endpoint))
+    def reached_fresh_deletion(base, profile):
+        calls.append(('delete', profile))
+        raise RuntimeError('fresh environment deletion reached')
+    monkeypatch.setattr(r, 'delete_profile_after_release', reached_fresh_deletion)
+    with pytest.raises(RuntimeError, match='fresh environment deletion reached'):
+        r.replace_worker(SimpleNamespace(worker=1, task_key='task'))
+    assert calls == ['/api/v1/browser/stop?user_id=current-profile', ('delete', 'current-profile')]
+
+
 def test_binding_handoff_rechecks_target_after_owner_finishes_replacement(tmp_path, monkeypatch):
     from contextlib import contextmanager
     import pytest

@@ -285,7 +285,7 @@ def replace_worker(args) -> dict:
         journal = json.loads(journal_path.read_text('utf-8'))
     except (OSError, ValueError):
         journal = {}
-    resume = journal.get('phase') in ('OLD_DELETED', 'PROXY_READY', 'PROFILE_CREATE_PENDING', 'PROFILE_CREATED', 'BIND_FAILED')
+    resume = bool(journal.get('old_profile_id')) and journal.get('phase') in ('OLD_DELETED', 'PROXY_READY', 'PROFILE_CREATE_PENDING', 'PROFILE_CREATED', 'BIND_FAILED')
     phase = journal.get('phase') if resume else ''
     def checkpoint(next_phase, **fields):
         nonlocal phase, journal
