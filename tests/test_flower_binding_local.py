@@ -99,6 +99,7 @@ function Get-Process {
  param($Id)
  $script:windowReads++
  $handle=if($script:windowReads -le 2){0}elseif($Id -eq 62788){401288}else{111}
+ if($script:alternateMainWindow -and $script:windowReads -eq 5){$handle=401289}
  return [pscustomobject]@{Id=$Id;MainWindowHandle=[IntPtr]$handle;StartTime=[DateTime]'2026-01-01'}
 }
 '''+helper+'''
@@ -110,6 +111,12 @@ $refused=$false
 try{Show-VerifiedProfileWindow 62788}catch{$refused=$true}
 if(-not $refused){throw 'ownership change was ignored'}
 [OwnedFlowerForeground]::Lost=$false
+$script:windowReads=0
+$script:alternateMainWindow=$true
+[OwnedFlowerForeground]::Sets=0
+$r=Show-VerifiedProfileWindow 62788
+if($r.window_handle -ne 401288 -or -not $r.visible){throw 'owned window rejected after MainWindowHandle chose another same-process window'}
+$script:alternateMainWindow=$false
 [OwnedFlowerForeground]::Blocked=$true
 [OwnedFlowerForeground]::Sets=0
 $script:prompts=0

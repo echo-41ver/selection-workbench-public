@@ -86,9 +86,11 @@ public static class OwnedFlowerForeground {
     for ($attempt = 1; $attempt -le 12; $attempt++) {
         [uint32]$windowProcessId = 0
         $targetThread = [OwnedFlowerForeground]::GetWindowThreadProcessId($handle, [ref]$windowProcessId)
+        # MainWindowHandle can select another window of this same process.
+        # The selected handle owner and process creation time establish ownership.
         $live = Get-Process -Id $selected.Id -ErrorAction SilentlyContinue
         if ($windowProcessId -ne $selected.Id -or -not $targetThread -or -not $live -or
-            $live.StartTime.ToUniversalTime().Ticks -ne $selectedStartedTicks -or $live.MainWindowHandle -ne $handle) {
+            $live.StartTime.ToUniversalTime().Ticks -ne $selectedStartedTicks) {
             throw 'Selected profile window ownership changed; activation stopped.'
         }
         $currentThread = [OwnedFlowerForeground]::GetCurrentThreadId()
