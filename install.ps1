@@ -442,7 +442,9 @@ if ($CompanyConfig) { Checked $python @('scripts/company_setup.py','--import-fil
 $stage = '运行准备检查'
 & (Join-Path $root 'scripts\setup_local_d1.ps1')
 if ($LASTEXITCODE -ne 0) { throw '本机 D1 服务准备失败，请使用一键导出诊断记录。' }
+$stage = '等待 AdsPower 本机服务与浏览器内核'
 Checked $python @('scripts/company_setup.py','--prepare-kernel')
+$stage = '运行准备检查'
 Checked $python @('scripts/generate_agent_config.py')
 Checked $python @('scripts/selection.py','doctor')
 Checked $python @('scripts/verify_deployment.py')

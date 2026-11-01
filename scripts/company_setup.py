@@ -91,13 +91,13 @@ def ensure_adspower_api(company):
         from selection_automation.flower_background import startup_environment
         subprocess.Popen(arguments,cwd=str(Path(exe).parent),env=startup_environment(os.environ),
                          stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
-        deadline=time.monotonic()+60
+        deadline=time.monotonic()+180
         while True:
             try:
                 api_call(base,'/status',timeout=2)
                 break
             except RuntimeError:
-                if time.monotonic()>=deadline: raise RuntimeError('AdsPower API 未就绪；检查公司 API 权限或首次账号授权')
+                if time.monotonic()>=deadline: raise RuntimeError('AdsPower 本机服务启动超时；请双击 deploy.cmd 重试，仍失败时双击“导出诊断.cmd”')
                 time.sleep(2)
     os.environ['ADSPOWER_API_KEY']=company['adspower_api_key']
     api_call(base,'/api/v1/user/list?page=1&page_size=1',timeout=5)
