@@ -49,14 +49,14 @@ test('selected handle closure/driver error is propagated without fallback or new
   const context=vm.createContext({URL,Object,Array,String,Boolean,Error,Set});vm.runInContext(helper,context);let calls=0;
   await assert.rejects(context.selectInitialWindow(['temu','aux'],async()=>{calls++;throw Error('closed');},'curtain'),/closed/);assert.equal(calls,1);
 });
-test('initial request budget refuses another command after deadline and keeps normal client timeout separate',async()=>{
+test('slow cold-window reads use normal control timeout and stop at the overall deadline',async()=>{
   const code=source.slice(source.indexOf('const initialWindowClient='),source.indexOf('async function execute('));
   let now=0,calls=0,options;
   const context=vm.createContext({Date:{now:()=>now},WD:'http://127.0.0.1:4444',sid:'test-only',recordBrowserControlTimeout:()=>{},Object,Error,
-    createBrowserControlClient:o=>{options=o;return async()=>{calls++;now+=5000;return null;};}});
+    createBrowserControlClient:o=>{options=o;return async()=>{calls++;now+=20000;return null;};}});
   vm.runInContext(code+';globalThis.request=initialWd;',context);
   for(let i=0;i<3;i++)await context.request('GET','/url');
-  await assert.rejects(context.request('GET','/url'),e=>e.code==='WINDOW_SELECTION_DEADLINE');assert.equal(calls,3);assert.equal(options.commandTimeoutMs,5000);
+  await assert.rejects(context.request('GET','/url'),e=>e.code==='WINDOW_SELECTION_DEADLINE');assert.equal(calls,3);assert.equal(options.commandTimeoutMs,undefined);
   assert.ok(source.includes('const wd=createBrowserControlClient({base:WD,session:sid,onTimeout:recordBrowserControlTimeout});'));
   assert.ok(source.includes('const handles = await readInitialWindowHandles(initialWd,'));
 });

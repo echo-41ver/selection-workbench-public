@@ -125,8 +125,8 @@ async function cleanupOwnedInterception(){
   }
 }
 const wd=createBrowserControlClient({base:WD,session:sid,onTimeout:recordBrowserControlTimeout});
-const initialWindowClient=createBrowserControlClient({base:WD,session:sid,commandTimeoutMs:5000,onTimeout:recordBrowserControlTimeout});
-const initialWindowDeadline=Date.now()+15000;
+const initialWindowClient=createBrowserControlClient({base:WD,session:sid,onTimeout:recordBrowserControlTimeout});
+const initialWindowDeadline=Date.now()+60000;
 const initialWd=async(...args)=>{
   if(Date.now()>=initialWindowDeadline)throw Object.assign(new Error('Initial window selection budget exhausted'),{code:'WINDOW_SELECTION_DEADLINE'});
   return initialWindowClient(...args);

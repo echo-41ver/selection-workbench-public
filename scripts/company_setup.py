@@ -145,7 +145,7 @@ def verify_prepared_bindings(root,read):
     for worker in manifest['workers']:
         try:
             sid=(root/worker['session_id_file']).read_text(encoding='utf-8').strip()
-            with opener.open(worker['webdriver_url']+'/session/'+sid+'/url',timeout=3) as response:
+            with opener.open(worker['webdriver_url']+'/session/'+sid+'/url',timeout=30) as response:
                 healthy=isinstance(json.load(response).get('value'),str)
             if not healthy:raise ValueError('no healthy browser URL')
         except (OSError,ValueError) as error:
