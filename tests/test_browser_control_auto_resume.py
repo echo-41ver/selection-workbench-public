@@ -86,6 +86,65 @@ def test_responsive_control_read_fences_command_even_on_empty_entry(tmp_path,mon
     assert requests==[('GET','http://127.0.0.1:4444/session/owned-session/url',5)]
 
 
+@pytest.mark.parametrize('url,initial_bootstrap,expected',[
+    ('about:blank',True,True),('about:newtab',True,True),
+    ('about:blank',False,False),('about:newtab',False,False),
+    ('about:newtab?other',True,False),('about:neterror',True,False),
+    ('https://elsewhere.test/',True,False),
+])
+def test_initial_handle_recovery_only_accepts_exact_blank_bootstrap(tmp_path,monkeypatch,url,initial_bootstrap,expected):
+    (tmp_path/'sid').write_text('owned-session')
+    checkpoint=tmp_path/'products.jsonl';checkpoint.write_bytes(b'{"goods_id":"saved"}\n')
+    before=checkpoint.read_bytes();requests=[];observations=[];clock=[0]
+    class Response:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self,*args):return json.dumps({'value':url}).encode()
+    def open_request(request,timeout):
+        requests.append((request.get_method(),request.full_url,timeout));return Response()
+    monkeypatch.setattr(recovery.urllib.request,'build_opener',lambda *args:SimpleNamespace(open=open_request))
+    def wait(seconds,lease):clock[0]+=seconds
+    def run():
+        recovery.wait_until_ready(tmp_path,{'session_id_file':'sid','webdriver_url':'http://127.0.0.1:4444'},
+            'food tongs',lease=SimpleNamespace(check_stop=lambda:None),stopped=lambda:False,
+            observe=lambda *args:observations.append(args),initial_bootstrap=initial_bootstrap,
+            gate_probe=lambda *a:pytest.fail('blank bootstrap must not probe the DOM'),
+            ready=lambda *a:pytest.fail('blank bootstrap must not probe the DOM'),
+            wait=wait,timeout_seconds=10,clock=lambda:clock[0])
+    if expected:run()
+    else:
+        with pytest.raises(recovery.BrowserControlRecoveryTimeout):run()
+    assert requests==[('GET','http://127.0.0.1:4444/session/owned-session/url',5)]
+    assert observations==[(1,expected,expected)]
+    assert checkpoint.read_bytes()==before
+
+
+@pytest.mark.parametrize('gate',[None,'WAITING_HUMAN_VERIFICATION'])
+def test_initial_handle_recovery_keeps_temu_gate_and_query_readiness(tmp_path,monkeypatch,gate):
+    (tmp_path/'sid').write_text('owned-session')
+    calls=[]
+    class Response:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self,*args):return json.dumps({'value':'https://www.temu.com/search_result.html?search_key=other'}).encode()
+    def open_request(request,timeout):
+        calls.append(('url',request.full_url));return Response()
+    monkeypatch.setattr(recovery.urllib.request,'build_opener',lambda *args:SimpleNamespace(open=open_request))
+    def probe_gate(root,session):calls.append(('gate',session['profile_id']));return gate
+    def ready(root,session,query):calls.append(('ready',query));return True
+    def run():
+        recovery.wait_until_ready(tmp_path,{'profile_id':'same-profile','session_id_file':'sid',
+            'webdriver_url':'http://127.0.0.1:4444'},'food tongs',
+            lease=SimpleNamespace(check_stop=lambda:None),stopped=lambda:False,
+            observe=lambda *a:None,initial_bootstrap=True,gate_probe=probe_gate,ready=ready,
+            wait=lambda *a:pytest.fail('ready page or gate must leave the wait'))
+    if gate:
+        with pytest.raises(recovery.BrowserGateDetected) as error:run()
+        assert error.value.status==gate
+    else:run()
+    assert calls==[('url','http://127.0.0.1:4444/session/owned-session/url'),('gate','same-profile')]+([] if gate else [('ready','food tongs')])
+
+
 def test_waiting_control_view_keeps_count_and_reports_automatic_resume(tmp_path,monkeypatch):
     import selection
     from test_supervision_status import worker_fixture
@@ -160,7 +219,9 @@ def test_pipeline_waits_then_resumes_same_query_sort_and_checkpoint(tmp_path,mon
         evidence={'requested':order,'state':'UI_CONFIRMED','query':'fuel pump'}
         if len(calls)==1:
             write(out/'progress.json',{'status':'STOPPED_BROWSER_COMMAND_TIMEOUT','unique_goods':1,
-                'manual_action_required':True,'automatic_retry':False,'sales_sort':evidence})
+                'manual_action_required':True,'automatic_retry':False,'sales_sort':evidence,
+                'command_method':'GET','command_route':'/window/handles',
+                'collection_phase':'BEFORE_SCROLL','scroll_collection_started':False})
             (out/'products.jsonl').write_text('{"goods_id":"saved"}\n')
         else:
             write(out/'progress.json',{'status':'KEYWORD_LIMIT_REACHED','unique_goods':2,'sales_sort':evidence})
@@ -169,6 +230,7 @@ def test_pipeline_waits_then_resumes_same_query_sort_and_checkpoint(tmp_path,mon
     def wait(root,session,query,**kwargs):
         checkpoint=base/'temu/workers/worker1/fuel-pump/products.jsonl'
         before=checkpoint.read_bytes()
+        assert kwargs['initial_bootstrap'] is True
         if blocked:raise recovery.BrowserGateDetected('WAITING_HUMAN_VERIFICATION')
         kwargs['observe'](1,False,False);kwargs['observe'](2,True,True)
         assert checkpoint.read_bytes()==before
@@ -293,6 +355,33 @@ def control_pipeline(tmp_path,monkeypatch):
     (output/'products.jsonl').write_text('{"goods_id":"saved"}\n')
     monkeypatch.setattr(pipeline.subprocess,'run',lambda *a,**kw:pytest.fail('control fault cannot replace a browser'))
     return pipeline,category,sessions,base,output
+
+
+@pytest.mark.parametrize('method,route,phase,started,expected',[
+    ('GET','/window/handles','BEFORE_SCROLL',False,True),
+    ('POST','/window/handles','BEFORE_SCROLL',False,False),
+    ('POST','/execute/sync','BEFORE_SCROLL',False,False),
+    ('GET','/url','BEFORE_SCROLL',False,False),
+    ('GET','/window/handles','SCROLLING',False,False),
+    ('GET','/window/handles','SCROLLING',True,False),
+    ('GET','/window/handles','BEFORE_SCROLL',True,False),
+    ('GET','/window/handles','BEFORE_SCROLL',None,False),
+])
+def test_only_initial_handle_timeout_allows_blank_bootstrap(control_pipeline,monkeypatch,method,route,phase,started,expected):
+    pipeline,category,sessions,base,output=control_pipeline
+    before=(output/'products.jsonl').read_bytes()
+    (output/'progress.json').write_text(json.dumps({'status':'STOPPED_BROWSER_COMMAND_TIMEOUT',
+        'unique_goods':1,'command_method':method,'command_route':route,'collection_phase':phase,
+        'scroll_collection_started':started}))
+    def wait(root,session,query,**kwargs):
+        assert kwargs.get('initial_bootstrap',False) is expected
+        assert session['profile_id']=='same-profile' and session['session_id_file']=='sid' and query=='mouse'
+        raise recovery.BrowserControlRecoveryTimeout()
+    monkeypatch.setattr(recovery,'wait_until_ready',wait)
+    monkeypatch.setattr(pipeline,'run_collector',lambda *a,**kw:pytest.fail('timeout cannot start collector'))
+    with pytest.raises(RuntimeError,match='incomplete'):
+        pipeline.collect_temu(base/'category.json',category,sessions,'worker1')
+    assert (output/'products.jsonl').read_bytes()==before
 
 
 @pytest.mark.parametrize('timeout',[True,False])

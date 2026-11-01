@@ -513,7 +513,11 @@ def collect_temu(category_path: Path, category: dict, sessions_path: Path, worke
                     })
                 try:
                     wait_until_ready(ROOT,session,query,lease=lease,
-                        stopped=lambda:(run_root(category)/'STOP').exists(),observe=observe_control)
+                        stopped=lambda:(run_root(category)/'STOP').exists(),observe=observe_control,
+                        initial_bootstrap=(progress.get('command_method')=='GET'
+                            and progress.get('command_route')=='/window/handles'
+                            and progress.get('collection_phase')=='BEFORE_SCROLL'
+                            and progress.get('scroll_collection_started') is False))
                 except BrowserControlRecoveryTimeout as error:
                     recovery_event(run_root(category),session['name'],'BROWSER_CONTROL_RECOVERY_TIMEOUT',query=query,sort=sort,**record)
                     return stop_control_recovery(progress,error.status,record)

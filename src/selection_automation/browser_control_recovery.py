@@ -150,7 +150,7 @@ def recovery_page_ready(root, session, query):
 
 def wait_until_ready(root, session, query, *, lease, stopped, observe, interval=10,
                      fence=control_fenced, ready=recovery_page_ready, wait=None, gate_probe=recovery_gate,
-                     timeout_seconds=120, clock=time.monotonic):
+                     timeout_seconds=120, clock=time.monotonic, initial_bootstrap=False):
     from .worker_runtime import WorkerStopRequested, interruptible_wait
     wait=wait or interruptible_wait
     checks=0
@@ -163,15 +163,32 @@ def wait_until_ready(root, session, query, *, lease, stopped, observe, interval=
     while True:
         check_pending()
         checks+=1
-        fenced=fence(root,session)
+        blank_bootstrap=False
+        if initial_bootstrap:
+            # The first handles request precedes navigation. A responsive blank
+            # page can return to the collector's existing safe-window selection.
+            fenced=False
+            try:
+                sid=(Path(root)/session['session_id_file']).read_text(encoding='utf-8').strip()
+                request=urllib.request.Request(session['webdriver_url']+'/session/'+sid+'/url')
+                with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=5) as response:
+                    value=json.load(response).get('value')
+                if isinstance(value,str):
+                    blank_bootstrap=value in ('about:blank','about:newtab')
+                    url=urlparse(value)
+                    fenced=blank_bootstrap or (url.scheme=='https' and url.hostname in {'temu.com','www.temu.com'})
+            except (OSError,ValueError,TypeError,KeyError):
+                pass
+        else:
+            fenced=fence(root,session)
         check_pending()
         # A visible search input can survive beneath a verification overlay.
         # Read the gate first, after fencing the uncertain earlier command.
-        if fenced:
+        if fenced and not blank_bootstrap:
             gate=gate_probe(root,session)
             check_pending()
             if gate:raise BrowserGateDetected(gate)
-        usable=fenced and ready(root,session,query)
+        usable=blank_bootstrap or (fenced and ready(root,session,query))
         check_pending()
         observe(checks,fenced,usable)
         if usable:
