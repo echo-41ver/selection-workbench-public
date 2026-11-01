@@ -40,7 +40,7 @@ def ensure_node_runtime(root, *, run=subprocess.run, which=shutil.which, progres
     def probe():
         try:
             result = run([node, '-e', PROBE], cwd=root, capture_output=True,
-                         text=True, encoding='utf-8', timeout=15,
+                         text=True, encoding='utf-8', timeout=60,
                          creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             if result.returncode:
                 return 'BROKEN'
@@ -48,7 +48,8 @@ def ensure_node_runtime(root, *, run=subprocess.run, which=shutil.which, progres
             record(**{k:value[k] for k in ('status','browser','package') if isinstance(value.get(k),str)})
             return value['status']
         except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
-            raise NodeRuntimeError('无法检查网页采集依赖；请运行 deploy.cmd 后重试。') from error
+            record(status='ERROR',step='检查网页采集依赖',error=type(error).__name__)
+            raise NodeRuntimeError(f'网页采集依赖检查未完成（{type(error).__name__}）；请重试启动，仍失败时一键导出诊断。') from error
 
     state = probe()
     if state == 'READY':
