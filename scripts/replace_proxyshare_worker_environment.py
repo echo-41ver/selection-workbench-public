@@ -167,14 +167,23 @@ def start_profile_with_retry(base, profile_id, attempts=3, api=None):
     endpoint='/api/v1/browser/start?'+urllib.parse.urlencode({
         'user_id':profile_id,'ip_tab':'0','last_opened_tabs':'0',
         'proxy_detection':'0','headless':'0'})
-    for attempt in range(attempts):
+    deadline=time.monotonic()+45*attempts
+    attempt=0
+    while attempt<attempts:
         try:
-            return (api or api_call)(base,endpoint,timeout=45).get('data') or {}
+            return (api or api_call)(base,endpoint,timeout=min(45,max(1,deadline-time.monotonic()))).get('data') or {}
         except RuntimeError as error:
             if isinstance(error,AdsPowerAPIError) and not error.diagnostic['retryable']:raise
-            if attempt+1==attempts: raise
-            # reserve_start blocks another launch while a live profile is not Active.
-            time.sleep(2*(attempt+1))
+            if isinstance(error,AdsPowerAPIError) and error.diagnostic['category']=='STARTUP_PENDING':
+                # reserve_start only reads Active while the same browser warms up.
+                # These readiness reads must not consume the three launch attempts.
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise
+                time.sleep(min(2,remaining))
+                continue
+            attempt+=1
+            if attempt==attempts: raise
+            time.sleep(2*attempt)
 
 
 def powershell() -> str:

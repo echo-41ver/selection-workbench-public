@@ -38,7 +38,7 @@ def test_start_timeout_uses_three_existing_attempts_without_resending_a_pending_
     monkeypatch.setattr(replacement, 'ROOT', tmp_path)
     monkeypatch.setattr(profiles.psutil, 'process_iter', lambda _: [SimpleNamespace(info={
         'name': 'flowerbrowser.exe', 'cmdline': ['flowerbrowser.exe', '--user-data-dir=C:/fixture']})])
-    calls, sleeps = [], []
+    calls, sleeps, clock = [], [], [0.0]
     def request(req, timeout):
         endpoint = req.full_url.split('?', 1)[0].rsplit('/', 1)[-1]
         calls.append((endpoint, timeout))
@@ -53,17 +53,47 @@ def test_start_timeout_uses_three_existing_attempts_without_resending_a_pending_
             pytest.fail('Startup reconciliation must not create another profile')
         return io.BytesIO(json.dumps(result).encode())
     monkeypatch.setattr(replacement.urllib.request, 'build_opener', lambda *_: SimpleNamespace(open=request))
-    monkeypatch.setattr(replacement.time, 'sleep', sleeps.append)
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+    monkeypatch.setattr(replacement.time, 'sleep', sleep)
+    monkeypatch.setattr(replacement.time, 'monotonic', lambda: clock[0])
     if becomes_active:
         assert replacement.start_profile_with_retry('http://fixture', 'fixture')['marionette_port'] == 1234
         assert calls == [('start', 45), ('active', 8), ('active', 8), ('start', 45)]
+        assert sleeps == [2, 2]
     else:
         with pytest.raises(AdsPowerAPIError) as caught:
             replacement.start_profile_with_retry('http://fixture', 'fixture')
         assert caught.value.diagnostic['category'] == 'STARTUP_PENDING'
         assert 'TEST_ONLY' not in str(caught.value)
-        assert calls == [('start', 45), ('active', 8), ('active', 8)]
-    assert sleeps == [2, 4]
+        assert [name for name, _ in calls].count('start') == 1
+        assert all(name == 'active' for name, _ in calls[1:])
+        assert sum(sleeps) == 135
+    assert len(list((tmp_path / 'runtime/profile-single-use').glob('*.json'))) == 1
+
+
+def test_cold_browser_can_become_ready_after_the_old_short_retry_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(replacement, 'ROOT', tmp_path)
+    monkeypatch.setattr(profiles.psutil, 'process_iter', lambda _: [SimpleNamespace(info={
+        'name': 'flowerbrowser.exe', 'cmdline': ['flowerbrowser.exe', '--user-data-dir=C:/fixture']})])
+    clock, calls = [0.0], []
+    def request(req, timeout):
+        endpoint = req.full_url.split('?', 1)[0].rsplit('/', 1)[-1]
+        calls.append(endpoint)
+        if endpoint == 'active':
+            result = {'code': 0, 'data': {'status': 'Active' if clock[0] >= 20 else 'Inactive'}}
+        elif endpoint == 'start':
+            result = ({'code': -1, 'msg': 'start browser timeout'} if calls.count('start') == 1
+                else {'code': 0, 'data': {'marionette_port': 1234}})
+        else:
+            pytest.fail('Readiness waiting must not create or rotate a profile')
+        return io.BytesIO(json.dumps(result).encode())
+    monkeypatch.setattr(replacement.urllib.request, 'build_opener', lambda *_: SimpleNamespace(open=request))
+    monkeypatch.setattr(replacement.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(replacement.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0]+seconds))
+    assert replacement.start_profile_with_retry('http://fixture', 'fixture')['marionette_port'] == 1234
+    assert clock[0] == 20 and calls.count('start') == 2
     assert len(list((tmp_path / 'runtime/profile-single-use').glob('*.json'))) == 1
 
 
