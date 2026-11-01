@@ -437,7 +437,7 @@ function startBidi() {
     const connectTimer = setTimeout(() => { ws.close(); resolve(null); }, 15000);
     const call = (method, params = {}) => new Promise((ok, bad) => {
       const id = ++seq;
-      const timer = setTimeout(() => { pending.delete(id); bad(Object.assign(new Error(`BiDi timeout: ${method}`),{code:'BIDI_COMMAND_TIMEOUT',method})); }, 4000);
+      const timer = setTimeout(() => { pending.delete(id); bad(Object.assign(new Error(`BiDi timeout: ${method}`),{code:'BIDI_COMMAND_TIMEOUT',method})); }, 30000);
       pending.set(id, { ok, bad, timer });
       try { ws.send(JSON.stringify({ id, method, params })); }
       catch (error) { clearTimeout(timer); pending.delete(id); bad(error); }

@@ -74,7 +74,24 @@ test('only a tagged non-image continueRequest timeout enters the existing bounde
  }
 });
 
-test('cleanup failures are recorded without private text and navigation carries its existing label',async()=>{
+
+test('a healthy five-second continuation response is not treated as a lost browser',async()=>{
+ const callCode=source.slice(source.indexOf('    const call = (method, params = {})'),source.indexOf('    lifecycle = createOwnedLifecycle'));
+ let clock=0,nextTimer=0;
+ const timers=new Map(),pending=new Map();
+ const context=vm.createContext({seq:0,pending,ws:{send(){}},Error,
+  setTimeout:(callback,delay)=>{const id=++nextTimer;timers.set(id,{callback,due:clock+delay});return id;},
+  clearTimeout:id=>timers.delete(id)});
+ vm.runInContext(callCode+';globalThis.request=call;',context);
+ const result=context.request('network.continueRequest').then(()=>true,()=>false);
+ clock=5000;
+ for(const [id,timer] of timers)if(timer.due<=clock){timers.delete(id);timer.callback();}
+ const response=pending.get(1);
+ assert.ok(response,'a valid delayed response must remain receivable after five seconds');
+ timers.delete(response.timer);pending.delete(1);response.ok({});
+ assert.equal(await result,true);
+});
++test('cleanup failures are recorded without private text and navigation carries its existing label',async()=>{
  const begin=source.indexOf('async function recordBrowserControlTimeout(');
  const end=source.indexOf('const wd=createBrowserControlClient',begin);
  const events=[],writes=[],exit=new Error('fixture exit');
