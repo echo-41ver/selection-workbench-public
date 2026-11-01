@@ -521,11 +521,14 @@ def _verification_is_temu(value):
 
 def _select_verification_window(request, query, result):
     """Stopped manual recovery only. Select within this SID; never create/navigate/close."""
+    from urllib.parse import urlsplit
     current_url=request('GET','/url')
     if not isinstance(current_url,str): raise ValueError('invalid driver URL reply')
     # A current TEMU gate or wrong query is not permission to choose another tab.
     if _verification_is_temu(current_url):
         result['window_selection']='CURRENT_TEMU_NOT_READY'
+        url=urlsplit(current_url)
+        if url.scheme=='https' and url.path=='/login.html': result['page_kind']='LOGIN'
         return False
     original=request('GET','/window')
     handles=request('GET','/window/handles')
@@ -834,11 +837,11 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
     command_timeout=view['采集状态']=='STOPPED_BROWSER_COMMAND_TIMEOUT'
     if command_timeout and not control_command_finished(session,worker.get('current_query')):
         return True
+    probe={}
     if command_timeout:
         from selection_automation.browser_control_recovery import recovery_page_ready
         ready=recovery_page_ready(ROOT,session,worker.get('current_query')) if verify is ready_after_verification else verify(session,worker.get('current_query'))
     else:
-        probe={}
         ready=recovery['verify_to_resume'] and (verify(session,worker.get('current_query'),allow_empty_search=verification_wait or (
             view['采集状态']=='STOPPED_PROXY_OR_NETWORK_FAILURE' and progress.get('scroll_collection_started') is False),diagnostic=probe)
             if verify is ready_after_verification else verify(session,worker.get('current_query')))
@@ -846,9 +849,15 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
             worker={**worker,'verification_probe':probe}
             save_progress(worker_path,worker)
             state[name].update(verification_probe_view(probe,recovery))
-    if not ready:
+    resume_for_login=(verification_wait and probe.get('page_kind')=='LOGIN'
+                      and not worker.get('recovery_budget_exhausted'))
+    if not ready and not resume_for_login:
         return True
     attempts[name]=0; next_at[name]=0
+    if resume_for_login:
+        worker={**worker,'session_recovery_kind':'LOGIN','automatic_resume_pending':True}
+        state[name]={**view,'状态':'验证后进入登录页，自动恢复采集会话','需人工介入':False,'阻断':False}
+        recovery_event(base,name,'VERIFICATION_REDIRECTED_TO_LOGIN')
     save(base/'temu'/'supervisors'/f'{name}.json',{**worker,'status':'RESUMING','manual_action_required':False})
     return False
 

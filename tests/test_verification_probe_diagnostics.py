@@ -234,6 +234,42 @@ def test_current_temu_blocked_page_does_not_switch_to_a_different_tab(probe):
     assert len(probe.requests)==2
 
 
+def test_current_login_after_verification_is_detected_without_passing_the_page(probe):
+    values(probe,False,'https://www.temu.com/login.html?from='+SECRET)
+    diagnostic={}
+    assert not selection.ready_after_verification(probe.session,SECRET,allow_empty_search=True,diagnostic=diagnostic)
+    assert diagnostic['page_kind']=='LOGIN'
+    assert diagnostic['ready'] is False and diagnostic['check_ok'] is True
+    assert paths(probe)==[('POST','/execute/sync'),('GET','/url')]
+    assert SECRET not in json.dumps(diagnostic)
+
+
+def test_stopped_verification_redirected_to_login_relaunches_existing_pipeline(probe):
+    output=probe.root/'temu/workers/worker1/query'; output.mkdir(parents=True)
+    progress={'status':'WAITING_HUMAN_VERIFICATION','scroll_collection_started':False}
+    selection.save(output/'progress.json',progress)
+    checkpoint=output/'products.jsonl'; checkpoint.write_text('{"goods_id":"retained"}\n',encoding='utf-8')
+    budget={'kind':'LOGIN','attempts_without_progress':2,'unique_goods_before':1}
+    selection.save(output/'automatic_recovery.json',budget)
+    path=probe.root/'temu/supervisors/worker1.json'
+    selection.save(path,{'status':'HUMAN_ACTION_REQUIRED','output':str(output),'current_query':SECRET,
+                         'completed_passes':[{'query':'retained','sort':'sales'}]})
+    values(probe,False,'https://www.temu.com/login.html?from='+SECRET)
+    attempts={'worker1':3}; next_at={'worker1':999}; finished={'worker1'}; state={}
+    assert not selection.hold_blocked_worker(probe.root,probe.session,children={},finished=finished,
+        attempts=attempts,next_at=next_at,state=state)
+    worker=selection.read(path)
+    assert worker['status']=='RESUMING' and worker['manual_action_required'] is False
+    assert worker['session_recovery_kind']=='LOGIN' and worker['automatic_resume_pending'] is True
+    assert worker['verification_probe']['ready'] is False
+    assert worker['completed_passes']==[{'query':'retained','sort':'sales'}]
+    assert attempts==next_at=={'worker1':0} and not finished
+    assert selection.read(output/'automatic_recovery.json')==budget
+    assert selection.read(output/'progress.json')==progress
+    assert checkpoint.read_text('utf-8')=='{"goods_id":"retained"}\n'
+    assert (probe.root/'sid').read_text('utf-8')==SECRET
+
+
 def test_normal_non_manual_probe_keeps_single_old_request_without_tab_selection(probe):
     values(probe,False)
     diagnostic={}

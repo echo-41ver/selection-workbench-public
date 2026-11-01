@@ -1,5 +1,6 @@
 {
-  "source_commit": "135eeaa4a09f8b94d6d572d5a5bdb75cdc37ea9f",
+  "source_commit": "475ffc44cbe3acf4ca0ecea086c0b2fe96208682",
   "full_deployment_base": "6146f0ce4727d0e79ea3ab97ca34dfcdb05e9e4c",
-  "release_url": "https://github.com/echo-41ver/selection-workbench-private/releases/tag/full-deployment-135eeaa"
+  "release_url": null,
+  "delivery_status": "acceptance_in_progress"
 }
