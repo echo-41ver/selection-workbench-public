@@ -14,8 +14,15 @@ test('visible Chinese and English verification remain paused',()=>{
  for(const text of ['安全验证 请完成验证','安全驗證 請完成驗證','Verify you are human'])assert.equal(ready({text}),false);
  assert.equal(ready({url:'https://www.temu.com/bgn_verification.html'}),false);
 });
-test('disabled input and wrong-query cards cannot release the paused collector',()=>{
+test('disabled input and ordinary wrong-query recovery remain paused',()=>{
  assert.equal(ready({enabled:false}),false);
- assert.equal(ready({url:'https://www.temu.com/search_result.html?search_key=other',goods:true}),false);
+ assert.equal(ready({url:'https://www.temu.com/search_result.html?search_key=other',goods:true,allowEmpty:false}),false);
  assert.equal(ready({url:'https://www.temu.com/search_result.html?search_key=keyboard',goods:true}),true);
+});
+
+test('cleared verification can re-enter the current query from a usable previous-query page',()=>{
+ const previous={url:'https://www.temu.com/search_result.html?search_key=other',goods:true,allowEmpty:true};
+ assert.equal(ready(previous),true);
+ assert.equal(ready({...previous,enabled:false}),false);
+ assert.equal(ready({...previous,text:'Verify you are human'}),false);
 });
