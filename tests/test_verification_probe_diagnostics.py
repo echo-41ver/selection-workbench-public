@@ -1,6 +1,7 @@
 """Manual-gate diagnostics use fake replies only, never a live browser or provider."""
 import json
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 import urllib.error
@@ -13,6 +14,29 @@ sys.path.insert(0,str(ROOT/'scripts'))
 import selection
 
 SECRET='fixture-private-query-cookie-session-token'
+
+
+@pytest.mark.parametrize('allow_reentry,page_text,expected',[
+    (True,'Whisks search results',True),
+    (False,'Whisks search results',False),
+    (True,'Verify you are human',False),
+])
+def test_previous_query_search_can_reenter_only_after_manual_gate(probe,allow_reentry,page_text,expected):
+    probe.replies.append(b'{"value":true}')
+    selection.ready_after_verification(probe.session,'next keyword',allow_empty_search=allow_reentry)
+    payload=json.loads(probe.requests[0][0].data)
+    payload['page_text']=page_text
+    node=r"""
+      const fs=require('node:fs'),vm=require('node:vm'),p=JSON.parse(fs.readFileSync(0,'utf8'));
+      const element={getBoundingClientRect:()=>({width:200,height:40}),disabled:false,readOnly:false};
+      const context={URL,location:{href:'https://www.temu.com/search_result.html?search_key=previous%20keyword'},
+        arguments:p.args,getComputedStyle:()=>({display:'block',visibility:'visible'}),
+        document:{title:'Temu',readyState:'complete',body:{innerText:p.page_text},
+          querySelectorAll:s=>['input[type="search"]','[data-goods-id],a[href*="-g-"]'].includes(s)?[element]:[]}};
+      console.log(JSON.stringify(vm.runInNewContext('(function(){'+p.script+'}).apply(null,arguments)',context)));
+    """
+    result=subprocess.run(['node','-e',node],input=json.dumps(payload),text=True,capture_output=True,check=True)
+    assert json.loads(result.stdout) is expected
 
 
 @pytest.fixture

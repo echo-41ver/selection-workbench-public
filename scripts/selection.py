@@ -571,17 +571,18 @@ def ready_after_verification(session, query=None, *, allow_empty_search=False, d
     try:
         sid=(ROOT/session['session_id_file']).read_text(encoding='utf-8').strip()
         body={'script':r"""
-            const target = arguments[0], allowEmpty = arguments[1], url = new URL(location.href);
+            const target = arguments[0], allowEmpty = arguments[1], url = new URL(location.href), term = url.searchParams.get('search_key');
             const visible = e => { const r=e.getBoundingClientRect(), s=getComputedStyle(e); return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden'; };
             if (!/(^|\.)temu\.com$/.test(url.hostname) || !url.pathname.includes('search_result')) return false;
-            const emptySearch = allowEmpty === true && url.pathname === '/search_result.html' && !String(url.searchParams.get('search_key') || '').trim();
-            if (!emptySearch && target && url.searchParams.get('search_key') !== target) return false;
+            // A cleared gate may return the previous keyword; the collector must re-enter its current query.
+            const searchEntry = allowEmpty === true && url.pathname === '/search_result.html' && (!String(term || '').trim() || target && term !== target);
+            if (!searchEntry && target && term !== target) return false;
             if (/captcha|verification|login|access.denied|proxyconnectfailure|neterror/i.test(url.pathname+' '+document.title)) return false;
             if (/access denied|verify you are human|unusual traffic|too many requests|proxyconnectfailure|安全验证|安全驗證|请完成验证|請完成驗證|人机验证|人機驗證|拒绝访问|拒絕存取/i.test((document.body?.innerText||'').slice(0,5000))) return false;
             if (/no connection|please check your network connection/i.test((document.body?.innerText||'').slice(0,5000))) return false;
             if ([...document.querySelectorAll('button,a,[role="button"],div,span')].some(e => visible(e) && /^(?:try again|retry|重试)$/i.test((e.textContent||'').trim()))) return false;
             if ([...document.querySelectorAll('[role="dialog"],iframe[src*="captcha"],input[type="password"]')].some(e => visible(e) && (e.tagName==='IFRAME' || e.tagName==='INPUT' || /captcha|verify|verification|sign in|log in|access denied/i.test(e.innerText||'')))) return false;
-            if (emptySearch) return ['interactive','complete'].includes(document.readyState) && [...document.querySelectorAll('input[type="search"]')].some(e => visible(e) && !e.disabled && !e.readOnly);
+            if (searchEntry) return ['interactive','complete'].includes(document.readyState) && [...document.querySelectorAll('input[type="search"]')].some(e => visible(e) && !e.disabled && !e.readOnly);
             return [...document.querySelectorAll('[data-goods-id],a[href*="-g-"]')].some(visible);
         """,'args':[query,allow_empty_search]}
         deadline=started+15
