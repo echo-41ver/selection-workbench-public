@@ -194,6 +194,21 @@ def test_hung_control_driver_is_rebound_even_without_invalid_session_error(tmp_p
     assert not binding.repair_waiting(tmp_path,row,attempts,110)
 
 
+def test_control_timeout_rebinds_even_when_url_probe_briefly_succeeds(tmp_path,monkeypatch):
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    (folder/'worker-01-new.json').write_text(json.dumps({'status':'BINDING_RETRY_WAIT',
+        'query_status':'STOPPED_BROWSER_COMMAND_TIMEOUT'}))
+    monkeypatch.setattr(binding,'driver_connected',lambda row:True)
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    calls=[];attempts={};row={'name':'worker-01-new','profile_id':'retained-profile'}
+    monkeypatch.setattr(binding,'mark_rebound_worker',lambda row:(_ for _ in ()).throw(
+        AssertionError('a URL response alone must not declare a timed-out control connection repaired')))
+    monkeypatch.setattr(binding,'resume',lambda *args,**kwargs:calls.append((args,kwargs)))
+    assert binding.repair_waiting(tmp_path,row,attempts,100)=='BOUND_EXISTING_PROFILE'
+    assert calls==[((1,),{'allow_rebind':True,'expected_task':tmp_path.name,'expected_profile':'retained-profile'})]
+    assert not binding.repair_waiting(tmp_path,row,attempts,110)
+
+
 def test_exhausted_control_recovery_waits_for_explicit_lane_restart(tmp_path,monkeypatch):
     folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
     path=folder/'worker-03-new.json'
@@ -247,7 +262,7 @@ def test_non_control_replacement_pause_does_not_rebind(tmp_path,monkeypatch):
     assert not binding.repair_waiting(tmp_path,{'name':'worker-01-new'},{},100)
 
 
-def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_path,monkeypatch):
+def test_rebound_driver_clears_terminal_progress_and_preserves_raw_count(tmp_path,monkeypatch):
     monkeypatch.setattr(binding.r,'ROOT',tmp_path)
     manifest=tmp_path/'sessions.json';manifest.write_text('{"task_key":"task"}')
     monkeypatch.setattr(binding.r,'SESSIONS',manifest)
@@ -259,8 +274,9 @@ def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_
     (output/'progress.json').write_text(json.dumps({'status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT',
         'raw_collected_count':40,'unique_goods':8,'raw_sampling':{'count':40}}))
     checkpoint=output/'products.jsonl';checkpoint.write_text('saved');before=checkpoint.read_bytes()
-    monkeypatch.setattr(binding,'driver_connected',lambda row:True)
-    monkeypatch.setattr(binding,'resume',lambda *a,**k:(_ for _ in ()).throw(AssertionError('responsive driver must not restart')))
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    monkeypatch.setattr(binding,'resume',lambda *a,**k:binding.mark_rebound_worker(
+        {'name':'worker-04-new','profile_id':'same-profile'}))
     assert binding.repair_waiting(base,{'name':'worker-04-new','profile_id':'same-profile'},{},100)=='BOUND_EXISTING_PROFILE'
     progress=json.loads((output/'progress.json').read_text())
     assert progress['status']=='RESUMING' and progress['raw_collected_count']==40 and progress['unique_goods']==8
@@ -284,6 +300,8 @@ def test_monitor_hands_recovered_lane_to_supervisor_without_launching_collector(
     calls=[];repaired=Event();repair=binding.repair_waiting
     monkeypatch.setattr(binding.subprocess,'Popen',lambda command,**kwargs:calls.append(command) or SimpleNamespace(pid=123))
     monkeypatch.setattr(binding,'driver_connected',lambda row:True)
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    monkeypatch.setattr(binding,'resume',lambda *a,**k:binding.mark_rebound_worker(row))
     def observe_repair(*args):
         result=repair(*args);repaired.set();return result
     def stop_after_repair(seconds):

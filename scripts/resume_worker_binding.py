@@ -125,7 +125,7 @@ def repair_waiting(base, row, last_attempt, now=None):
     paused_control=state.get('status')=='PAUSED_FOR_ENVIRONMENT_REPLACEMENT' and control_stop
     if not paused_control and state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED','BINDING_RETRY_WAIT','RUNNING','RESUMING','STARTING'}:return False
     urgent=control_stop or state.get('status') in {'BINDING_FAILED','BINDING_RETRY_WAIT'}
-    if urgent and driver_connected(row):
+    if urgent and not control_stop and driver_connected(row):
         mark_rebound_worker(row)
         return 'BOUND_EXISTING_PROFILE'
     if now-last_attempt.get(name,-60)<60 or (not urgent and not invalid_session(row)):return False

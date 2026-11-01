@@ -3,6 +3,29 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import pytest
 ROOT=Path(__file__).resolve().parents[1]
+@pytest.mark.parametrize('recover', [False, True])
+def test_explicit_control_recovery_does_not_reuse_old_driver(tmp_path,recover):
+    shell=shutil.which('pwsh') or shutil.which('powershell')
+    if not shell:pytest.skip('PowerShell unavailable')
+    source=(ROOT/'scripts/bind_flower_worker.ps1').read_text('utf-8')
+    start=source.index('    if (-not $RecoverOwnedDriver -and $previous.marionette_port')
+    probe=source[start:source.index('    if ($previous.marionette_port',start+5)]
+    script=tmp_path/'reuse.ps1'
+    script.write_text('''$RecoverOwnedDriver=$%s
+$previous=[pscustomobject]@{marionette_port=1234}
+$MarionettePort=1234;$sidFile='sid';$bidiFile='bidi';$base='http://127.0.0.1:4451'
+function Test-Path {return $true}
+function Get-Content {return 'existing-session'}
+function Invoke-LocalDriverRest {return @{value='https://www.temu.com/search_result.html'}}
+function Write-BindingTiming {}
+'''%str(recover).lower()+probe+'''Write-Output 'REBUILD_REQUIRED'
+''',encoding='utf-8-sig')
+    result=subprocess.run([shell,'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=30)
+    assert result.returncode==0,result.stderr
+    assert ('REBUILD_REQUIRED' in result.stdout)==recover
+    assert ('ALREADY_BOUND' in result.stdout)==(not recover)
+
+
 def test_incomplete_binding_reclaims_only_matching_profile_and_browser(tmp_path):
     shell=shutil.which('pwsh') or shutil.which('powershell')
     if not shell:pytest.skip('PowerShell unavailable')

@@ -220,7 +220,7 @@ if ($listener -or $owned) {
     if (-not $owned -or @($listener | Where-Object { $_.OwningProcess -ne $owned.Id }).Count -gt 0 -or $owned.Path -ne $GeckoDriverPath -or $owned.StartTime.ToUniversalTime().Ticks -ne $previous.started_ticks) {
         throw "WebDriver端口$WebDriverPort被非本任务进程占用；未终止其他进程。"
     }
-    if ($previous.marionette_port -eq $MarionettePort -and (Test-Path -LiteralPath $sidFile) -and (Test-Path -LiteralPath $bidiFile)) {
+    if (-not $RecoverOwnedDriver -and $previous.marionette_port -eq $MarionettePort -and (Test-Path -LiteralPath $sidFile) -and (Test-Path -LiteralPath $bidiFile)) {
         $savedSession = (Get-Content -LiteralPath $sidFile -Raw).Trim()
         try {
             $current = Invoke-LocalDriverRest "$base/session/$savedSession/url"
