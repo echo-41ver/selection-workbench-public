@@ -274,7 +274,7 @@ Write-BindingTiming 'local_driver_ready'
 
 # Show only the selected profile's window; foreground focus is best effort.
 # Port ownership remains the separate authority check above.
-$foreground = if ($ProfileId) { Show-VerifiedProfileWindow $script:expectedProfileBrowserPid } else { $null }
+$foreground = if ($ProfileId -and -not $RecoverOwnedDriver) { Show-VerifiedProfileWindow $script:expectedProfileBrowserPid } else { $null }
 Write-BindingTiming 'activate_selected_profile_window'
 $caps = @{ capabilities = @{ alwaysMatch = @{ webSocketUrl = $true; pageLoadStrategy = 'none' } } } | ConvertTo-Json -Depth 6 -Compress
 $sessionTimeout = [Math]::Max(1, [Math]::Min(60, [Math]::Ceiling(($bindingDeadline - (Get-Date)).TotalSeconds)))

@@ -65,9 +65,30 @@ def test_binding_foreground_and_logs_remain_owned_by_selected_profile():
     assert 'Get-ProfileBrowserTree $RootPid' in source
     assert 'Sort-Object { $_.Id -ne $RootPid }' in source
     assert 'Show-VerifiedProfileWindow $script:expectedProfileBrowserPid' in source
-    assert source.index('$foreground = if ($ProfileId)') < source.index('$session = Invoke-LocalDriverRest')
+    assert source.index('$foreground = if ($ProfileId -and -not $RecoverOwnedDriver)') < source.index('$session = Invoke-LocalDriverRest')
     assert 'retained rather than creating a second session' in source
     assert 'RedirectStandardError' in source and 'local_rest_proxy' in source
+
+
+def test_recover_owned_driver_does_not_wait_for_foreground(tmp_path):
+    shell=shutil.which('pwsh') or shutil.which('powershell')
+    if not shell:pytest.skip('PowerShell unavailable')
+    source=(ROOT/'scripts/bind_flower_worker.ps1').read_text('utf-8')
+    assignment=next(line for line in source.splitlines() if line.startswith('$foreground = '))
+    script=tmp_path/'recovery-foreground.ps1'
+    script.write_text('''$ProfileId='retained'
+$script:expectedProfileBrowserPid=123
+$RecoverOwnedDriver=$true
+function Show-VerifiedProfileWindow {throw 'foreground unavailable'}
+'''+assignment+'''
+if($null -ne $foreground){throw 'recovery must retain the existing window'}
+$RecoverOwnedDriver=$false
+function Show-VerifiedProfileWindow {return @{visible=$true}}
+'''+assignment+'''
+if(-not $foreground.visible){throw 'initial binding still needs a visible profile'}
+''',encoding='utf-8-sig')
+    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=30)
+    assert result.returncode==0,result.stderr
 
 def test_foreground_retries_detach_input_queues_and_stop_on_owner_change(tmp_path):
     shell=shutil.which('pwsh') or shutil.which('powershell')

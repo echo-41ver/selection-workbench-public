@@ -121,8 +121,9 @@ def repair_waiting(base, row, last_attempt, now=None):
     name=row['name']
     state=json.loads((base/'temu/supervisors'/f'{name}.json').read_text(encoding='utf-8'))
     if state.get('recovery_budget_exhausted'):return False
-    if state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED','BINDING_RETRY_WAIT','RUNNING','RESUMING','STARTING'}:return False
     control_stop=state.get('query_status') in {'STOPPED_BROWSER_COMMAND_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'}
+    paused_control=state.get('status')=='PAUSED_FOR_ENVIRONMENT_REPLACEMENT' and control_stop
+    if not paused_control and state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED','BINDING_RETRY_WAIT','RUNNING','RESUMING','STARTING'}:return False
     urgent=control_stop or state.get('status') in {'BINDING_FAILED','BINDING_RETRY_WAIT'}
     if urgent and driver_connected(row):
         mark_rebound_worker(row)
@@ -134,6 +135,15 @@ def repair_waiting(base, row, last_attempt, now=None):
         from selection import request_rotation
         request_rotation(base,[number])
         return 'REPLACEMENT_QUEUED'
+    if paused_control:
+        from selection_automation.browser_control_recovery import reserve_control_recovery
+        allowed,record=reserve_control_recovery(Path(state['output'])/'browser_control_recovery.json',state.get('unique_goods'))
+        state={**state,'control_recovery':record}
+        if not allowed:
+            state.update(status='BINDING_RETRY_WAIT',recovery_budget_exhausted=True,
+                         manual_action_required=True,automatic_retry=False,automatic_resume_pending=False)
+        r.atomic_json(base/'temu/supervisors'/f'{name}.json',state)
+        if not allowed:return False
     resume(number,allow_rebind=True,expected_task=base.name,expected_profile=row.get('profile_id'))
     return 'BOUND_EXISTING_PROFILE'
 

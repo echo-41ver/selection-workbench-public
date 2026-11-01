@@ -209,6 +209,44 @@ def test_exhausted_control_recovery_waits_for_explicit_lane_restart(tmp_path,mon
     assert path.read_bytes()==before and not attempts
 
 
+def test_failed_rebind_pause_retries_with_existing_control_budget(tmp_path,monkeypatch):
+    import pytest
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    output=tmp_path/'temu/workers/worker-01-new/current';output.mkdir(parents=True)
+    path=folder/'worker-01-new.json'
+    path.write_text(json.dumps({'status':'PAUSED_FOR_ENVIRONMENT_REPLACEMENT',
+        'query_status':'STOPPED_BROWSER_COMMAND_TIMEOUT','output':str(output),'unique_goods':139}))
+    (output/'browser_control_recovery.json').write_text(json.dumps(
+        {'attempts_without_progress':1,'unique_goods_high_water':139,'limit':3}))
+    checkpoint=output/'products.jsonl';checkpoint.write_text('saved checkpoint')
+    monkeypatch.setattr(binding,'driver_connected',lambda row:False)
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    calls=[]
+    def fail_rebind(*args,**kwargs):
+        calls.append((args,kwargs))
+        raise RuntimeError('binding unavailable')
+    monkeypatch.setattr(binding,'resume',fail_rebind)
+    attempts={};row={'name':'worker-01-new','profile_id':'retained'}
+    for at in (100,200):
+        with pytest.raises(RuntimeError,match='binding unavailable'):
+            binding.repair_waiting(tmp_path,row,attempts,at)
+    assert not binding.repair_waiting(tmp_path,row,attempts,300)
+    stopped=json.loads(path.read_text())
+    assert len(calls)==2 and stopped['recovery_budget_exhausted']
+    assert stopped['manual_action_required'] and not stopped['automatic_resume_pending']
+    assert checkpoint.read_text()=='saved checkpoint'
+
+
+def test_non_control_replacement_pause_does_not_rebind(tmp_path,monkeypatch):
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    (folder/'worker-01-new.json').write_text(json.dumps(
+        {'status':'PAUSED_FOR_ENVIRONMENT_REPLACEMENT','query_status':'WAITING_HUMAN_VERIFICATION'}))
+    def forbidden(*args,**kwargs):raise AssertionError('verification environment must remain unchanged')
+    monkeypatch.setattr(binding,'driver_connected',forbidden)
+    monkeypatch.setattr(binding,'resume',forbidden)
+    assert not binding.repair_waiting(tmp_path,{'name':'worker-01-new'},{},100)
+
+
 def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_path,monkeypatch):
     monkeypatch.setattr(binding.r,'ROOT',tmp_path)
     manifest=tmp_path/'sessions.json';manifest.write_text('{"task_key":"task"}')

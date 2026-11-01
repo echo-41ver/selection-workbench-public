@@ -67,10 +67,11 @@ def watch(category_path):
                 if provider['mode']=='local_agent':
                     state('已切换至本机 Agent，断点保留');return
                 progress=snapshot(base,category,history=False)
-                if progress.get('billing_hold_fail_closed'):
-                    state('分析暂停：请求费用记录无法对应，请核对用量',error=True); return
-                if not progress.get('runnable_pending', progress['pending']) and progress.get('billing_unknown_pairs'):
-                    state(f"可运行候选已处理；{progress['billing_unknown_pairs']} 对费用待核对，未自动重发"); return
+                if provider['mode']!='local_model':
+                    if progress.get('billing_hold_fail_closed'):
+                        state('分析暂停：请求费用记录无法对应，请核对用量',error=True); return
+                    if not progress.get('runnable_pending', progress['pending']) and progress.get('billing_unknown_pairs'):
+                        state(f"可运行候选已处理；{progress['billing_unknown_pairs']} 对费用待核对，未自动重发"); return
                 if not progress['pending'] and not (retry_local_errors and progress.get('failed')):
                     state('当前候选已处理，等待新增候选' if progress['total'] else '等待前两层产生候选')
                     time.sleep(2); continue

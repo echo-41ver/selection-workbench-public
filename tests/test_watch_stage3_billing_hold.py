@@ -31,6 +31,36 @@ def test_billing_hold_does_not_launch_paid_consumer(tmp_path, monkeypatch, fail_
     assert bool(state.get('error')) is fail_closed
 
 
+@pytest.mark.parametrize('fail_closed', [False, True])
+def test_local_model_waits_for_new_input_despite_remote_billing_hold(tmp_path,monkeypatch,fail_closed):
+    spec=importlib.util.spec_from_file_location('watch_local_hold_test',Path(__file__).parents[1]/'scripts/watch_stage3.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    monkeypatch.setattr(module,'ROOT',tmp_path)
+    monkeypatch.setattr(module,'ensure_publisher',lambda *a:None)
+    from selection_automation import stage3_provider
+    monkeypatch.setattr(stage3_provider,'from_category',lambda category:{'mode':'local_model'})
+    folder=tmp_path/'runs'/'local_test'/'stage123';folder.mkdir(parents=True)
+    (folder/'paid_enabled.json').write_text('{}')
+    category=tmp_path/'category.json';category.write_text(json.dumps({'category_key':'local_test'}))
+    snapshots=[];launches=[]
+    def snapshot(*args,**kwargs):
+        snapshots.append(1)
+        return {'total':1,'pending':0 if len(snapshots)==1 else 1,'runnable_pending':0,
+                'billing_unknown_pairs':21,'billing_hold_fail_closed':fail_closed}
+    monkeypatch.setattr(module,'snapshot',snapshot)
+    monkeypatch.setattr(module.time,'sleep',lambda seconds:None)
+    class Child:
+        def wait(self,**kwargs):
+            (folder/'STOP').touch()
+            return 0
+    def launch(command,**kwargs):
+        launches.append(command)
+        return Child()
+    monkeypatch.setattr(module.subprocess,'Popen',launch)
+    module.watch(category)
+    assert len(snapshots)==2 and len(launches)==1
+
+
 def test_web_continue_grants_local_retry_only_on_first_consumer_pass(tmp_path, monkeypatch):
     spec=importlib.util.spec_from_file_location('watch_local_retry_test',Path(__file__).parents[1]/'scripts/watch_stage3.py')
     module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
