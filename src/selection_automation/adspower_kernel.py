@@ -1,6 +1,7 @@
 """Bounded, secret-safe preparation of vendor FlowerBrowser kernels on the existing API."""
 import shutil,time,urllib.parse
 from pathlib import Path
+from selection_automation.adspower_diagnostics import AdsPowerAPIError
 REQUIRED_KERNEL={'type':'firefox','version':'153'}
 STATES={'pending','downloading','installing','completed','failed'}
 
@@ -24,9 +25,15 @@ def ensure_kernel(base,api,root,*,required=REQUIRED_KERNEL,deadline_seconds=900,
   if disk_usage(volume).free<min_free_bytes:raise RuntimeError('KERNEL_DISK_SPACE')
  until=clock()+deadline_seconds
  body={'kernel_type':required['type'].capitalize(),'kernel_version':required['version']}
- while clock()<until:
+ while (remaining:=until-clock())>0:
   # Same POST polls/resumes the vendor-managed operation, per official CLI contract.
-  result=api(base,'/api/v2/browser-profile/download-kernel',method='POST',body=body,timeout=20)
+  try:
+   result=api(base,'/api/v2/browser-profile/download-kernel',method='POST',body=body,timeout=remaining)
+  except AdsPowerAPIError as error:
+   if error.diagnostic['category']=='CONNECTIVITY':
+    current=inventory(base,api,required)
+    if current['installed']:return current
+   raise
   data=result.get('data') or {};status=data.get('status')
   if status not in STATES:raise RuntimeError('KERNEL_STATUS_UNKNOWN')
   if progress:
