@@ -793,7 +793,10 @@ function codexReviewPanel(data){
  $('codex-review-target').textContent=`${c.expected_tasks?count(c.expected_tasks)+' 个累计分片 · ':''}已导入分片结果 ${count(completed)} / ${count(target)} 对${target?' · '+percent+'%':''}${c.all_reviews_complete?(c.excel_current?' · Excel已更新':' · 等待Excel更新'):''}`;
 }
 const excelOpening=new Set();
-function excelButtons(data){const files=data?.excel_files||{};const labels={layer123:'选品结果 Excel'};const states=[];for(const [kind,label] of Object.entries(labels)){const info=files[kind]||{};const button=document.querySelector('[data-excel="'+kind+'"]');button.disabled=busy||!statusFresh||!info.available||excelOpening.has(kind);button.title=info.available?'当前文件：'+info.filename:'当前任务尚无可打开的文件';const stamp=info.updated_at?new Date(info.updated_at*1000).toLocaleTimeString('zh-CN'):'';states.push(label+'：'+(info.available?'已生成'+(stamp?'（'+stamp+' 更新）':''):'等待生成'));}$('excel-hint').textContent=states.join(' · ');}
+function excelButtons(data){
+ const taskKey=data?.category_key||'';
+ if(excelButtons.taskKey!==taskKey){excelButtons.taskKey=taskKey;$('excel-open-status').textContent='';$('excel-download').hidden=true;}
+ const files=data?.excel_files||{};const labels={layer123:'选品结果 Excel'};const states=[];for(const [kind,label] of Object.entries(labels)){const info=files[kind]||{};const button=document.querySelector('[data-excel="'+kind+'"]');button.disabled=busy||!statusFresh||!info.available||excelOpening.has(kind);button.title=info.available?'当前文件：'+info.filename:'当前任务尚无可打开的文件';const stamp=info.updated_at?new Date(info.updated_at*1000).toLocaleTimeString('zh-CN'):'';states.push(label+'：'+(info.available?'已生成'+(stamp?'（'+stamp+' 更新）':''):'等待生成'));}$('excel-hint').textContent=states.join(' · ');}
 async function openExcel(kind){
  const button=document.querySelector('[data-excel="'+kind+'"]');if(!button||button.disabled||excelOpening.has(kind))return;
  const stamp=lastStatus?.excel_files?.[kind]?.updated_at;
