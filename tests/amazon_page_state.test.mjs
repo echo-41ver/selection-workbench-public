@@ -9,7 +9,7 @@ import {createServer} from 'node:http';
 import {amazonUsdPrice} from '../scripts/amazon_price.mjs';
 import {amazonDetailBlock} from '../scripts/amazon_detail_queue.mjs';
 import {selectAmazonMainImage} from '../scripts/collection_checkpoint.mjs';
-import {qualifyAmazonDetail} from '../scripts/amazon_detail_quality.mjs';
+import {qualifyAmazonDetail,usefulSpecifications} from '../scripts/amazon_detail_quality.mjs';
 import {inspectAmazonImage} from '../scripts/amazon_public_image.mjs';
 const launchBrowser=()=>chromium.launch({headless:true,
   ...(process.env.AMAZON_BROWSER_PATH?{executablePath:process.env.AMAZON_BROWSER_PATH}:{})});
@@ -100,7 +100,7 @@ test('migration leaves real CAPTCHA, login, exhausted budget and current detecto
   }
 });
 
-for(const haul of [false,true]) test(`real detail parser captures ${haul?'Haul':'standard'} specifications and does not mislabel CNY as USD`,async()=>{
+for(const haul of [false,true,'empty']) test(`real detail parser captures ${haul==='empty'?'Haul source without published facts':haul?'Haul':'standard'} specifications and does not mislabel CNY as USD`,async()=>{
   const browser=await launchBrowser();
   try {
     const context=await browser.newContext();
@@ -112,7 +112,7 @@ for(const haul of [false,true]) test(`real detail parser captures ${haul?'Haul':
     await context.route('https://www.amazon.com/**',route=>route.fulfill({contentType:'text/html',body:`
       <h1 id="productTitle">Drill</h1><div id="corePriceDisplay_desktop_feature_div"><span class="a-offscreen">CNY 600.00</span></div>
       ${haul?'<div id="haulAverageCustomerReviewsContainer"><span class="a-color-base a-text-bold">4.0</span><span id="haul-number-of-reviews">(404)</span></div>':'<span id="acrPopover" title="4.0 out of 5 stars"></span><span id="acrCustomerReviewText">404 ratings</span>'}
-      ${haul?`<div id="haul-productFacts-desktop-expander">
+      ${haul==='empty'?'<div id="haulProductFactsDesktop_feature_div"></div>':haul?`<div id="haul-productFacts-desktop-expander">
         <div class="haul-productFacts-desktop-row"><span class="haul-productFacts-desktop-label">Brand Name:</span><span class="haul-productFacts-desktop-value">DEWALT</span></div>
         <div class="haul-productFacts-desktop-row"><span class="haul-productFacts-desktop-label">Voltage:</span><span class="haul-productFacts-desktop-value">20 volts</span></div>
         <div class="haul-productFacts-desktop-row"><span class="haul-productFacts-desktop-label">Item Weight:</span><span class="haul-productFacts-desktop-value">3.6 pounds</span></div>
@@ -124,12 +124,24 @@ for(const haul of [false,true]) test(`real detail parser captures ${haul?'Haul':
     const facts=source.slice(source.indexOf('async function detailFacts('),source.indexOf('const browser ='));
     const sandbox=vm.createContext({context:detailContext,record:{asin:'B00ET5VMTU',product_url:'https://www.amazon.com/dp/B00ET5VMTU',price_usd:92.09,review_count:405404},
       inspectAmazonPage,openAmazonDetail,amazonDetailBlock,amazonUsdPrice,selectAmazonMainImage,sanitizeAmazonDiagnostic,
-      qualifyAmazonDetail,inspectAmazonImage,
+      qualifyAmazonDetail,usefulSpecifications,inspectAmazonImage,
       isHttps:value=>String(value || '').startsWith('https://'),clean:value=>String(value).trim()});
     vm.runInContext(facts,sandbox);
     const value=await vm.runInContext('detailFacts(context,record)',sandbox);
-    assert.equal(value.detail_status,'详情页已采集');assert.equal(value.brand,'DEWALT');
-    assert.equal(value.specifications.length,3);assert.equal(value.specifications[1].value,'20 volts');
+    if(haul==='empty') {
+      assert.equal(value.detail_status,'详情页待补全');
+      assert.equal(value.detail_quality.specification_count,0);
+      assert.equal(value.specifications,undefined);
+      sandbox.record=value;
+      const confirmed=await vm.runInContext('detailFacts(context,record)',sandbox);
+      assert.equal(confirmed.detail_status,'详情页已采集');
+      assert.equal(confirmed.detail_quality.specifications_availability,'NOT_PROVIDED_BY_SOURCE');
+      assert.equal(confirmed.detail_quality.specification_count,0);
+      assert.equal(confirmed.specifications,undefined);
+    } else {
+      assert.equal(value.detail_status,'详情页已采集');assert.equal(value.brand,'DEWALT');
+      assert.equal(value.specifications.length,3);assert.equal(value.specifications[1].value,'20 volts');
+    }
     assert.equal(value.price_usd,92.09);assert.equal(value.detail_price_text,'CNY 600.00');
     assert.equal(value.rating,4);assert.equal(value.review_count,404);
   } finally {await browser.close();}

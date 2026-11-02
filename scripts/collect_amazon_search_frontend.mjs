@@ -194,8 +194,10 @@ async function detailFacts(context, record, attempt = 1) {
       const bsr = specs.find(entry => /best sellers rank/i.test(entry.label))?.value
         || detailText.match(/Best Sellers Rank\s*(#.+?)(?=(?:\s{2,}|Product Dimensions|Date First Available|ASIN|Customer Reviews|$))/i)?.[1]
         || null;
+      const haulFacts = document.getElementById('haulProductFactsDesktop_feature_div');
       return {
         title: first('#productTitle'), brand: first('#bylineInfo', '#productOverview_feature_div .po-brand .po-break-word') || specs.find(row=>/^brand(?: name)?$/i.test(row.label))?.value || null, seller: first('#sellerProfileTriggerId', '#merchantInfoFeature_feature_div'),
+        specifications_availability:haulFacts && !cleanText(haulFacts.textContent) ? 'NOT_PROVIDED_BY_SOURCE' : null,
         availability: first('#availability'), specifications: specs, variants: variants.slice(0, 60), best_sellers_rank: bsr,
         price_usd: Number((priceText || '').replace(/[^0-9.]/g, '').match(/\d+(?:\.\d+)?/)?.[0]) || null,
         detail_price_text: priceText,
