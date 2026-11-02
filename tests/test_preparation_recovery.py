@@ -118,6 +118,29 @@ def test_true_collector_progress_replaces_completed_generation_and_redacts_gate(
     assert '0/2' in console.generation_progress()['message']
 
 
+def test_failed_preparation_is_idle_error_and_missing_facts_are_not_access_gates(tmp_path):
+    from selection_automation.release_reload import idle_for_reload
+    output,_,scope=artifacts(tmp_path)
+    amazon=output.with_suffix('.amazon.json');payload=web.selection.read(amazon)
+    for row in payload['records']:
+        row['detail_error']={'code':'DETAIL_QUALITY_INCOMPLETE','retryable':False,
+                             'missing_fields':['specifications_or_features']}
+    web.selection.save(amazon,payload)
+    console=web.Console(tmp_path);console.preparation_path=output;console.pending_scope=scope
+    console.progress_file=output.with_suffix('.progress.json')
+    console.generation_error={'code':'AMAZON_DETAILS_INCOMPLETE','message':'详情尚未采齐'}
+    console.phase='详情尚未采齐'
+    progress=console.generation_progress()
+    assert progress['stage']=='error' and progress['amazon_gate_count']==0
+    assert '访问门禁' not in progress['message']
+    state=dict(ok=True,active=False,console_busy=False,market_busy=False,
+               generation=progress,stage3_control={'running':False})
+    assert idle_for_reload(state,console)
+    console.busy=True;console.phase='正在采集 Amazon 商品标题、详情参数并提炼关键词'
+    state['generation']=console.generation_progress()
+    assert not idle_for_reload(state,console)
+
+
 @pytest.mark.parametrize('claimed_complete,verifier_code',[(False,0),(True,2)])
 def test_partial_or_unverified_details_never_reach_keywords_or_paid_visual(tmp_path,monkeypatch,claimed_complete,verifier_code):
     output,category,scope=artifacts(tmp_path)

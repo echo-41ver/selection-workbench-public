@@ -2268,8 +2268,8 @@ class Console:
                 continuation='/checkpoint/continue' in str(error.get('url','')).lower()
                 code='AMAZON_CONTINUATION_REQUIRED' if continuation else error.get('code')
                 if isinstance(code,str) and re.fullmatch('[A-Z0-9_]{1,80}',code):error_codes.add(code)
-                if continuation or error.get('retryable') is False:gate_count+=1
-            stage='amazon_details' if self.busy and self.phase.startswith('正在采集 Amazon') else 'preparation'
+                if continuation or (error.get('retryable') is False and code!='DETAIL_QUALITY_INCOMPLETE'):gate_count+=1
+            stage='amazon_details' if self.busy and self.phase.startswith('正在采集 Amazon') else 'error' if self.generation_error else 'preparation'
             message=self.phase
             if stage=='amazon_details':
                 message=f'正在采集 Amazon 详情：{completed if completed is not None else "待核对"}/{target or "待核对"} 件已完成'
