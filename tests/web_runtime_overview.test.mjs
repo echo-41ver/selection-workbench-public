@@ -66,6 +66,29 @@ test('terminal image-source failures surface in the overview and attention witho
  assert.match(nodes.get('run-overview').children[4].className,/success/);
 });
 
+test('image skip and restore keep real counts and send only the narrow choice action',()=>{
+ const {nodes,context}=setup(),calls=[];
+ context.action=(endpoint,body)=>calls.push({endpoint,body:JSON.parse(JSON.stringify(body))});
+ const item={image_key:'a'.repeat(64),classification:'ACTION_INVALID_IMAGE',product_ids:['T'],pair_count:1,skipped:false};
+ context.data={category_key:'fixture',details:{阶段:{stage2:{completed:405,total:406,remaining:1,
+  image_action_items:[item],manual_action_required:true,状态:'图片当前无法完整解码'}}}};
+ vm.runInContext('renderRuntimeOverview(data)',context);
+ let card=nodes.get('run-overview').children[4];
+ assert.equal(card.children[1].textContent,'405 / 406');
+ assert.equal(card.children[3].textContent,'跳过损坏图片，继续其余分析');
+ card.children[3].listeners.click();
+ assert.deepEqual(calls[0],{endpoint:'/api/image-choice',body:{category_key:'fixture',image_keys:[item.image_key],action:'skip'}});
+ item.skipped=true;context.data.details.阶段.stage2.manual_action_required=false;
+ context.data.details.阶段.stage2.状态='用户已跳过 1 件坏图商品，1 对未分析；其余可用商品可继续分析';
+ vm.runInContext('renderRuntimeOverview(data)',context);card=nodes.get('run-overview').children[4];
+ assert.equal(card.children[1].textContent,'405 / 406');
+ assert.equal(nodes.get('human-attention').hidden,true);
+ const line=card.children[3].children[1];assert.match(line.textContent,/T.*用户跳过，未分析/);
+ assert.equal(line.children[0].textContent,'取消跳过');line.children[0].listeners.click();
+ assert.equal(calls[1].endpoint,'/api/image-choice');assert.equal(calls[1].body.action,'restore');
+ assert.ok(calls.every(call=>call.endpoint!=='/api/start-stage3'));
+});
+
 test('missing, empty or inconsistent layer counts cannot imply completion or remaining work',()=>{
  const {nodes,context}=setup();
  const cases=[{}, {completed:0,total:0,remaining:0}, {completed:7,total:7},

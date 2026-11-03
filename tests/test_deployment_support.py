@@ -181,6 +181,7 @@ def test_unified_export_covers_business_checkpoints_usage_and_artifact_inventory
         'runs/acceptance_1/status.json': {'状态': '第三层运行中', '成功': 3, '失败': 1},
         'runs/acceptance_1/temu/workers/temu_1/query/progress.json': {'raw_collected_count': 12, 'next_page': 2, 'cookie': secret},
         'runs/acceptance_1/stage12/summary.json': {'processed': 12, 'candidates': 3},
+        'runs/acceptance_1/stage12/image_user_choices.json': {'skipped': ['a'*64], 'updated_at': 123},
         'runs/acceptance_1/stage123/controller.json': {'status': 'RUNNING'},
         'runs/acceptance_1/market/status.json': {'status': 'COMPLETE'},
         'runs/failed_2/status.json': {'状态': '启动失败', '原因': '网络超时'},

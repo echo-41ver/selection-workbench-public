@@ -161,6 +161,7 @@ function Export-DeploymentDiagnostics([string]$Root, [string]$OutputPath) {
                             if ($item.Name -match '(?i)secret|credential|cookie|company|auth\.json|sessions\.json|storage') { continue }
                             if (($part -eq 'logs' -and $item.Extension -in @('.log','.jsonl')) -or
                                 ($part -eq 'stage123' -and $item.Extension -in @('.log','.jsonl')) -or
+                                ($part -eq 'stage12' -and $item.Name -eq 'image_user_choices.json') -or
                                 $item.Name -match '^(?:status|category|runtime_version|resume_launch|supervisor_recovery|local_service_recovery|publish_state|cleanup_status|stage12_config|progress|dispatch|keyword_plan|summary|automatic_recovery|empty_search_checks|initial_products_retry|session_cooldown|browser_control_recovery|binding_recovery|stage12_watch_owner|controller|concurrency|runtime_control|paid_enabled|progress_reader_state|progress_reader_error|provider_blocked|excel_publisher|publication_manifest|export_manifest)\.json$' -or
                                 ($part -eq 'temu' -and $current -eq (Join-Path $directory 'supervisors') -and $item.Extension -eq '.json') -or
                                 $item.Name -eq 'STOP') { $files += $item }

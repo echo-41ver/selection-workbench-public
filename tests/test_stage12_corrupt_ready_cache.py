@@ -90,8 +90,9 @@ def test_download_requires_full_decode(tmp_path, broken_jpeg, monkeypatch):
         engine.close()
 
 
-def test_complete_jpeg_with_observed_cdn_trailer_is_recovered_without_pixel_changes(tmp_path, monkeypatch):
-    valid=jpeg_bytes();original=valid[:-1]+b'\x65'
+@pytest.mark.parametrize('trailer', [b'\x65', b'\xaa', b'\x2a'])
+def test_complete_jpeg_with_observed_cdn_trailer_is_recovered_without_pixel_changes(tmp_path, monkeypatch, trailer):
+    valid=jpeg_bytes();original=valid[:-1]+trailer
     engine=IncrementalStage12(tmp_path/'run', vectorizer=DecodingVectorizer())
     monkeypatch.setattr(engine._image_transport, 'read', lambda *_a, **_k: original)
     try:
@@ -101,19 +102,47 @@ def test_complete_jpeg_with_observed_cdn_trailer_is_recovered_without_pixel_chan
         assert len(preserved)==1 and preserved[0].read_bytes()==original
         receipt=json.loads(preserved[0].with_suffix('.recovery.json').read_text('utf8'))
         assert receipt['changed_bytes']==1 and receipt['full_decode_passed']
+        assert receipt['correction']==f'JPEG_TERMINAL_FF{trailer.hex().upper()}_TO_FFD9'
         with Image.open(io.BytesIO(data)) as image:image.load()
     finally:
         engine.close()
 
 
-def test_jpeg_trailer_recovery_still_rejects_an_invalid_header(tmp_path, monkeypatch):
-    invalid=b'\xff\xd8'+b'not an image'*20+b'\xff\x65'
+@pytest.mark.parametrize('trailer', [b'\x65', b'\xaa'])
+def test_jpeg_trailer_recovery_still_rejects_an_invalid_header(tmp_path, monkeypatch, trailer):
+    invalid=b'\xff\xd8'+b'not an image'*20+b'\xff'+trailer
     engine=IncrementalStage12(tmp_path/'run', vectorizer=DecodingVectorizer())
     monkeypatch.setattr(engine._image_transport, 'read', lambda *_a, **_k: invalid)
     try:
         with pytest.raises(RuntimeError, match='invalid image'):
             engine._download_image_bytes({'platform':'TEMU','main_image_url':'https://t.test/image'})
         assert not list(engine.cache.glob('*.recovery.json'))
+    finally:
+        engine.close()
+
+
+@pytest.mark.parametrize('trailer', [b'\x00', b'\xff'])
+def test_jpeg_trailer_recovery_does_not_replace_segments_or_entropy(tmp_path, monkeypatch, trailer):
+    invalid=jpeg_bytes()[:-1]+trailer
+    engine=IncrementalStage12(tmp_path/'run', vectorizer=DecodingVectorizer())
+    monkeypatch.setattr(engine._image_transport, 'read', lambda *_a, **_k: invalid)
+    try:
+        with pytest.raises(RuntimeError, match='invalid image'):
+            engine._download_image_bytes({'platform':'TEMU','main_image_url':'https://t.test/image'})
+        assert not list(engine.cache.glob('*.recovery.json'))
+    finally:
+        engine.close()
+
+
+@pytest.mark.parametrize('trailer', [b'\xda', b'\xdb'])
+def test_decoder_supported_terminal_markers_are_not_rewritten(tmp_path, monkeypatch, trailer):
+    original=jpeg_bytes()[:-1]+trailer
+    engine=IncrementalStage12(tmp_path/'run', vectorizer=DecodingVectorizer())
+    monkeypatch.setattr(engine._image_transport, 'read', lambda *_a, **_k: original)
+    try:
+        assert engine._download_image_bytes({'platform':'TEMU','main_image_url':'https://t.test/image'})==original
+        assert not list(engine.cache.glob('*.recovery.json'))
+        with Image.open(io.BytesIO(original)) as image:image.load()
     finally:
         engine.close()
 

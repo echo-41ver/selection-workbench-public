@@ -14,6 +14,29 @@ sys.path.insert(0,str(ROOT/'scripts'))
 import web_console as web
 
 
+def test_image_skip_only_writes_current_run_choice_and_can_restore(tmp_path,monkeypatch):
+    from test_dashboard_progress import image_action_database
+    base=tmp_path/'runs/fixture';base.mkdir(parents=True)
+    web.selection.save(base/'category.json',{'category_key':'fixture'})
+    con,key=image_action_database(base/'stage12');con.close()
+    before=(base/'stage12/stage12.sqlite3').read_bytes()
+    console=web.Console(tmp_path);console.key='fixture'
+    monkeypatch.setattr(console,'owner',lambda:None)
+    monkeypatch.setattr(console,'launch_stage3_controller',lambda *a:pytest.fail('skip must not dispatch'))
+    body={'category_key':'fixture','image_keys':[key],'action':'skip'}
+    assert console.set_image_skip(body)['ok']
+    path=base/'stage12/image_user_choices.json'
+    assert web.selection.read(path)['skipped']==[key]
+    assert not (base/'stage123/paid_enabled.json').exists()
+    for change in ({'category_key':'other'},{'image_keys':['0'*64]},{'image_keys':['not-an-image-key']},
+                   {'action':'retry'},{'extra':True}):
+        with pytest.raises(web.ConsoleError):console.set_image_skip({**body,**change})
+    assert web.selection.read(path)['skipped']==[key]
+    console.set_image_skip({**body,'action':'restore'})
+    assert web.selection.read(path)['skipped']==[]
+    assert (base/'stage12/stage12.sqlite3').read_bytes()==before
+
+
 def test_agent_speed_uses_its_own_successful_groups_and_current_width(tmp_path):
     jobs=tmp_path/'stage123/codex_pool/jobs';jobs.mkdir(parents=True)
     def put(name,**changes):

@@ -199,6 +199,41 @@ def test_incomplete_progress_cannot_round_up_to_100_percent():
     assert dashboard._bar(52780,52780,'fixture')['percent']==100
 
 
+def test_image_skip_keeps_failed_facts_and_counts_and_can_be_cancelled(tmp_path,monkeypatch):
+    con,key=image_action_database(tmp_path/'stage12');con.close()
+    before=(tmp_path/'stage12/stage12.sqlite3').read_bytes()
+    monkeypatch.setattr(dashboard,'_collect',lambda base,entry:dashboard._database(base/'stage12'))
+    failed=dashboard.enrich_progress(tmp_path,{})
+    put(tmp_path/'stage12/image_user_choices.json',{'skipped':[key]})
+    dashboard._CACHE[str(tmp_path.resolve())]['checked']=float('-inf')
+    skipped=dashboard.enrich_progress(tmp_path,failed)
+    row=skipped['阶段']['stage2']
+    assert (row['completed'],row['total'],row['remaining'],row['failed'])==(2,12,10,10)
+    assert row['image_skipped_pairs']==10 and row['image_skipped_products']==1
+    assert not row.get('manual_action_required') and not row['image_action_required']
+    assert row['image_action_items']==[{'image_key':key,'classification':'ACTION_INVALID_IMAGE',
+        'product_ids':['T'],'pair_count':10,'skipped':True}]
+    assert '用户已跳过' in row['状态'] and '未分析' in row['状态']
+    put(tmp_path/'stage12/image_user_choices.json',{'skipped':[]})
+    dashboard._CACHE[str(tmp_path.resolve())]['checked']=float('-inf')
+    restored=dashboard.enrich_progress(tmp_path,skipped)['阶段']['stage2']
+    assert restored['manual_action_required'] and restored['image_skipped_pairs']==0
+    assert restored['image_action_pairs']==10 and restored['failed']==10
+    assert (tmp_path/'stage12/stage12.sqlite3').read_bytes()==before
+
+
+def test_image_skip_does_not_hide_other_failure_or_survive_asset_replacement(tmp_path):
+    con,key=image_action_database(tmp_path,classification='ACTION_AUTH')
+    put(tmp_path/'image_user_choices.json',{'skipped':[key]})
+    assert dashboard._database(tmp_path)['stage2']['manual_action_required']
+    assert dashboard._database(tmp_path)['stage2']['image_skipped_pairs']==0
+    con.execute("UPDATE image_retry_queue SET last_classification='ACTION_INVALID_IMAGE'")
+    con.execute("UPDATE products SET record_json=?",(json.dumps({'main_image_url':'https://example.invalid/new.jpg'}),))
+    con.commit();con.close()
+    row=dashboard._database(tmp_path)['stage2']
+    assert row['image_skipped_pairs']==0 and row['image_action_items']==[]
+
+
 def test_stale_queue_wrong_source_or_version_cannot_create_current_image_alert(tmp_path):
     con,key=image_action_database(tmp_path)
     con.execute("UPDATE products SET evidence_hash='v2'")

@@ -1858,6 +1858,31 @@ class Console:
                 selection.save(pool_path,pool)
             return {'ok':True,'provider':provider,'message':f"并发已设置为 {provider['workers']} 路；后续分组按新设置派发，已发送的组正常保存。"}
 
+    def set_image_skip(self,body):
+        if (set(body)!={'category_key','image_keys','action'} or body.get('action') not in ('skip','restore')
+                or not isinstance(body.get('image_keys'),list) or not body['image_keys']
+                or any(not isinstance(key,str) or not re.fullmatch('[0-9a-f]{64}',key) for key in body['image_keys'])):
+            raise ConsoleError('INVALID_INPUT','请选择当前损坏图片及跳过或取消跳过操作')
+        with self.lock:
+            key,_=self.current_run_key()
+            if key!=body['category_key'] or not key:
+                raise ConsoleError('TASK_CHANGED','任务已变化，请刷新后重试',409)
+            base,_=self.history_base(key)
+            import dashboard_progress as dashboard
+            metrics=dashboard._database(base/'stage12').get('stage2',{})
+            current={item['image_key'] for item in metrics.get('image_action_items',[])
+                     if item['classification']=='ACTION_INVALID_IMAGE'}
+            requested=set(body['image_keys'])
+            if not requested<=current:
+                raise ConsoleError('IMAGE_CHANGED','图片状态已变化，请刷新后重试',409)
+            path=base/'stage12/image_user_choices.json'
+            skipped=set(selection.read(path,{}).get('skipped',[]))
+            skipped=skipped|requested if body['action']=='skip' else skipped-requested
+            selection.save(path,{'skipped':sorted(skipped),'updated_at':time.time()})
+            with dashboard._LOCK:dashboard._CACHE.pop(str(base.resolve()),None)
+        return {'ok':True,'message':('已跳过所选坏图，其关联商品对仍记为未分析；其余可用商品可继续分析。第三层不会自动启动。'
+                                   if body['action']=='skip' else '已取消跳过，恢复原图片异常提示；本操作不下载图片或启动分析。')}
+
     def authorize_schema_retry(self,body):
         """Explicit one-pair cost consent; this endpoint itself never dispatches."""
         if set(body)!={'category_key','original_request_id','accept_unknown_cost'} or body.get('accept_unknown_cost') is not True:
@@ -2693,6 +2718,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/match-criteria': return self.send_json(self.server.console.select_match_criteria(body))
             if self.path=='/api/run': return self.send_json(self.server.console.run_draft(body),202)
             if self.path=='/api/start-stage3': return self.send_json(self.server.console.start_stage3(body),202)
+            if self.path=='/api/image-choice': return self.send_json(self.server.console.set_image_skip(body))
             if self.path=='/api/stage3/authorize-schema-retry': return self.send_json(self.server.console.authorize_schema_retry(body))
             if self.path=='/api/configure-stage3': return self.send_json(self.server.console.start_stage3(body,configure_only=True))
             if self.path=='/api/stage3/concurrency': return self.send_json(self.server.console.set_stage3_concurrency(body))

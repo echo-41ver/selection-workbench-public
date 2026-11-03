@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Iterable, Protocol
 
 import numpy as np
-from PIL import Image
+from PIL import Image, JpegImagePlugin
 
 from .text_gate_registry import GATES, evaluate as evaluate_text_gate
 from .image_transport import ImageTransport, MAX_IMAGE_CONNECTIONS
@@ -853,10 +853,12 @@ class IncrementalStage12:
         try:
             self._validate_image_bytes(data)
         except RuntimeError as error:
-            # Observed CDN JPEGs have a complete pixel stream but end in FF65
-            # instead of FFD9. Correct only that trailer, then fully decode it.
-            # Do not enable truncated-image loading or repair arbitrary damage.
-            if not (data.startswith(b'\xff\xd8') and data.endswith(b'\xff\x65')):
+            # A reserved terminal JPEG marker can replace EOI on CDN images.
+            # Recognize it from the decoder's marker table, not a value whitelist.
+            # Never rewrite an actual segment marker or escaped entropy bytes.
+            if not (data.startswith(b'\xff\xd8') and data[-2] == 0xff
+                    and 0 < data[-1] < 0xff
+                    and int.from_bytes(data[-2:], 'big') not in JpegImagePlugin.MARKER):
                 raise
             corrected = data[:-1] + b'\xd9'
             self._validate_image_bytes(corrected)
@@ -864,7 +866,7 @@ class IncrementalStage12:
             original.write_bytes(data)
             original.with_suffix('.recovery.json').write_text(json.dumps({
                 'original': str(original), 'original_decode_error': str(error),
-                'correction': 'JPEG_TERMINAL_FF65_TO_FFD9', 'changed_bytes': 1,
+                'correction': f'JPEG_TERMINAL_{data[-2:].hex().upper()}_TO_FFD9', 'changed_bytes': 1,
                 'full_decode_passed': True, 'updated_at': utcnow(),
             }, ensure_ascii=False, indent=2), encoding='utf-8')
             data = corrected

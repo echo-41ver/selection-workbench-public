@@ -21,9 +21,10 @@ def _bar(done,total,scope,dynamic=True):
             'scope_label':scope,'dynamic_total':dynamic}
 
 
-def _image_action_metrics(con,has_failed_pairs):
+def _image_action_metrics(con,has_failed_pairs,skipped_keys=()):
     metrics={'image_action_required':False,'image_action_products':0,'image_action_assets':0,
-             'image_action_pairs':0,'image_action_reasons':{},'image_action_notice':'','image_action_next_step':''}
+             'image_action_pairs':0,'image_action_reasons':{},'image_action_notice':'','image_action_next_step':'',
+             'image_action_items':[],'image_skipped_products':0,'image_skipped_assets':0,'image_skipped_pairs':0}
     if not has_failed_pairs:return metrics
     actions=dict(con.execute("SELECT image_key,last_classification FROM image_retry_queue WHERE status='ACTION_REQUIRED'"))
     if not actions:return metrics
@@ -40,7 +41,7 @@ def _image_action_metrics(con,has_failed_pairs):
           JOIN products t ON t.source_key=x.temu_source AND t.product_id=p.goods_id AND t.evidence_hash=p.temu_version
           WHERE p.status='FAILED_IMAGE_ACTION' AND p.stage1_status IS NOT NULL AND p.stage1_status!='TEXT_HARD_EXCLUDE'
     ''')
-    keys={};products=set();pairs=set();assets={}
+    keys={};products=set();pairs=set();assets={};items={};skipped_products=set();skipped_pairs=set()
     for path,asin,goods,source,product,version,raw in rows:
         identity=(source,product,version)
         if identity not in keys:
@@ -52,7 +53,22 @@ def _image_action_metrics(con,has_failed_pairs):
             keys[identity]=hashlib.sha256(str(ref).encode('utf-8')).hexdigest() if ref else None
         key=keys[identity]
         if key not in actions:continue
+        item=items.setdefault(key,{'image_key':key,'classification':actions[key] or 'ACTION_UNKNOWN',
+                                  'product_ids':set(),'pairs':set(),
+                                  'skipped':key in skipped_keys and actions[key]=='ACTION_INVALID_IMAGE'})
+        item['product_ids'].add(product);item['pairs'].add((path,asin,goods))
+        if item['skipped']:
+            skipped_products.add((source,product));skipped_pairs.add((path,asin,goods));continue
         products.add((source,product));pairs.add((path,asin,goods));assets[key]=actions[key] or 'ACTION_UNKNOWN'
+    metrics.update(image_action_items=[{**{k:v for k,v in item.items() if k not in ('product_ids','pairs')},
+                                       'product_ids':sorted(item['product_ids']),'pair_count':len(item['pairs'])}
+                                      for _,item in sorted(items.items())],
+                   image_skipped_products=len(skipped_products),
+                   image_skipped_assets=sum(item['skipped'] for item in items.values()),
+                   image_skipped_pairs=len(skipped_pairs-pairs))
+    if skipped_products:
+        notice=f'用户已跳过 {len(skipped_products)} 件坏图商品，{len(skipped_pairs-pairs)} 对未分析；其余可用商品可继续分析'
+        metrics.update(image_action_notice=notice,状态=notice)
     if not pairs:return metrics
     reasons={}
     for classification in assets.values():reasons[classification]=reasons.get(classification,0)+1
@@ -86,7 +102,8 @@ def _database(stage12):
         image_failed=sum(n for status,gate,n in groups if gate is not None and gate!='TEXT_HARD_EXCLUDE' and status=='FAILED_IMAGE_ACTION')
         return {'stage1':{**_bar(text,total,'当前已登记商品对；随采集增长'),'excluded':sum(n for _,g,n in groups if g=='TEXT_HARD_EXCLUDE')},
                 'stage2':{**_bar(vectors,eligible,'当前通过文字筛选的商品对；不含文字排除或尚未文字处理'),
-                          'failed':failed,'waiting':waiting,**_image_action_metrics(con,image_failed)}}
+                          'failed':failed,'waiting':waiting,**_image_action_metrics(con,image_failed,
+                              (_json(stage12/'image_user_choices.json') or {}).get('skipped',[]))}}
     except sqlite3.Error:
         return {s:{**_bar(None,None,'当前数据库统计暂不可用'),'reason':'数据库忙、查询超时或结构不支持'} for s in ('stage1','stage2')}
     finally:
@@ -327,7 +344,7 @@ def enrich_progress(base:Path,details:dict,*,watch_running=True,asynchronous=Fal
         for name,metrics in entry.get('metrics',{}).items():
             current=stages.setdefault(name,{})
             if isinstance(current,dict):
-                if name=='stage2' and current.get('image_action_required') and 'image_action_required' in metrics:
+                if name=='stage2' and current.get('image_action_notice') and 'image_action_required' in metrics:
                     # Remove only our previous notice. Other stage errors and
                     # unrelated status fields remain owned by their producers.
                     if current.get('状态')==current.get('image_action_notice'):
