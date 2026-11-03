@@ -75,3 +75,20 @@ for iteration in range(30):
         for process in processes:
             if process.poll() is None:process.kill()
             process.wait(timeout=5)
+def test_checkpoint_is_flushed_to_disk_before_publication(tmp_path,monkeypatch):
+    target=tmp_path/'assignments.json'
+    events=[]
+    original_sync=module.os.fsync
+    original_replace=module.os.replace
+    def sync(fd):
+        original_sync(fd)
+        events.append('durable')
+    def replace(source,destination):
+        assert events==['durable']
+        assert Path(source).read_text('utf-8')=='{"saved":true}'
+        original_replace(source,destination)
+    monkeypatch.setattr(module.os,'fsync',sync)
+    monkeypatch.setattr(module.os,'replace',replace)
+    module.atomic_write(target,'{"saved":true}')
+    assert json.loads(target.read_text('utf-8'))=={'saved':True}
+

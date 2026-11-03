@@ -1083,6 +1083,12 @@ def supervise(category_path, paid,*,preserve_prepared=False):
     # OS lock is released on process exit, including crash; PID reuse cannot release it.
     from selection_automation.process_lock import ProcessLock
     with ProcessLock(ROOT/'runtime'/'supervisor.lock'):
+        # Process descriptors can be regenerated; source data and paid results cannot.
+        metadata=[base/'cleanup_status.json',base/'local_service_recovery.json',base/'stage123/controller.json',
+                  *(base/'temu/supervisors').glob('binding-recovery-*.json')]
+        for path in metadata:
+            if path.is_file() and not path.read_bytes().strip(b'\0 \t\r\n'):
+                path.rename(path.with_name(f'{path.name}.corrupt-{time.time_ns()}'))
         record_start(ROOT,base,'supervisor',cat,version=LOADED_VERSION)
         save(active,{'pid':os.getpid(),'created':psutil.Process().create_time(),'category_key':cat['category_key']})
         children={}; finished=set(); attempts={}; next_at={}; state={}; changes={}

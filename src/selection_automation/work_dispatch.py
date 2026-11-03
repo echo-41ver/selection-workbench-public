@@ -74,7 +74,14 @@ def sync(run, keywords, names, resume_queries=(), repair_queries=()):
     resume_queries=set(resume_queries)
     repair_queries=set(repair_queries)
     with locked(run):
-        data=_read(run)
+        zeroed=None
+        try:
+            data=_read(run)
+        except json.JSONDecodeError:
+            path=Path(run)/'temu/supervisors/assignments.json'
+            zeroed=path.read_bytes()
+            if zeroed.strip(b'\0 \t\r\n'):raise
+            data={}
         if 'jobs' not in data:
             legacy={q:w['name'] for w in data.get('workers',[]) for q in w.get('queries',[])}
             data={'jobs':[],'lanes':names}
@@ -124,6 +131,26 @@ def sync(run, keywords, names, resume_queries=(), repair_queries=()):
             data['jobs'].append({**row,'owner':owner,'started':False,'complete':False,
                 'sort_passes':{sort:{'owner':owner,'started':False,'complete':False} for sort in _SORTS}})
             loads[owner]+=int(row['max_products'])*2;known.add(row['query'])
+        if zeroed is not None:
+            from .collection_quota import quota_reached
+            by_query={job['query']:job for job in data['jobs']}
+            for checkpoint in (Path(run)/'temu/workers').glob('*/*/progress.json'):
+                progress=json.loads(checkpoint.read_text('utf-8'))
+                job=by_query.get(progress.get('search_query'))
+                sort=progress.get('sales_sort',{}).get('requested')
+                if job is None or sort not in _SORTS:continue
+                owner=checkpoint.parent.parent.name
+                if owner not in names:raise ValueError(f'Cannot restore dispatch for missing lane: {owner}')
+                complete=bool(progress.get('keyword_complete')) and (
+                    progress.get('status')=='KEYWORD_LIMIT_REACHED' and quota_reached(progress,int(job['max_products']))
+                    or progress.get('status')=='KEYWORD_COMPLETE' and progress.get('completion_basis')=='NO_MORE_RESULTS_CONFIRMED')
+                job['sort_passes'][sort].update(owner=owner,started=True,complete=complete)
+                job['owner']=owner
+                job['started']=True
+                job['complete']=all(state['complete'] for state in job['sort_passes'].values())
+            archive=Path(run)/'temu/supervisors'/f'assignments.json.corrupt-{time.time_ns()}'
+            archive.write_bytes(zeroed)
+            data['recovered_from']=archive.name
         save(run,data);return data
 
 
