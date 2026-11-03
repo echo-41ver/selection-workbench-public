@@ -797,6 +797,10 @@ class Console:
                     '--amazon',str(self.draft_amazon_path),*(['--retry-http-400'] if explicit_preparation_resume else [])],env=env,timeout=3600)
                 category=selection.read(output,category)
                 if extracted.returncode or not self.visual_preparation_complete(category,snapshot):
+                    visual_ledger=selection.read(output.with_suffix('.criteria-request.json'),{})
+                    if any(batch.get('error')=='MODEL_HTTP_503' and batch.get('state') in ('failed','uncertain')
+                           for batch in visual_ledger.get('batches',{}).values()):
+                        raise ConsoleError('VISUAL_PROVIDER_BUSY','主图分析服务暂时繁忙（HTTP 503）；已保留 Amazon 商品、规则和完成批次。请稍后点击“继续准备”，仅重试未完成批次，无需重新生成规则。')
                     raise ConsoleError('VISUAL_PREPARATION_INCOMPLETE','商品主图提取尚未完成；已完成批次和请求记录保留，请检查后继续准备，未知请求不会自动重复计费')
             self.preparation_stage='visual_complete';self.persist_preparation()
             category=selection.read(output,category)

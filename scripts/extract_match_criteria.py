@@ -90,6 +90,8 @@ def extract(category,snapshot,ask=model_json,receipt=None,progress=None,*,retry_
             middle=len(batch)//2
             pending[:0]=[(offset,batch[:middle]),(offset+middle,batch[middle:])]
             continue
+        if entry.get('state')=='uncertain' and entry.get('error')=='MODEL_HTTP_503':
+            entry['state']='failed'  # Explicit provider rejection, not an unknown response.
         if entry.get('state') in {'started','uncertain'} and not explicit_retry:
             errors.append('上次请求结果不明');report('partial');continue
         retry_limit=1 if explicit_retry else 2
@@ -119,9 +121,11 @@ def extract(category,snapshot,ask=model_json,receipt=None,progress=None,*,retry_
                     middle=len(batch)//2
                     pending[:0]=[(offset,batch[:middle]),(offset+middle,batch[middle:])]
                     break
-                retryable=(entry.get('state')=='answered' or code in {'MODEL_INVALID_JSON','MODEL_OUTPUT_TRUNCATED','MODEL_HTTP_429'})
+                retryable=(entry.get('state')=='answered' or code in {'MODEL_INVALID_JSON','MODEL_OUTPUT_TRUNCATED','MODEL_HTTP_429','MODEL_HTTP_503'})
                 entry.update(state='failed' if retryable or code=='MODEL_IMAGE_INPUT_FAILED' else 'uncertain',error=code or type(error).__name__,message=str(error)[:600])
-                if attempt+1<retry_limit and retryable:continue
+                if attempt+1<retry_limit and retryable:
+                    if code=='MODEL_HTTP_503':time.sleep(3)
+                    continue
                 errors.append(entry['error']);break
         report('processing')
     report('ready' if not errors and available==total_asins and images else 'partial' if completed else 'structured')

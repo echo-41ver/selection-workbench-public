@@ -153,3 +153,23 @@ def test_provider_image_limit_splits_rejected_batches_and_caches_accepted_childr
     category.pop('match_criteria')
     extract(category,snapshot,lambda *a,**k:(_ for _ in ()).throw(AssertionError('replayed')),receipt)
     assert category['match_criteria']['state']=='ready'
+
+
+def test_provider_503_retries_are_bounded_and_resumable(tmp_path, monkeypatch):
+    from generate_category import CategoryGenerationError
+    import extract_match_criteria as module
+    monkeypatch.setattr(module.time,'sleep',lambda seconds:None)
+    category,snapshot=inputs(7);path=tmp_path/'receipt.json';calls=[]
+    def busy(*args,**kwargs):
+        calls.append(1)
+        raise CategoryGenerationError('Service is too busy','MODEL_HTTP_503')
+    value=extract(category,snapshot,busy,path)
+    assert len(calls)==2 and value['match_criteria']['state']!='ready'
+    ledger=json.loads(path.read_text('utf-8'))
+    entry=next(iter(ledger['batches'].values()))
+    assert entry['state']=='failed' and entry['error']=='MODEL_HTTP_503'
+    # Existing affected installations recorded this explicit rejection as uncertain.
+    entry['state']='uncertain';path.write_text(json.dumps(ledger),'utf-8')
+    result=extract(category,snapshot,response,path)
+    assert result['match_criteria']['state']=='ready'
+    assert result['match_criteria']['image_review']['reviewed_products']==7
