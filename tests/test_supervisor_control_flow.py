@@ -144,6 +144,21 @@ class LocalRun:
         selection.supervise(self.category, paid)
 
 
+def test_completion_uses_real_union_publisher_sources(tmp_path,monkeypatch):
+    from watch_temu_union import publish_once
+    run=LocalRun(tmp_path,monkeypatch)
+    worker=run.base/'temu/workers/worker-01/q'
+    worker.mkdir(parents=True)
+    (worker/'products.jsonl').write_text('{"goods_id":"T","title":"cordless drill"}\n',encoding='utf-8')
+    unclassified=worker/'unclassified_products.jsonl'
+    unclassified.write_text('',encoding='utf-8')
+    published=publish_once(run.base/'temu')
+    assert published['status']=='PUBLISHED'
+    assert selection.completion(run.config,False)['缺失或失败']==0
+    unclassified.write_text('{"goods_id":"new","title":"drill"}\n',encoding='utf-8')
+    assert selection.completion(run.config,False) is None
+
+
 def test_restart_quarantines_zeroed_process_metadata_and_keeps_results(tmp_path, monkeypatch):
     run=LocalRun(tmp_path,monkeypatch)
     run.collectors_finish=True

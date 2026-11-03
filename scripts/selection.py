@@ -885,9 +885,12 @@ def completion(config_path, paid):
         worker_root=config_path.parent/'temu'/'workers'
         if worker_root.exists():
             from watch_temu_union import snapshot_signature
-            snapshots=sorted(worker_root.glob('*/*/products.jsonl'))
+            snapshots=sorted([*worker_root.glob('*/*/products.jsonl'),
+                              *worker_root.glob('*/*/unclassified_products.jsonl')])
             provider=config_path.parent/'market/geekbi.json'
             if provider.is_file(): snapshots.append(provider)
+            category_path=config_path.parent/'category.json'
+            if category_path.is_file(): snapshots.append(category_path)
             union_state=read(config_path.parent/'temu'/'union'/'watch_state.json',{})
             if not snapshots or union_state.get('status')!='PUBLISHED' or union_state.get('signature')!=snapshot_signature(snapshots):
                 return None
