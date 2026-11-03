@@ -172,6 +172,10 @@ def test_unified_export_covers_business_checkpoints_usage_and_artifact_inventory
         'runtime/web-console/state.json': {'category_key': 'acceptance_1'},
         'runtime/web-console/launch-test.json': {'state': 'launched'},
         'runtime/web-console/category-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.progress.json': {'stage': 'rules_ready'},
+        'runtime/web-console/category-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.subject-repair.json': {
+            'category_aliases':['test implement','测试工具'],
+            'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+                              'exclude_subject_terms':['other implement','其他工具']}},
         'runtime/model-parse-diagnostics/test.json': {'error': 'invalid response'},
         'runtime/model-call-evidence/' + 'c'*32 + '.json': {'outcome': 'completed', 'usage': {'total_tokens': 254, 'prompt_tokens_details': {'cached_tokens': 100, 'api_key': secret}}, 'billing_state': 'UNKNOWN', 'amount': None, 'api_key': secret},
         'runs/acceptance_1/status.json': {'状态': '第三层运行中', '成功': 3, '失败': 1},

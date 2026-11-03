@@ -24,12 +24,12 @@ test('local text challenge: cropped image, existing session commands, website re
       if(operation==='value')return element.fill(body.text);
       return element.click();
     };
-    const adapter=webdriverCaptchaAdapter(wd,()=>page.evaluate(inspectCaptcha));
+    const adapter=webdriverCaptchaAdapter(wd,(script,args)=>page.evaluate(({script,args})=>Function(script).apply(null,args),{script,args}));
     let submissions=0,t=0;
     const handler=createCaptchaHandler({scope:'temu/test_only',browserIdentity:checkpoint.session,adapter,
       request:async r=>{if(r.action==='claim')return {status:'APPLYING'};
         if(r.action==='verify'){assert.equal(r.passed,true);return {status:'VERIFIED'};}
-        submissions++;assert.equal(r.images.length,1);return {status:'ANSWER_READY',answer:'ABC123'};},
+        submissions++;assert.equal(r.images.length,1);assert.ok(Buffer.from(r.images[0],'base64').length>100);return {status:'ANSWER_READY',answer:'ABC123'};},
       isReleased:async()=>await page.locator('#items').count()===1,sleep:async ms=>{t+=ms;},now:()=>t});
     assert.equal(await handler(),true);assert.equal(submissions,1);
     assert.equal(JSON.stringify(checkpoint),original);
@@ -49,5 +49,31 @@ test('local unsupported slider is recognized and never submitted as a Temu piece
     assert.equal(await page.evaluate(inspectCaptcha),null);
     await page.setContent('<h1>HTTP 403 Access Denied</h1>');
     assert.equal(await page.evaluate(inspectCaptcha),null);
+  } finally {await browser.close();}
+});
+
+test('Line uses the complete board with four movable references; Icon follows visible order',async()=>{
+  const browser=await chromium.launch({headless:true});
+  try {
+    const page=await browser.newPage();
+    await page.setContent(`<div class="captcha"><p>Drag each piece to align the lines</p>
+      <div id="board" style="position:relative;width:414px;height:400px"><img id="background" width="414" height="400">
+      ${[127,223,31,319].map((x,i)=>`<img id="ref${i}" width="65" height="65" style="position:absolute;left:${x}px;top:4px">`).join('')}</div></div>`);
+    await page.evaluate(async()=>{
+      for(const image of document.images){
+        const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+        const c=canvas.getContext('2d');c.fillStyle=image.id==='background'?'white':'red';c.fillRect(0,0,canvas.width,canvas.height);
+        image.src=canvas.toDataURL();await image.decode();
+      }
+    });
+    let challenge=await page.evaluate(inspectCaptcha);
+    assert.equal(challenge.kind,'temu_line');assert.equal(challenge.images.length,5);
+    assert.equal(await page.locator(challenge.images[0].selector).getAttribute('id'),'board');
+    assert.deepEqual(await Promise.all(challenge.images.slice(1).map(i=>page.locator(i.selector).getAttribute('id'))),['ref0','ref1','ref2','ref3']);
+    await page.locator('p').evaluate(e=>{e.textContent='Click the objects in the order shown';});
+    challenge=await page.evaluate(inspectCaptcha);
+    assert.equal(challenge.kind,'temu_icon');
+    assert.equal(await page.locator(challenge.images[0].selector).getAttribute('id'),'background');
+    assert.deepEqual(await Promise.all(challenge.images.slice(1).map(i=>page.locator(i.selector).getAttribute('id'))),['ref2','ref0','ref1','ref3']);
   } finally {await browser.close();}
 });

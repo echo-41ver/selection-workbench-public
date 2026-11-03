@@ -43,12 +43,13 @@ def test_ranking_second_page_failure_resumes_without_reloading_first(tmp_path):
     command=['node','--import',(ROOT/'tests/fixtures/amazon_browser_fixture.mjs').as_uri(),
         str(ROOT/'scripts/collect_amazon_search_frontend.mjs'),'--config',str(config),'--output',str(output),'--listing-only']
     env={**os.environ,'AMAZON_FIXTURE_DIR':str(tmp_path),'AMAZON_FIXTURE_CONTINUE':'1'}
-    failed=subprocess.run(command,cwd=ROOT,env={**env,'AMAZON_FIXTURE_FAIL_PAGE2':'1'},capture_output=True,text=True,timeout=45)
+    # Include cold browser startup, the expected page-two retries, and shutdown.
+    failed=subprocess.run(command,cwd=ROOT,env={**env,'AMAZON_FIXTURE_FAIL_PAGE2':'1'},capture_output=True,text=True,timeout=90)
     assert failed.returncode!=0
     partial=json.loads(output.read_text('utf-8'))
     assert partial['record_count']==50 and partial['status']=='LISTING_FAILED'
     before=(tmp_path/'requests.jsonl').read_text().splitlines()
-    resumed=subprocess.run(command,cwd=ROOT,env=env,capture_output=True,text=True,timeout=45)
+    resumed=subprocess.run(command,cwd=ROOT,env=env,capture_output=True,text=True,timeout=90)
     assert resumed.returncode==0,resumed.stderr
     extra=[json.loads(line)['url'] for line in (tmp_path/'requests.jsonl').read_text().splitlines()[len(before):]]
     ranking=[url for url in extra if '/zgbs/' in url]

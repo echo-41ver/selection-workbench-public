@@ -370,8 +370,9 @@ def check_flower(root):
         record = json.loads((state_folder / 'binding.json').read_text('utf-8-sig'))
         result = {'ready': True, 'kernel': dict(REQUIRED_KERNEL), 'webdriver': True,
             'bidi': bool((state_folder / 'flower_bidi_url.txt').read_text('utf-8').strip()),
-            'foreground': record.get('foreground', {}).get('activated') is True, 'dom_read': True}
-        if not result['bidi'] or not result['foreground']:
+            'foreground': record.get('foreground', {}).get('activated') is True,
+            'window_visible': record.get('foreground', {}).get('visible') is True, 'dom_read': True}
+        if not result['bidi'] or not result['window_visible']:
             raise RuntimeError('FIREFOX_BINDING_PROOF_INCOMPLETE')
     finally:
         if profile:

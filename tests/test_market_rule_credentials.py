@@ -132,6 +132,35 @@ def test_empty_queries_recover_once_through_real_candidates_and_goods_with_model
     assert all(row['billing_state']=='UNKNOWN' for row in records)
 
 
+def test_unrelated_material_categories_do_not_prevent_one_product_name_recovery(task,monkeypatch):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','TEST_ONLY_MODEL_KEY')
+    category=json.loads(task.category.read_text('utf8'))
+    category.update(category_name_zh='不锈钢漏勺',temu={'category_aliases':['stainless steel skimmer']})
+    task.category.write_text(json.dumps(category),encoding='utf8')
+    queries=[];goods_calls=[];model_calls=[]
+    def categories(query):
+        queries.append(query['keyword'])
+        rows=([{'catId':4718,'catName':'不锈钢精密球','isLeaf':True}]
+              if query['keyword']=='不锈钢漏勺' else
+              [{'catId':9768,'catName':'漏勺','isLeaf':True}] if query['keyword']=='漏勺' else [])
+        return {'total':len(rows),'list':rows}
+    def model(prompt,**options):
+        model_calls.append(prompt)
+        if 'search_terms' in prompt:return {'search_terms':['漏勺']}
+        return {'cat_ids':[9768],'confidence':.95} if '9768' in prompt else {'cat_ids':[],'confidence':.2}
+    def goods(query):
+        goods_calls.append(query)
+        return {'total':1,'list':[{'goodsId':'real-skimmer','catIds':[9768]}]}
+    monkeypatch.setattr(task.provider,'categories',categories)
+    monkeypatch.setattr(task.provider,'goods',goods)
+    monkeypatch.setattr(task.generate,'model_json',model)
+    result=market.run(task.category)
+    assert result['status']=='COMPLETE' and result['categories'][0]['catId']==9768
+    assert queries==['不锈钢漏勺','stainless steel skimmer','漏勺']
+    assert len(model_calls)==3 and [call['catIds'] for call in goods_calls]==[[9768]]
+    assert result['category_search_recovery']=={'status':'QUERIED','search_terms':['漏勺']}
+
+
 @pytest.mark.parametrize('proposal,extra_queries,recovery',[
     ({'search_terms':['烘焙用具']},['烘焙用具'],'QUERIED'),
     ({'search_terms':[]},[],'NO_NEW_TERMS'),

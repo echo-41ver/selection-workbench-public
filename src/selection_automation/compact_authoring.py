@@ -6,23 +6,32 @@ from .category_contract import category_contract
 FORMAT = 'compact-category-v1'
 
 
+def unwrap_attribute_list(value):
+    """Remove the observed single-key envelope without changing authored rules."""
+    return value['requirements'] if isinstance(value,dict) and set(value)=={'requirements'} else value
+
+
 def authoring_prompt(name, intent, evidence, reviewed):
-    policy = category_contract()['field_requirements']['stage3.identity_policy']
+    contract = category_contract()
+    policy = contract['field_requirements']['stage3.identity_policy']
     listing = {k: evidence.get(k) for k in ('url', 'title', 'heading', 'rank_count')}
     return (
         '为 Amazon–TEMU 同款核验生成精简品类规则，只返回一个 JSON。不要返回程序配置、模块、权重、提示词或长篇说明。'
         '字段：format="compact-category-v1",category_key(英文下划线标识),product_scope(出售主体/套装范围),'
-        'queries(1–3个英文主体关键词),aliases(主体英文/简体/繁体及地区称呼),'
-        'exclude_terms(明确其他出售主体的中英文名词，不能排除共享功能词),keyword_features(有标题依据才使用的英文细化词),'
-        'attributes(独立文字属性列表：name属性标识,hard_conflict布尔,values字面值到同义短语数组,ambiguous_phrases数组；不要求与图片特征同名),'
+        '用户或已核实证据未限定单件/套装时，product_scope和exclude_terms不得擅自排除同类多件组合装；具体组成和件数以各Amazon商品为基准。'
+        'queries(1–3个英文主体关键词),aliases(1–200项非空数组，含同一主体英文和中文称呼，每项2–120字符),'
+        'exclude_terms(1–200项非空数组，每项2–120字符，明确其他出售主体的中英文名词，不能排除共享功能词),keyword_features(有标题依据才使用的英文细化词),'
+        'attributes(独立文字属性数组，完整格式见下述文字属性契约；不要求与图片特征同名),'
         'threshold(本品类第二层0–100保守召回阈值),threshold_reason_zh(一句中文依据),features(1–8项必要特征)。'
         'features沿用下述特征契约，但省略version和modules；不重复描述同一部位，scope和rule各用一句短语。'
         'attributes只列必要互斥属性，每个取值最多3个常用字面同义词；不要穷举规格、型号或数值。整体回答控制在2000中文字以内。'
         '至少一个主图通常可见的identity特征设required_visual=true；不可要求主图证明隐藏部位、精确尺寸、成分或性能。'
-        '规则须说明双方实际造型、比例或布局如何对应，不能只写都有屏幕/支架等品类通用部件。不可核实项用context，不作为看图必需条件。'
+        '规则须说明双方实际造型、比例或布局如何对应，不能只写都有屏幕/支架等品类通用部件。当前证据确实无法可靠取得的属性才用unverifiable/context；主图未展示不等于属性不可核实。'
         '结构、部件位置和构成不能整项设为变体；局部颜色/装饰变化须界定范围并用preserves引用保留的结构。'
         '文字仅双边明确互斥才排除，缺失/多值/否定/适配语境不硬排除；歧义短语绑定具体属性，不能单独填for/适用于。'
         '阈值优先减少不同角度/背景造成的漏检，不照抄固定模板，不声称实测最优。'
+        '\n文字属性契约：' + contract['field_requirements']['stage1.attributes'] +
+        '\n文字属性示例：' + json.dumps({'attributes':[contract['attribute_shape']]}, ensure_ascii=False, separators=(',', ':')) +
         '\n特征契约：' + policy + '\n品类：' + name + '\n目标：' + intent +
         '\n已核实榜单：' + json.dumps(listing, ensure_ascii=False, separators=(',', ':')) +
         '\n已确认品类边界：' + json.dumps(reviewed, ensure_ascii=False, separators=(',', ':')))
@@ -78,7 +87,7 @@ def normalize(value,name):
         'aliases':[value.get('aliases'),value.get('category_aliases'),temu.get('category_aliases')],
         'exclude_terms':[value.get('exclude_terms'),value.get('severe_exclude_terms'),temu.get('severe_exclude_terms')],
         'keyword_features':[value.get('keyword_features'),temu.get('keyword_features')],
-        'attributes':[value.get('attributes'),value.get('stage1_attributes'),stage1.get('attributes')],
+        'attributes':[unwrap_attribute_list(v) for v in (value.get('attributes'),value.get('stage1_attributes'),stage1.get('attributes'))],
         'threshold':[value.get('threshold'),value.get('candidate_threshold'),stage2.get('candidate_threshold')],
         'threshold_reason_zh':[value.get('threshold_reason_zh'),stage2.get('threshold_reason_zh')],
         'features':[value.get('features'),policy.get('features')]}
@@ -117,7 +126,7 @@ def apply_policy_repair(config, reply):
         if values and any(value!=values[0] for value in values[1:]):
             raise ValueError('同款边界修正存在冲突的重复字段')
         return deepcopy(values[0] if values else default)
-    attributes=choose([node[key] for node,key in ((reply,'attributes'),(reply,'stage1_attributes'),(stage1,'attributes'))
+    attributes=choose([unwrap_attribute_list(node[key]) for node,key in ((reply,'attributes'),(reply,'stage1_attributes'),(stage1,'attributes'))
                        if key in node],config['stage1']['attributes'])
     policy=choose([node['identity_policy'] for node in (reply,stage3) if 'identity_policy' in node])
     if policy is None and 'features' not in reply:
@@ -127,6 +136,11 @@ def apply_policy_repair(config, reply):
     features=choose([node['features'] for node in (reply,policy or {}) if 'features' in node])
     if not isinstance(features,list) or not features or not isinstance(attributes,list):
         raise ValueError('同款边界修正缺少有效特征或文字属性')
+    previous=config['stage1'].get('attributes')
+    existing={attr['name']:attr for attr in previous
+              if isinstance(attr,dict) and isinstance(attr.get('name'),str)} if isinstance(previous,list) else {}
+    attributes=[{**deepcopy(existing.get(attr['name'],{})),**attr}
+                if isinstance(attr,dict) and isinstance(attr.get('name'),str) else attr for attr in attributes]
     from .identity_policy import VERSION
     if policy and policy.get('version',VERSION)!=VERSION:
         raise ValueError('同款边界修正版本无效')

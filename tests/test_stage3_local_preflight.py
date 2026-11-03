@@ -90,3 +90,31 @@ def test_reachable_service_starts_selected_provider_without_probe_inference(tmp_
     assert result['ok'] and len(starts) == 1
     assert json.loads((base / 'category.json').read_text(encoding='utf-8'))['stage3']['provider'] == provider
     assert (folder / 'results.jsonl').read_text(encoding='utf-8') == '{"saved_result":true}\n'
+
+
+@pytest.mark.parametrize('retryable',[False,True])
+def test_explicit_resume_retries_only_exhausted_local_no_charge_errors_and_keeps_saved_results(tmp_path, monkeypatch,retryable):
+    base, folder = task(tmp_path, 'local_model')
+    result = folder / 'results.jsonl'
+    result.write_text(json.dumps({'api_status':'failed','attempt':2,'billing_state':'NO_CHARGE' if retryable else 'KNOWN'})+'\n', encoding='utf-8')
+    before = result.read_bytes()
+    category_before = (base / 'category.json').read_bytes()
+    console = web.Console(tmp_path)
+    console.key = 'fixture'
+    monkeypatch.setattr(console, 'owner', lambda: None)
+    monkeypatch.setattr(console, 'current_run_key', lambda: ('fixture', False))
+    monkeypatch.setattr(console, 'stage3_snapshot', lambda _: {'total': 1, 'pending': 0, 'pending_after_codex': 0, 'failed': 1, 'retryable_local_failed': int(retryable)})
+    monkeypatch.setattr(web, 'check_stage3_local_service', lambda *a: None)
+    monkeypatch.setattr(web, 'codex_review_control', lambda *a: {'running': False})
+    starts = []
+    monkeypatch.setattr(console, 'launch_stage3_controller', lambda *a: starts.append(a))
+    web.selection.save(folder / 'controller.json', {'error': True, 'phase': '本地模型服务未返回有效响应，已暂停'})
+    state = console.status()['stage3_control']
+    assert state['can_start'] is retryable and '失败' in state['phase'] and '全部处理' not in state['phase']
+    if retryable:
+        assert console.control_stage3({'action': 'resume'})['ok']
+        assert len(starts) == 1 and not (folder / 'STOP').exists()
+    else:
+        with pytest.raises(web.ConsoleError) as error:console.control_stage3({'action': 'resume'})
+        assert error.value.code=='NO_PENDING_CANDIDATES' and not starts and (folder / 'STOP').exists()
+    assert result.read_bytes() == before and (base / 'category.json').read_bytes() == category_before

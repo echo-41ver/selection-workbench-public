@@ -34,6 +34,119 @@ def test_invalid_first_layer_dictionary_uses_the_same_bounded_rule_repair():
     assert result['stage1']['attributes']==raw['attributes']
 
 
+def test_generation_and_repair_share_the_complete_literal_attribute_contract():
+    from selection_automation.category_contract import category_contract
+    contract=category_contract()
+    expected={'attributes':[contract['attribute_shape']]}
+    prompt=authoring_prompt('测试商品','出售主体',{},None)
+    assert contract['field_requirements']['stage1.attributes'] in prompt
+    assert json.loads(prompt.split('\n文字属性示例：')[1].split('\n')[0])==expected
+    config=expand(proposal(),'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
+    original=deepcopy(config);config['stage3']['identity_policy']['features'][0].pop('required_visual')
+    def repair(prompt,**kwargs):
+        assert contract['field_requirements']['stage1.attributes'] in prompt
+        assert json.loads(prompt.split('\n文字属性示例：')[1].split('\n')[0])==expected
+        return {'identity_policy':original['stage3']['identity_policy']}
+    generator.compile_generated_policy(config,model=repair)
+    assert isinstance(expected['attributes'][0]['values'],dict)
+    assert type(expected['attributes'][0]['hard_conflict']) is bool
+
+
+@pytest.mark.parametrize('entry',['initial','repair'])
+def test_observed_requirements_envelope_preserves_attributes_without_model_call(entry):
+    raw=proposal();expected=deepcopy(raw['attributes'])
+    if entry=='initial':raw['attributes']={'requirements':raw['attributes']}
+    config=expand(raw,'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
+    repair=({'identity_policy':config['stage3']['identity_policy'],
+             'attributes':{'requirements':expected}} if entry=='repair' else None)
+    result=generator.compile_generated_policy(config,policy_repair=repair,
+        model=lambda *a,**k:pytest.fail('unambiguous framing must not incur another model call'))
+    assert result['stage1']['attributes']==expected
+    generator.validate(result)
+
+
+@pytest.mark.parametrize('attributes',[{'unknown':[]},['not an attribute'],
+    {'requirements':[],'extra':[]}])
+def test_invalid_attribute_collection_framing_enters_existing_bounded_repair(attributes):
+    raw=proposal();expected=deepcopy(raw['attributes']);raw['attributes']=attributes
+    config=expand(raw,'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
+    calls=[]
+    def repair(prompt,**kwargs):
+        calls.append(prompt)
+        assert '第一层文字属性必须为对象数组' in prompt
+        return {'identity_policy':config['stage3']['identity_policy'],'attributes':expected}
+    result=generator.compile_generated_policy(config,model=repair)
+    assert len(calls)==1 and result['stage1']['attributes']==expected
+
+
+def test_saved_attribute_repair_preserves_declared_fields_by_name_without_model_call():
+    raw=proposal()
+    raw['attributes']=[
+        {'name':'power','hard_conflict':False,'values':['corded:corded','battery:cordless'],
+         'ambiguous_phrases':['for battery equipment']},
+        {'name':'assembly','hard_conflict':True,'values':['fixed:fixed','hinged:hinged'],
+         'ambiguous_phrases':[]}]
+    config=expand(raw,'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
+    before=deepcopy(config)
+    repair={'identity_policy':config['stage3']['identity_policy'],'attributes':[
+        {'name':'assembly','values':{'fixed':['fixed'],'hinged':['hinged']}},
+        {'name':'power','values':{'corded':['corded'],'battery':['cordless']}}]}
+    result=generator.compile_generated_policy(config,policy_repair=repair,
+        model=lambda *a,**k:pytest.fail('saved declared fields must not incur another model call'))
+    attributes=result['stage1']['attributes']
+    assert [a['name'] for a in attributes]==['assembly','power']
+    assert attributes[0]['hard_conflict'] is True and attributes[1]['hard_conflict'] is False
+    assert attributes[1]['ambiguous_phrases']==['for battery equipment']
+    assert config==before and result['amazon']==config['amazon'] and result['temu']==config['temu']
+    generator.validate(result)
+
+
+def test_attribute_repair_keeps_an_explicit_false_instead_of_the_original_true():
+    config=expand(proposal(),'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
+    repair={'identity_policy':config['stage3']['identity_policy'],
+            'attributes':[{'name':'power','hard_conflict':False}]}
+    result=generator.compile_generated_policy(config,policy_repair=repair,
+        model=lambda *a,**k:pytest.fail('an explicit false must be preserved'))
+    assert result['stage1']['attributes'][0]['hard_conflict'] is False
+    assert result['stage1']['attributes'][0]['values']==config['stage1']['attributes'][0]['values']
+
+
+@pytest.mark.parametrize('field,value',[('name',None),('hard_conflict',None),
+    ('hard_conflict','true'),('values',None),('values',[])])
+def test_incomplete_initial_attributes_use_the_existing_bounded_repair(monkeypatch,field,value):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    original=proposal();broken=deepcopy(original)
+    if value is None:broken['attributes'][0].pop(field)
+    else:broken['attributes'][0][field]=value
+    calls=[]
+    def model(prompt,**kwargs):
+        calls.append(prompt)
+        if len(calls)==1:return broken
+        return {'features':original['features'],'attributes':original['attributes']}
+    monkeypatch.setattr(generator,'model_json',model)
+    result=generator.generate_category('测试商品',3,40,bestsellers_url=evidence['url'])
+    assert len(calls)==2 and result['stage1']['attributes'][0]['hard_conflict'] is True
+    generator.validate(result)
+
+
+@pytest.mark.parametrize('name',['renamed_power','new_attribute'])
+def test_new_or_renamed_attribute_does_not_inherit_fields_or_bypass_repair_validation(name):
+    config=expand(proposal(),'测试商品','https://www.amazon.com/zgbs/tools/123',3,40)
+    config['stage1']['attributes'][0]['hard_conflict']=False
+    config['stage1']['attributes'][0]['values']=['corded:corded','battery:cordless']
+    reply={'identity_policy':config['stage3']['identity_policy'],
+           'attributes':[{'name':name,'values':{'corded':['corded'],'battery':['cordless']}}]}
+    assert 'hard_conflict' not in apply_policy_repair(config,reply)['stage1']['attributes'][0]
+    calls=[]
+    def repair(prompt,**kwargs):calls.append(prompt);return deepcopy(reply)
+    with pytest.raises(ValueError,match='text attributes must have'):
+        generator.compile_generated_policy(config,model=repair)
+    assert len(calls)==2 and 'text attributes must have' in calls[1]
+
+
 @pytest.mark.parametrize('category',['电磁炉','灯泡','鼠标垫','洗衣机','投影仪','收纳盒'])
 @pytest.mark.parametrize('envelope',['direct','nested','compact'])
 def test_repair_envelopes_preserve_category_and_compile_without_collection_changes(category,envelope):
@@ -89,11 +202,162 @@ def test_semantic_plan_produces_valid_rules_and_chinese_summary_without_explanat
     assert category['rule_summary_source']=='generated_conditions_local_summary_v1'
 
 
+@pytest.mark.parametrize('defect',['short_exclusion','empty_exclusions','missing_chinese_alias'])
+def test_new_compact_subject_rules_use_existing_one_shot_repair_and_cache(monkeypatch,tmp_path,defect):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    monkeypatch.setattr(generator,'approved_category',lambda *args:None)
+    raw=proposal()
+    if defect=='short_exclusion':raw['exclude_terms']=['other implement','刀']
+    elif defect=='empty_exclusions':raw['exclude_terms']=[]
+    else:raw['aliases']=['test implement']
+    repaired={'category_aliases':['test implement','测试工具'],
+        'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+                          'exclude_subject_terms':['other implement','其他工具']}}
+    calls=[]
+    def model(prompt,**kwargs):
+        calls.append(prompt)
+        return deepcopy(raw if len(calls)==1 else repaired)
+    monkeypatch.setattr(generator,'model_json',model)
+    first=generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],draft_store=tmp_path)
+    expected_calls=1 if defect=='short_exclusion' else 2
+    expected_filter=({'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+        'exclude_subject_terms':['other implement']} if defect=='short_exclusion' else repaired['subject_filter'])
+    assert len(calls)==expected_calls and first['temu']['subject_filter']==expected_filter
+    if defect!='short_exclusion':assert '只为当前已确认品类补齐采集主体规则' in calls[1]
+    saved=json.loads(next(tmp_path.glob('*.json')).read_text('utf-8'))
+    assert saved['proposal']['temu']['subject_filter']==expected_filter
+    second=generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],
+        draft_store=tmp_path,reuse_approved=True)
+    assert len(calls)==expected_calls and second['temu']['subject_filter']==first['temu']['subject_filter']
+    assert second['stage3']['identity_policy']==first['stage3']['identity_policy']
+
+
+def test_subject_rule_repair_remains_single_and_does_not_weaken_validation(monkeypatch):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    raw=proposal();raw['exclude_terms']=['刀']
+    calls=[]
+    def model(prompt,**kwargs):
+        calls.append(prompt)
+        if len(calls)==1:return raw
+        return {'category_aliases':['test implement','测试工具'],
+            'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+                              'exclude_subject_terms':['刀']}}
+    monkeypatch.setattr(generator,'model_json',model)
+    with pytest.raises(generator.CategoryGenerationError) as error:
+        generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'])
+    assert error.value.code=='CATEGORY_SUBJECT_RULES_MISSING' and len(calls)==2
+
+
+def test_subject_supplement_is_saved_before_later_failure_and_reused_across_output_names(monkeypatch,tmp_path):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    monkeypatch.setattr(generator,'approved_category',lambda *a:None)
+    raw=proposal();raw['exclude_terms']=[]
+    policy_repair={'features':deepcopy(raw['features']),'attributes':deepcopy(raw['attributes'])}
+    raw['features'][0].pop('required_visual')
+    repaired={'category_aliases':['test implement','测试工具'],
+        'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+                          'exclude_subject_terms':['other implement','其他工具']}}
+    answers=iter([raw,policy_repair,repaired]);calls=[]
+    monkeypatch.setattr(generator,'model_json',lambda *a,**k:(calls.append(1) or next(answers)))
+    validate_inputs=generator.validate_execution_inputs
+    monkeypatch.setattr(generator,'validate_execution_inputs',lambda _:(_ for _ in ()).throw(ValueError('later fixture failure')))
+    with pytest.raises(generator.CategoryGenerationError):
+        generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],draft_store=tmp_path)
+    saved=json.loads(next(tmp_path.glob('*.json')).read_text('utf-8'))
+    assert saved['subject_repair']==repaired and saved['policy_repair']==policy_repair and len(calls)==3
+    monkeypatch.setattr(generator,'validate_execution_inputs',validate_inputs)
+    monkeypatch.setattr(generator,'model_json',lambda *a,**k:pytest.fail('saved supplement was billed again'))
+    result=generator.generate_category('测试工具',2,120,bestsellers_url=evidence['url'],draft_store=tmp_path,reuse_approved=True)
+    assert result['temu']['subject_filter']==repaired['subject_filter']
+
+
+def test_cli_preserves_an_invalid_subject_supplement_before_validation_fails(monkeypatch,tmp_path):
+    monkeypatch.setenv('DEEPSEEK_API_KEY','test-only')
+    evidence={'url':'https://www.amazon.com/zgbs/tools/123','title':'Best Sellers',
+              'heading':'Best Sellers in Power Drills','rank_count':50,'links':[]}
+    monkeypatch.setattr(generator,'read_listing',lambda _:evidence)
+    monkeypatch.setattr(generator,'approved_category',lambda *a:None)
+    raw=proposal();raw['exclude_terms']=[]
+    reply={'category_aliases':['test implement','测试工具'],
+        'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,'exclude_subject_terms':[]}}
+    answers=iter([raw,reply]);monkeypatch.setattr(generator,'model_json',lambda *a,**k:next(answers))
+    output=tmp_path/'new-output.json';status=tmp_path/'progress.json'
+    monkeypatch.setattr(generator.sys,'argv',['generate_category.py','--category-name','测试工具',
+        '--amazon-count','2','--per-keyword','120','--bestsellers-url',evidence['url'],
+        '--output',str(output),'--status-file',str(status)])
+    assert generator.main()==1
+    assert json.loads(output.with_suffix('.subject-repair.json').read_text('utf-8'))==reply
+    receipt=json.loads(next((tmp_path/'generated-rule-drafts').glob('*.json')).read_text('utf-8'))
+    assert receipt['subject_repair']==reply and not output.exists()
+
+
 def test_compact_authoring_keeps_meaning_but_omits_mechanical_config_and_navigation_links():
     prompt=authoring_prompt('电钻','电钻本体',{'url':'https://www.amazon.com/zgbs/tools/123','links':[{'title':'irrelevant-navigation'}]},None)
     assert 'irrelevant-navigation' not in prompt and 'detail_concurrency' not in prompt
     bad=proposal();bad['features']=[]
     with pytest.raises(ValueError):expand(bad,'电钻','https://www.amazon.com/zgbs/tools/123',3,40)
+
+
+def test_authoring_distinguishes_optional_structural_identity_from_context():
+    prompt=authoring_prompt('测试袋','袋体',{},None)
+    assert '可见结构不得设为context' in prompt
+    assert '未展示用未知，不改变身份作用' in prompt
+    assert 'identity且required_visual=false' in prompt
+
+
+def test_context_structure_is_repaired_as_optional_identity_without_relaxing_matching():
+    from test_identity_policy import visual_facts
+    raw=proposal()
+    raw['features'].append({'id':'carry_loop','label':'附加提环','role':'context',
+        'evidence':'both','region':'component','effects':['connection'],'preserves':[],
+        'scope':'袋体侧边提环的连接形式','rule':'记录提环形式，不作为确认必需项',
+        'required_visual':False})
+    config=expand(raw,'测试袋','https://www.amazon.com/zgbs/tools/123',3,40)
+    calls=[]
+    def repair(prompt,**kwargs):
+        calls.append(prompt)
+        assert '可见结构不得设为context' in prompt
+        assert 'identity且required_visual=false' in prompt
+        fixed=deepcopy(config['stage3']['identity_policy'])
+        fixed['features'][-1].update(role='identity',
+            rule='双方提环均清晰可见时连接形式不同判不同款；未展示记未知，不作为确认必需项')
+        return {'identity_policy':fixed,'attributes':config['stage1']['attributes']}
+    result=generator.compile_generated_policy(config,model=repair)
+    assert len(calls)==1
+    assert config['stage3']['identity_policy']['features'][-1]['role']=='context'
+    assert result['stage3']['identity_policy']['features'][-1]['role']=='identity'
+    assert 'view_carry_loop' not in result['stage3']['identity_required_modules']
+    assert 'IDENTITY_CARRY_LOOP' in result['stage3']['identity_hard_conflicts']
+    facts=visual_facts(result)
+    facts['feature_comparisons']['carry_loop'].update(relation='UNKNOWN',amazon='',temu='')
+    facts['modules']['view_carry_loop'].update(relation='UNKNOWN',amazon_evidence='',temu_evidence='')
+    assert score(result,facts)['state']=='确认同款'
+    facts['feature_comparisons']['carry_loop'].update(relation='DIFFERENT',
+        amazon='单段固定环扣',temu='双段铰接环扣')
+    assert score(result,facts)['state']=='不同款'
+
+
+def test_repair_cannot_keep_visible_structure_as_context():
+    raw=proposal();feature=deepcopy(raw['features'][0])
+    feature.update(id='carry_loop',role='context',required_visual=False)
+    raw['features'].append(feature)
+    config=expand(raw,'测试袋','https://www.amazon.com/zgbs/tools/123',3,40)
+    calls=[]
+    def repair(prompt,**kwargs):
+        calls.append(prompt)
+        return {'identity_policy':config['stage3']['identity_policy']}
+    with pytest.raises(ValueError,match='可见结构差异'):
+        generator.compile_generated_policy(config,model=repair)
+    assert len(calls)==2
 
 
 def test_independent_text_attribute_does_not_require_a_same_named_image_feature(monkeypatch):

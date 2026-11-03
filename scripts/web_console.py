@@ -395,7 +395,7 @@ class Console:
     def recover_preparation(self,scope,manifest=None,*,legacy=False):
         """Reuse only a unique, validated local generation; never invent a draft."""
         from selection_automation.rules import validate
-        from generate_category import validate_subject_rules,valid_url,CategoryGenerationError
+        from generate_category import validate_subject_rules,valid_url,listing_identity,CategoryGenerationError
         from selection_automation.rule_provider import settings
         from selection_automation.commercial import settings as commercial_settings
         folder=self.root/'runtime/web-console'
@@ -421,7 +421,7 @@ class Console:
                         or category.get('rule_generation_provider')!=provider
                         or {**commercial_settings(category.get('commercial')),'same_operator':'lt'}!=expected_commercial
                         or not valid_url(category['amazon'].get('bestsellers_url'))
-                        or (scope.get('bestsellers_url') and category['amazon']['bestsellers_url']!=scope['bestsellers_url'])
+                        or (scope.get('bestsellers_url') and listing_identity(category['amazon']['bestsellers_url'])!=listing_identity(scope['bestsellers_url']))
                         or (self.root/'runs'/category['category_key']).exists()
                         or selection.read(path.with_suffix('.progress.json'),{}).get('stage')!='complete'):
                     continue
@@ -698,7 +698,7 @@ class Console:
         from selection_automation.commercial import settings as commercial_settings
         try:body['commercial']={**commercial_settings(body.get('commercial') or {'same_limit':5}),'same_operator':'lt'}
         except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
-        from generate_category import valid_url,approved_category
+        from generate_category import valid_url,approved_category,listing_identity
         listing=body.get('bestsellers_url','')
         if not isinstance(listing,str) or (listing.strip() and not valid_url(listing.strip())):
             raise ConsoleError('INVALID_LISTING_URL','请填写 Amazon 美国站 Best Sellers 榜单链接，不支持商品详情或搜索链接')
@@ -721,8 +721,6 @@ class Console:
             body['api_key']=key
         try: count=worker_count(body.get('worker_count',4))
         except ValueError as exc: raise ConsoleError('INVALID_INPUT',str(exc)) from None
-        if not isinstance(name,str) or not name.strip() or len(name)>120 or any(ord(c)<32 for c in name):
-            raise ConsoleError('INVALID_INPUT','品类名称无效')
         if not isinstance(key,str) or (not key.strip() and not cached) or len(key)>4096 or any(ord(c)<32 for c in key):
             raise ConsoleError('INVALID_INPUT','API key无效')
         for field,maximum in [('amazon_count',100),('per_keyword',100000)]:
@@ -733,7 +731,7 @@ class Console:
                'api_base_url':provider['base_url'],'api_model':provider['model'],'amazon_route_mode':route}
         with self.lock:
             if self.busy or self.stage3_busy or self.owner(): raise ConsoleError('ALREADY_RUNNING','已有任务运行，请先停止',409)
-            business_scope=lambda value:{k:v for k,v in (value or {}).items() if k!='amazon_route_mode'}
+            business_scope=lambda value:{k:listing_identity(v) if k=='bestsellers_url' else v for k,v in (value or {}).items() if k!='amazon_route_mode'}
             manifest=selection.read(self.root/'runtime/web-console/pending-generation.json',{}).get('preparation') if business_scope(self.pending_scope)==business_scope(scope) else None
             recovery=self.recover_preparation(scope,manifest,legacy=True)
             if manifest and not recovery:
@@ -842,10 +840,9 @@ class Console:
                     self.generation_error={'code':'PREPARATION_STOPPED','message':self.phase}
                 if self.generation_error:
                     progress=selection.read(self.progress_file,{}) if self.progress_file else {}
-                    if self.pending_scope and progress.get('failed_stage')=='generating':
+                    if self.pending_scope:
                         from generate_category import valid_url
-                        route=progress.get('route',[])
-                        resolved=route[-1].get('url') if route and isinstance(route[-1],dict) else None
+                        resolved=progress.get('verified_listing_url')
                         if valid_url(resolved):self.pending_scope['bestsellers_url']=resolved
                     if not self.cancel.is_set():self.pending_key=supplied_key
                     self.persist_preparation()
@@ -878,9 +875,18 @@ class Console:
         from pipeline import build_category_keyword_plan, keyword_coverage
         amazon=category_path.with_suffix('.amazon.json'); plan_path=category_path.with_suffix('.keywords.json')
         amazon_env={key:value for key,value in env.items() if key!='DEEPSEEK_API_KEY'}
-        result=self.invoke(['node',str(self.root/'scripts/collect_amazon_search_frontend.mjs'),'--config',str(category_path),
-                            '--output',str(amazon)],env=amazon_env,timeout=max(1800,45*category['amazon']['target_count']))
+        command=['node',str(self.root/'scripts/collect_amazon_search_frontend.mjs'),'--config',str(category_path),'--output',str(amazon)]
+        timeout=max(1800,45*category['amazon']['target_count'])
+        result=self.invoke(command,env=amazon_env,timeout=timeout)
         payload=selection.read(amazon,{})
+        if (amazon_env.get('AMAZON_BROWSER_ROUTE_MODE','AUTO')=='AUTO'
+                and payload.get('amazon_browser_route',{}).get('transport')=='CONFIGURED_PROXY'
+                and any(item.get('error',{}).get('code')=='AMAZON_LOGIN_REQUIRED' for item in payload.get('missing_details',[]))):
+            selection.save(amazon.with_suffix('.proxy-login.json'),payload)
+            self.phase='Amazon 代理出口转到登录页，正在改用直连继续商品断点'
+            amazon_env.update(AMAZON_BROWSER_ROUTE_MODE='DIRECT',AMAZON_BROWSER_PROXY='',AMAZON_MANUAL_RECHECK='1')
+            result=self.invoke(command,env=amazon_env,timeout=timeout)
+            payload=selection.read(amazon,{})
         rows=payload.get('records') or []
         count=category['amazon']['target_count']
         if (len(rows)!=count or len({r.get('asin') for r in rows})!=count or
@@ -962,7 +968,7 @@ class Console:
             except ValueError as error:raise ConsoleError('INVALID_INPUT',str(error)) from None
             attach(category,catalog);selection.save(self.draft_path,category)
             self.draft=draft_view(category,self.draft['id'],selection.read(self.draft_plan_path,{}));self.persist_draft()
-            return {'ok':True,'phase':'条件已保存：文字用于第一层，图片用于第三层','match_criteria':catalog}
+            return {'ok':True,'phase':'条件已保存：文字用于第一层，图片用于第三层','match_criteria':catalog,'draft':self.draft}
 
     def _plain_rules(self, instruction, scope="all"):
         from selection_automation.rule_provider import environment
@@ -1915,7 +1921,7 @@ class Console:
                 raise ConsoleError('PROGRESS_NOT_READY','正在核对已处理候选，请等待进度读取完成后再启动',409)
             pending=progress.get('pending_after_codex',progress.get('pending'))
             if provider['mode']=='local_agent':pending=progress.get('agent_pending_after_codex',pending)
-            if not configure_only and (not provider_changed or provider['mode']=='local_agent') and not active and progress.get('total',0)>0 and pending==0:
+            if not configure_only and (not provider_changed or provider['mode']=='local_agent') and not active and progress.get('total',0)>0 and pending==0 and not (provider['mode']=='local_model' and progress.get('retryable_local_failed')):
                 raise ConsoleError('NO_PENDING_CANDIDATES','当前第三层候选已全部处理，无需重复启动付费分析',409)
             if not configure_only and provider['mode']=='local_agent' and (progress.get('billing_hold_fail_closed') or
                     (pending and progress.get('agent_runnable_pending',pending)==0)):
@@ -2262,8 +2268,8 @@ class Console:
                 continuation='/checkpoint/continue' in str(error.get('url','')).lower()
                 code='AMAZON_CONTINUATION_REQUIRED' if continuation else error.get('code')
                 if isinstance(code,str) and re.fullmatch('[A-Z0-9_]{1,80}',code):error_codes.add(code)
-                if continuation or error.get('retryable') is False:gate_count+=1
-            stage='amazon_details' if self.busy and self.phase.startswith('正在采集 Amazon') else 'preparation'
+                if continuation or (error.get('retryable') is False and code!='DETAIL_QUALITY_INCOMPLETE'):gate_count+=1
+            stage='amazon_details' if self.busy and self.phase.startswith('正在采集 Amazon') else 'error' if self.generation_error else 'preparation'
             message=self.phase
             if stage=='amazon_details':
                 message=f'正在采集 Amazon 详情：{completed if completed is not None else "待核对"}/{target or "待核对"} 件已完成'
@@ -2384,10 +2390,18 @@ class Console:
                               '建议动作':('后台监督任务仍在运行，本路已停止；既有结果和断点保留，可点击本路“重启”重试。'
                                   if owner else '后台监督任务未运行，既有结果和断点保留；请点击“开始 / 继续采集”从断点继续。')}
                         live.pop('浏览器保留',None)  # No current browser-liveness claim from an old snapshot.
+                    elif value.get('status')=='BINDING_RETRY_WAIT' and value.get('query_status') in {'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'}:
+                        previous=live if isinstance(live,dict) else {}
+                        live={**previous,'状态':'浏览器自动恢复已停止，既有结果和断点已保留','采集状态':value['query_status'],
+                              'automatic_recovery':False,'阻断':True,'需人工介入':True,
+                              '监督状态更新时间':value.get('updated_at'),
+                              '建议动作':('后台监督任务仍在运行，本路自动恢复已停止；可点击本路“重启”从断点重试。'
+                                  if owner else '后台监督任务未运行，既有结果和断点保留；请点击“开始 / 继续采集”从断点继续。')}
+                        live.pop('浏览器保留',None)
                     value['live_snapshot']=live
                     if isinstance(live,dict):details.setdefault('阶段',{})[path.stem]=live
                     value['status_updated_at']=((value.get('updated_at') or path.stat().st_mtime)
-                        if value.get('status')=='FAILED_AFTER_3_ATTEMPTS' else live.get('采集更新时间') or path.stat().st_mtime)
+                        if value.get('status')=='FAILED_AFTER_3_ATTEMPTS' or live.get('采集状态') in {'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'} else live.get('采集更新时间') or path.stat().st_mtime)
                 except Exception: pass
                 name=value.get('worker',path.stem)
                 profile=profiles.get(name,{})
@@ -2473,8 +2487,10 @@ class Console:
             if not stage3_running: stage3_phase=('显示最近核验快照；新增输入正在核对，当前待处理数尚未确认'
                 if stage3_progress.get('refreshing') else stage3_progress.get('message') or '正在核对已处理候选，请等待进度读取完成')
         if not stage3_progress.get('refreshing') and not owner and stage3_progress.get('total',0)>0 and stage3_progress.get('pending_after_codex',stage3_progress.get('pending'))==0:
-            stage3_ready=False
-            if not stage3_running: stage3_phase='当前候选已全部处理，结果已保留；新增候选后可继续分析'
+            stage3_ready=stage3_ready and bool(stage3_progress.get('retryable_local_failed'))
+            if not stage3_running: stage3_phase=(f"当前候选已处理，{stage3_progress['failed']} 对失败，已完成结果保留；可点击“重试当前方案”重试本地未计费失败项"
+                if stage3_progress.get('retryable_local_failed') else f"当前候选处理已结束，{stage3_progress['failed']} 对失败；已完成结果保留，请查看错误提示"
+                if stage3_progress.get('failed') else '当前候选已全部处理，结果已保留；新增候选后可继续分析')
         codex_control=self.codex_review_snapshot(key) if key else {'available':False,'running':False}
         from runtime_overview import stage3_display,stopped_state
         provider=__import__('selection_automation.stage3_provider',fromlist=['from_category']).from_category(category)
@@ -2662,7 +2678,7 @@ class Handler(BaseHTTPRequestHandler):
             body=json.loads(self.rfile.read(length))
             body_read=True
             if not isinstance(body,dict): raise ConsoleError('INVALID_INPUT','请求体应为对象')
-            if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market',
+            if getattr(self.server,'release',None) and self.path not in ('/api/stop','/api/change-session','/api/stop-stage3','/api/open-excel','/api/refresh-market',
                     '/api/local-agents/models','/api/local-agents/refresh','/api/local-models/repair','/api/local-models/scan','/api/stage3/api-reasoning','/api/stage3/concurrency','/api/stage3/concurrency-default','/api/control-stage3'):
                 update=self.server.release.check(force=True)
                 if update['pending']:raise ConsoleError('UPDATE_PENDING',update['message'],409)

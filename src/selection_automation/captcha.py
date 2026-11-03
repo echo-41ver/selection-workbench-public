@@ -2,6 +2,7 @@
 import base64
 import json
 import math
+import io
 from pathlib import Path
 import re
 import sqlite3
@@ -9,13 +10,14 @@ import time
 
 from .secrets import load, transform
 
-DEFAULTS = {'enabled': False, 'max_requests': 10, 'budget_usd': 0.10,
-            'reserve_usd': 0.01, 'timeout_seconds': 180}
+DEFAULTS = {'enabled': False, 'timeout_seconds': 180}
 MESSAGES = {
     'NOT_CONFIGURED': '2Captcha 未配置；已保留浏览器、session 和采集断点。',
     'DISABLED': '2Captcha 自动解题已关闭；已保留当前现场。',
     'UNSUPPORTED': '当前验证码题型或页面控件尚未适配；已保留断点，请在原窗口处理。',
     'PENDING': '2Captcha 正在解题；保留当前环境，等待结果。',
+    'PAGE_LOADING': '验证码题图正在加载，保留原浏览器和断点。',
+    'MANUAL_REQUIRED': '验证码已请求 API，但未能自动完成；答案与现场已保留，请在原窗口人工验证。',
     'ANSWER_READY': '已取得解题答案，正在验证网站是否放行。',
     'APPLYING': '上次答案执行尚未确认；保留页面，请检查后继续，不重复提交或付费。',
     'VERIFIED': '网站已解除验证码；采集将沿原断点继续。',
@@ -23,29 +25,23 @@ MESSAGES = {
     'TIMEOUT': '2Captcha 等待超时；保留任务编号和断点，不重复付费提交。',
     'ZERO_BALANCE': '2Captcha 余额不足；已保留现场，等待余额恢复。',
     'INVALID_KEY': '2Captcha Key 无效或未获授权；请由维护者更新内部包配置，当前断点保留。',
-    'BUDGET_LIMIT': '2Captcha 已达到次数或预算预留限制；保留当前断点。',
     'SUBMIT_UNKNOWN': '解题提交结果未知；已停止重复提交，保留现场以避免重复扣费。',
-    'SERVICE_FAILED': '2Captcha 服务失败；本题自动重试已停止，当前现场保留。',
+    'SERVICE_FAILED': '2Captcha 未返回可执行答案；当前现场保留，请在原窗口人工完成验证码。',
     'DEPENDENCY_MISSING': '2Captcha SDK 未安装；请运行部署修复，当前断点保留。',
     'STOPPED': '已停止自动解题；服务任务和采集断点已保存。',
 }
 
 
 def normalize(value):
-    if not isinstance(value, dict) or set(value) - {*DEFAULTS, 'key'}:
+    legacy_limits = {'max_requests', 'budget_usd', 'reserve_usd'}
+    if not isinstance(value, dict) or set(value) - {*DEFAULTS, 'key', *legacy_limits}:
         raise ValueError('2Captcha 配置字段无效')
-    result = {**DEFAULTS, **value}
+    result = {**DEFAULTS, **{k: v for k, v in value.items() if k not in legacy_limits}}
     if type(result['enabled']) is not bool:
         raise ValueError('2Captcha enabled 必须为布尔值')
-    for name, low, high in [('max_requests', 1, 100), ('timeout_seconds', 30, 600)]:
+    for name, low, high in [('timeout_seconds', 30, 600)]:
         if type(result[name]) is not int or not low <= result[name] <= high:
             raise ValueError('2Captcha ' + name + ' 超出范围')
-    for name in ('budget_usd', 'reserve_usd'):
-        number = result[name]
-        if type(number) not in (int, float) or not math.isfinite(number) or not 0 < number <= 10:
-            raise ValueError('2Captcha ' + name + ' 超出范围')
-    if result['reserve_usd'] > result['budget_usd']:
-        raise ValueError('单题预算预留不能大于任务预算')
     key = result.get('key', '')
     if not isinstance(key, str) or len(key) > 256 or any(ord(c) < 33 for c in key):
         raise ValueError('2Captcha Key 格式无效')
@@ -100,6 +96,48 @@ def sdk_client(key):
     return client
 
 
+class TemuImageClient:
+    """Official JSON v2 protocol for both Temu Line and Temu Icon."""
+    def __init__(self, key):
+        self.key = key
+
+    def call(self, method, **data):
+        import requests
+        from twocaptcha.exceptions.api import ApiException, NetworkException
+        try:
+            response = requests.post('https://api.2captcha.com/' + method,
+                                     json={'clientKey': self.key, **data}, timeout=(5, 15))
+            if response.status_code != 200:
+                raise NetworkException()
+            value = response.json()
+        except requests.RequestException:
+            raise NetworkException() from None
+        if not isinstance(value, dict) or type(value.get('errorId')) is not int:
+            raise ApiException('ERROR_SERVICE')
+        if value['errorId']:
+            code = value.get('errorCode', '')
+            raise ApiException(code if isinstance(code, str) and re.fullmatch(r'ERROR_[A-Z_]+', code) else 'ERROR_SERVICE')
+        return value
+
+    def balance(self):
+        return self.call('getBalance')['balance']
+
+    def send(self, **task):
+        return self.call('createTask', task=task)['taskId']
+
+    def get_result(self, task_id):
+        from twocaptcha.exceptions.api import ApiException, NetworkException
+        value = self.call('getTaskResult', taskId=int(task_id))
+        if value.get('status') == 'processing':
+            raise NetworkException()
+        if value.get('status') != 'ready' or not isinstance(value.get('solution'), dict):
+            raise ApiException('ERROR_SERVICE')
+        return json.dumps(value['solution'].get('coordinates'))
+
+    def report(self, task_id, correct):
+        return self.call('reportCorrect' if correct else 'reportIncorrect', taskId=int(task_id))
+
+
 def step(root, request, *, config=None, client=None, now=None):
     """One durable submit/poll/ack operation, shared by ordinary background collectors."""
     root = Path(root)
@@ -114,37 +152,44 @@ def step(root, request, *, config=None, client=None, now=None):
     if not isinstance(fingerprint, str) or not re.fullmatch('[a-f0-9]{64}', fingerprint):
         raise ValueError('Invalid CAPTCHA fingerprint')
     action = request.get('action', 'solve')
-    if action not in ('solve', 'claim', 'verify'):
+    if action not in ('solve', 'claim', 'verify', 'manual'):
         raise ValueError('Invalid CAPTCHA action')
     kind = request.get('kind')
-    if action == 'solve' and kind not in ('normal', 'temu'):
+    if action == 'solve' and kind not in ('normal', 'temu', 'temu_line', 'temu_icon', 'temu_auto'):
         return reply('UNSUPPORTED')
     params = {}
     if action == 'solve':
         images = request.get('images')
-        if not isinstance(images, list) or len(images) != (4 if kind == 'temu' else 1):
+        if not isinstance(images, list) or (len(images) != 1 if kind == 'normal' else not 2 <= len(images) <= 9):
             return reply('UNSUPPORTED')
         for value in images:
-            if not isinstance(value, str) or len(value) > 800000:
+            if not isinstance(value, str) or len(value) > 2800000:
                 raise ValueError('Invalid CAPTCHA image')
             raw = base64.b64decode(value, validate=True)
-            if not 100 <= len(raw) <= 600000 or not raw.startswith((b'\x89PNG', b'\xff\xd8', b'GIF8')):
+            if not 100 <= len(raw) <= 2 * 1024 * 1024 or not raw.startswith((b'\x89PNG', b'\xff\xd8', b'GIF8')):
                 raise ValueError('Invalid CAPTCHA image')
+        from PIL import Image
+        with Image.open(io.BytesIO(base64.b64decode(images[0]))) as image:
+            image_width, image_height = image.size
         params = {'method': 'base64', 'body': images[0]} if kind == 'normal' else {
-            'method': 'temuimage', 'body': images[0], **{f'part{i}': images[i] for i in range(1, 4)}}
+            'type': 'TemuImageTask', 'image': images[0], 'parts': images[1:]}
     directory = root / 'runtime/captcha'
     directory.mkdir(parents=True, exist_ok=True)
     stamp = time.time() if now is None else now
     with sqlite3.connect(directory / 'tasks.sqlite3', timeout=25) as db:
         db.row_factory = sqlite3.Row
         db.execute('CREATE TABLE IF NOT EXISTS jobs (scope TEXT, fingerprint TEXT, state TEXT, task_id TEXT, '
-                   'created REAL, next_poll REAL, errors INTEGER DEFAULT 0, answer BLOB, reserved REAL, '
-                   'initial_balance REAL, PRIMARY KEY(scope,fingerprint))')
+                   'created REAL, next_poll REAL, answer BLOB, PRIMARY KEY(scope,fingerprint))')
         db.execute('BEGIN IMMEDIATE')
         row = db.execute('SELECT * FROM jobs WHERE scope=? AND fingerprint=?', (scope, fingerprint)).fetchone()
         if action != 'solve':
             if row is None:
                 return reply('SERVICE_FAILED')
+            if action == 'manual':
+                if row['state'] == 'ANSWER_READY':
+                    db.execute('UPDATE jobs SET state=? WHERE scope=? AND fingerprint=?', ('MANUAL_REQUIRED', scope, fingerprint))
+                    return reply('MANUAL_REQUIRED')
+                return reply(row['state'])
             if action == 'claim':
                 if row['state'] != 'ANSWER_READY':
                     return reply(row['state'])
@@ -154,6 +199,14 @@ def step(root, request, *, config=None, client=None, now=None):
                     return reply(row['state'])
                 state = 'VERIFIED' if request.get('passed') is True else 'REJECTED'
             db.execute('UPDATE jobs SET state=?,answer=NULL WHERE scope=? AND fingerprint=?', (state, scope, fingerprint))
+            if action == 'verify' and kind in ('temu', 'temu_line', 'temu_icon') and row['task_id'] and (
+                    request.get('passed') is True or request.get('site_rejected') is True):
+                from twocaptcha.exceptions.api import ApiException, NetworkException
+                try:
+                    (client or TemuImageClient(config['key'])).report(row['task_id'], state == 'VERIFIED')
+                except (ApiException, NetworkException):
+                    # Feedback failure cannot undo an observed website release.
+                    return reply(state, feedback='SERVICE_FAILED')
             return reply(state)
         if row and row['state'] not in ('PENDING', 'ANSWER_READY', 'ZERO_BALANCE', 'INVALID_KEY'):
             return reply(row['state'])
@@ -162,26 +215,15 @@ def step(root, request, *, config=None, client=None, now=None):
         if row and row['state'] == 'PENDING' and stamp < row['next_poll']:
             return reply('PENDING', retry_after=10)
         try:
-            client = client or sdk_client(config['key'])
+            client = client or (sdk_client(config['key']) if kind == 'normal' else TemuImageClient(config['key']))
         except ImportError:
             return reply('DEPENDENCY_MISSING')
         from twocaptcha.exceptions.api import ApiException, NetworkException
         from twocaptcha.exceptions.solver import ValidationException, NetworkException as SolverNetworkException, ApiException as SolverApiException
         try:
             if row is None or row['state'] in ('ZERO_BALANCE', 'INVALID_KEY'):
-                used = db.execute('SELECT count(*),coalesce(sum(reserved),0),max(initial_balance) FROM jobs WHERE scope=? AND reserved>0', (scope,)).fetchone()
-                if used[0] >= config['max_requests'] or used[1] + config['reserve_usd'] > config['budget_usd'] + 1e-9:
-                    return reply('BUDGET_LIMIT')
-                balance = float(client.balance())
-                if not math.isfinite(balance) or balance < config['reserve_usd']:
-                    return reply('ZERO_BALANCE')
-                # Balance deltas also stop new submissions after the real account
-                # spend reaches the threshold. Reservations are estimates, not invoices.
-                initial = used[2] if used[2] is not None else balance
-                if initial - balance + config['reserve_usd'] > config['budget_usd'] + 1e-9:
-                    return reply('BUDGET_LIMIT')
-                db.execute('INSERT OR REPLACE INTO jobs(scope,fingerprint,state,created,next_poll,reserved,initial_balance) '
-                           'VALUES(?,?,?,?,?,?,?)', (scope, fingerprint, 'SUBMIT_UNKNOWN', stamp, stamp + 10, config['reserve_usd'], initial))
+                db.execute('INSERT OR REPLACE INTO jobs(scope,fingerprint,state,created,next_poll) '
+                           'VALUES(?,?,?,?,?)', (scope, fingerprint, 'SUBMIT_UNKNOWN', stamp, stamp + 10))
                 db.commit()  # An interrupted/ambiguous POST must never be auto-repeated.
                 task_id = str(client.send(**params))
                 if not re.fullmatch(r'\d{1,32}', task_id):
@@ -204,8 +246,9 @@ def step(root, request, *, config=None, client=None, now=None):
                     if isinstance(points, dict): points = points.get('coordinates')
                 except ValueError:
                     points = [{'x': int(x), 'y': int(y)} for x, y in re.findall(r'x=(\d+),y=(\d+)', answer)]
-                if not isinstance(points, list) or len(points) != 3 or any(not isinstance(p, dict) or any(
-                    type(p.get(k)) not in (int, float) or not math.isfinite(p[k]) or not 0 <= p[k] <= 600 for k in ('x', 'y')) for p in points):
+                if not isinstance(points, list) or len(points) != len(images)-1 or any(not isinstance(p, dict) or any(
+                    type(p.get(k)) not in (int, float) or not math.isfinite(p[k]) or not 0 <= p[k] < (
+                        image_width if k == 'x' else image_height) for k in ('x', 'y')) for p in points):
                     raise ValidationException()
                 answer = json.dumps(points)
             encrypted = transform(json.dumps(answer).encode())
@@ -222,6 +265,6 @@ def step(root, request, *, config=None, client=None, now=None):
             code = str(error)
             state = 'ZERO_BALANCE' if 'ERROR_ZERO_BALANCE' in code else 'INVALID_KEY' if any(
                 s in code for s in ('ERROR_WRONG_USER_KEY', 'ERROR_KEY_DOES_NOT_EXIST', 'ERROR_IP_NOT_ALLOWED')) else 'SERVICE_FAILED'
-            db.execute('UPDATE jobs SET state=?,reserved=CASE WHEN task_id IS NULL AND ? IN (\'ZERO_BALANCE\',\'INVALID_KEY\') THEN 0 ELSE reserved END '
-                       'WHERE scope=? AND fingerprint=?', (state, state, scope, fingerprint))
-            return reply(state)
+            db.execute('UPDATE jobs SET state=? WHERE scope=? AND fingerprint=?', (state, scope, fingerprint))
+            error_code = re.search(r'ERROR_[A-Z_]+', code)
+            return reply(state, error_code=error_code[0] if error_code else None)

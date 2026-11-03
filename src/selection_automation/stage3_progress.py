@@ -34,6 +34,7 @@ def candidates(path):
     rows=[]; texts={}
     for r in records(path):
         row={k:r.get(k) for k in ('asin','goods_id','amazon_image_path','temu_image_path','vision_revision_key','pair_revision','vector_score')}
+        row['_vision_history_source'] = (r.get('temu_product_facts') or {}).get('source_key')
         value=used_product_text(r)
         if value:
             # Intern identical text sides, retaining the exact revision input
@@ -290,7 +291,7 @@ def snapshot(base, category, *, history=True, on_phase=None):
         if identity:
             cached[identity] = preferred_api_result(category, cached.get(identity), row)
     completed_pairs = {(row.get('asin'),row.get('goods_id')) for row in cached.values()}
-    total = success = failed = retained = source_candidates = 0
+    total = success = failed = retained = source_candidates = retryable_local_failed = 0
     waiting_groups = {}
     phase('核对计费隔离记录')
     held = progress_billing_hold(base)
@@ -361,7 +362,7 @@ def snapshot(base, category, *, history=True, on_phase=None):
         if agent_mode and pair in authorization['by_pair']:
             pending_blocked += 1
             continue
-        if is_held:
+        if is_held and provider['mode']!='local_model':
             pending_blocked += 1
             continue
         if authorization.get('schema_retry') and pair not in authorization['by_pair']:
@@ -377,6 +378,8 @@ def snapshot(base, category, *, history=True, on_phase=None):
             else:api_authorized_runnable+=1
         elif max((int(p.get('attempt') or 0) for p in priors),default=0) >= 2:
             failed += 1; waiting_groups[group] -= 1
+            if provider['mode']=='local_model' and max(priors,key=lambda p:int(p.get('attempt') or 0),default={}).get('billing_state')=='NO_CHARGE':
+                retryable_local_failed += 1
     completed = success + sum(codex_counts.values())
     pending = total-completed-failed
     runnable = 0 if held['fail_closed'] else pending-pending_blocked
@@ -397,7 +400,7 @@ def snapshot(base, category, *, history=True, on_phase=None):
     if held['fail_closed']:
         pending_requests = 0
         eta = None
-    return {'total':total,'completed':completed,'api_completed':success,'failed':failed,'processed':completed+failed,
+    return {'total':total,'completed':completed,'api_completed':success,'failed':failed,'retryable_local_failed':retryable_local_failed,'processed':completed+failed,
             'codex_completed':sum(codex_counts.values()),'codex_same':codex_counts['SAME'],'codex_similar':codex_counts['SIMILAR'],
             'codex_different':codex_counts['DIFFERENT'],'codex_unknown':codex_counts['UNKNOWN'],
             'pending_after_codex':pending,

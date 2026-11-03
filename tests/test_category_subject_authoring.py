@@ -1,4 +1,6 @@
 import pytest
+from copy import deepcopy
+from pathlib import Path
 from generate_category import CategoryGenerationError,ensure_subject_rules,validate_subject_rules
 
 
@@ -41,3 +43,35 @@ def test_conflicting_body_terms_are_rejected():
 def test_copied_prompt_fields_are_not_treated_as_concrete_excluded_products():
     config=policy('锅铲','spatula','品牌')
     with pytest.raises(CategoryGenerationError,match='占位词'):validate_subject_rules(config)
+
+
+def test_single_character_exclusions_are_removed_from_both_execution_fields_without_a_model(tmp_path):
+    from selection_automation.category_subject_filter import filter_category_union
+    config=policy('测试笔筒','test pen holder','铅笔')
+    config['temu'].update(include_terms=['测试笔筒','test pen holder'],severe_exclude_terms=['笔','pencil','铅笔'])
+    config['temu']['subject_filter']['exclude_subject_terms']=['笔','pencil','铅笔']
+    before=deepcopy(config)
+    result=ensure_subject_rules(config,{},model=lambda *a,**k:pytest.fail('valid remaining nouns need no model'))
+    assert result['temu']['severe_exclude_terms']==['pencil','铅笔']
+    assert result['temu']['subject_filter']['exclude_subject_terms']==['pencil','铅笔']
+    assert result['temu']['subject_rule_normalization']['removed_single_character_exclusions']==['笔']
+    assert config==before
+    rows=[{'goods_id':'target','title':'测试笔筒 test pen holder'},
+          {'goods_id':'other','title':'铅笔 pencil'}]
+    accepted,summary=filter_category_union(Path(__file__).resolve().parents[1],result,rows,{},tmp_path)
+    assert [row['goods_id'] for row in accepted]==['target']
+    assert summary['category_excluded_goods']==1 and len(rows)==2
+
+
+def test_all_single_character_exclusions_still_require_one_valid_supplement():
+    config=policy('测试工具','test implement','刀');config['temu']['severe_exclude_terms']=['刀']
+    calls=[]
+    def model(prompt,**kwargs):
+        calls.append(prompt)
+        return {'category_aliases':['测试工具','test implement'],
+            'subject_filter':{'mode':'TARGET_BODY_ONLY','reject_mixed_subjects':True,
+                              'exclude_subject_terms':['勺','other implement']}}
+    result=ensure_subject_rules(config,{},model=model)
+    assert len(calls)==1 and result['temu']['subject_filter']['exclude_subject_terms']==['other implement']
+    assert result['temu']['severe_exclude_terms']==[]
+    assert result['temu']['subject_rule_normalization']['removed_single_character_exclusions']==['刀','勺']

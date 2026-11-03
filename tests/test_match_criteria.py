@@ -117,6 +117,24 @@ def test_first_layer_only_excludes_explicit_bilateral_size_conflict(category,pro
     assert text_gate(category,'投影仪 7英寸','投影仪 8英寸')['excluded'] is False
 
 
+def test_broad_kitchen_gadget_type_is_unknown_but_distinct_concrete_types_conflict(category,products):
+    from selection_automation.match_criteria import attach,text_gate
+    category=deepcopy(category);category['stage1']={'attributes':[]};category['stage3']['rule_version']='test'
+    products=deepcopy(products)
+    for row,value in zip(products['records'],('kitchen gadget','pizza wheel')):
+        row['specifications']=[{'label':'Item Type Name','value':value}]
+    products['records'].append({**products['records'][0],'asin':'A3',
+        'specifications':[{'label':'Item Type Name','value':'pizza pan'}]})
+    catalog=seed(category,products)
+    product_type=next(row for row in catalog['items'] if row['label']=='Item Type Name')
+    attach(category,select(catalog,[product_type['id']]))
+    for left,right in (('kitchen gadget','pizza wheel'),('pizza wheel','kitchen gadget')):
+        result=text_gate(category,left,right)
+        assert not result['excluded'] and result['stage1_status']=='TEXT_INSUFFICIENT'
+    assert text_gate(category,'pizza wheel','pizza pan')['excluded']
+    assert text_gate(category,'pizza wheel','pizza wheel')['stage1_status']=='TEXT_PASS'
+
+
 @pytest.mark.parametrize('dimension',['13.78X12.6inch','41.8 X 30 Inches','7 X 15 Inches'])
 def test_uppercase_dimension_separator_does_not_abort_text_batch(category,products,dimension):
     from selection_automation.match_criteria import attach,text_gate
@@ -305,6 +323,8 @@ def test_web_saves_split_selections_and_freezes_them_after_task_start(products,t
     result=console.select_match_criteria(body)
     saved=web.selection.read(console.draft_path,{})
     assert result['ok'] and selected(saved,'text')==[] and len(selected(saved,'visual'))==1
+    assert result['draft']['stage3_text']==console.draft['stage3_text']
+    assert 'body_type' in result['draft']['stage3_text']
     assert console.draft['match_criteria']['revision']==saved['stage3']['match_criteria_revision']
     with pytest.raises(web.ConsoleError):console.select_match_criteria(body)
     console.draft_used=True;body['revision']=saved['match_criteria']['revision']

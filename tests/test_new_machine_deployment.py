@@ -89,6 +89,22 @@ def test_fresh_headless_adspower_starts_in_its_installation_directory(tmp_path,m
     assert launched[0][1]['env']['ADSPOWER_API_KEY']=='TEST_ONLY_COMPANY_KEY'
 
 
+def test_fresh_adspower_accepts_observed_eighty_second_cold_start(tmp_path,monkeypatch):
+    import replace_proxyshare_worker_environment as api_module
+    clock=[0.0];launched=[]
+    def api(base,path,**kwargs):
+        if path=='/status' and clock[0]<80:
+            raise RuntimeError('TEST_ONLY_COLD_SERVICE_STARTING')
+        return {'code':0}
+    monkeypatch.setattr(api_module,'api_call',api)
+    monkeypatch.setattr(company_setup,'find_adspower_executable',lambda company:str(tmp_path/'AdsPower Global.exe'))
+    monkeypatch.setattr(company_setup.subprocess,'Popen',lambda args,**kwargs:launched.append(args))
+    monkeypatch.setattr(company_setup.time,'monotonic',lambda:clock[0])
+    monkeypatch.setattr(company_setup.time,'sleep',lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+    company_setup.ensure_adspower_api(company_fixture())
+    assert clock[0]==80 and len(launched)==1
+
+
 def test_default_api_deployment_does_not_require_an_optional_agent_login(tmp_path,monkeypatch):
     secret=tmp_path/'runtime/secrets/company.dpapi';secret.parent.mkdir(parents=True);secret.write_bytes(b'TEST_ONLY_CIPHER')
     connections=tmp_path/'runtime/agent-config/connection.json';connections.parent.mkdir()

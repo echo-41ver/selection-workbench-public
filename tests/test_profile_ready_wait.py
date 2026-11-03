@@ -60,7 +60,7 @@ try {
 if($clock.Elapsed.TotalSeconds -gt 3){throw 'deadline exceeded'}
 }
 ''',encoding='utf-8')
-    result=subprocess.run([shell,'-NoProfile','-File',str(script),str(ROOT/'scripts/bind_flower_worker.ps1'),','.join(modes)],capture_output=True,text=True,timeout=25)
+    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script),str(ROOT/'scripts/bind_flower_worker.ps1'),','.join(modes)],capture_output=True,text=True,timeout=25)
     assert result.returncode==0,result.stdout+'\n'+result.stderr
     for mode in modes:
         assert ('READY_CORRECT_OWNER' if mode=='delayed' else 'REJECTED_'+mode) in result.stdout

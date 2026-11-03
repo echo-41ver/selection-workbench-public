@@ -44,7 +44,7 @@ def used_product_text(pair):
 
 
 def price_sales_only_change(previous, current):
-    """Keep every design/specification field; ignore only whole price/sales lines."""
+    """Keep every design/specification field; ignore only whole price/sales/ad/viewed badge lines."""
     left, right = (deepcopy(used_product_text(pair)) for pair in (previous,current))
     if left == right or left is None or right is None:
         return False
@@ -56,7 +56,7 @@ def price_sales_only_change(previous, current):
                 continue
             lines = card.splitlines()
             fields['card_text'] = '\n'.join(line for index,line in enumerate(lines)
-                if not re.fullmatch(r'(?:Original price\s+)?\$\s*[\d,.]+|[\d,.]+[KM]?\+?\s*sold|sold',line.strip(),re.I)
+                if not re.fullmatch(r'AD|(?:Original price\s+)?\$\s*[\d,.]+|[\d,.]+[KM]?\+?\s*(?:sold|viewed)|sold',line.strip(),re.I)
                 and not (re.fullmatch(r'[\d,.]+[KM]?\+?',line.strip(),re.I)
                          and index+1<len(lines) and lines[index+1].strip().lower()=='sold'))
     return left == right

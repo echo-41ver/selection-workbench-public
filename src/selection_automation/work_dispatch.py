@@ -20,9 +20,13 @@ def locked(run):
     finally: lock.__exit__(None,None,None)
 
 
-def read(run):
+def _read(run):
     path=Path(run)/'temu/supervisors/assignments.json'
     return json.loads(path.read_text('utf-8')) if path.exists() else {}
+
+
+def read(run):
+    with locked(run):return _read(run)
 
 
 def save(run, data):
@@ -70,7 +74,7 @@ def sync(run, keywords, names, resume_queries=(), repair_queries=()):
     resume_queries=set(resume_queries)
     repair_queries=set(repair_queries)
     with locked(run):
-        data=read(run)
+        data=_read(run)
         if 'jobs' not in data:
             legacy={q:w['name'] for w in data.get('workers',[]) for q in w.get('queries',[])}
             data={'jobs':[],'lanes':names}
@@ -126,7 +130,7 @@ def sync(run, keywords, names, resume_queries=(), repair_queries=()):
 def claim(run, worker):
     """Legacy query-level claim; new collectors should use claim_pass."""
     with locked(run):
-        data=read(run)
+        data=_read(run)
         available=[r for r in data['jobs'] if not r['complete'] and (r['owner']==worker or not r['started'])]
         if not available: return None
         job=min(available,key=lambda r:(not(r['started'] and r['owner']==worker),r['owner']!=worker))
@@ -143,7 +147,7 @@ def claim(run, worker):
 def claim_pass(run, worker):
     """Atomically claim one sort pass, preserving active and completed passes."""
     with locked(run):
-        data=read(run)
+        data=_read(run)
         jobs=data.get('jobs',[])
         for job in jobs: _ensure_pass_states(job)
         candidates=[]
@@ -176,7 +180,7 @@ def complete_empty_query(run,worker,query,evidence):
     from .empty_results import verified_empty_evidence
     if not verified_empty_evidence(evidence,query):raise ValueError('Empty results require two independent searches')
     with locked(run):
-        data=read(run);job=next(row for row in data['jobs'] if row['query']==query)
+        data=_read(run);job=next(row for row in data['jobs'] if row['query']==query)
         _ensure_pass_states(job)
         active=[state for state in job['sort_passes'].values() if state.get('started') and not state.get('complete')]
         if not active or any(state.get('owner')!=worker for state in active):raise RuntimeError('Empty query ownership changed')
@@ -192,7 +196,7 @@ def requeue_unsettled_empty_queries(run):
     """Revisit old single-sample emptiness without touching collected passes."""
     changed=[]
     with locked(run):
-        data=read(run)
+        data=_read(run)
         for job in data.get('jobs',[]):
             evidence=job.get('no_results_evidence') or {}
             if not job.get('complete') or not evidence:continue
@@ -215,7 +219,7 @@ def requeue_unsettled_empty_queries(run):
 def complete_pass(run, worker, query, sort):
     if sort not in _SORTS: raise ValueError(f'Unknown TEMU sort pass: {sort}')
     with locked(run):
-        data=read(run)
+        data=_read(run)
         job=next(r for r in data['jobs'] if r['query']==query)
         _ensure_pass_states(job)
         state=job['sort_passes'][sort]
@@ -229,7 +233,7 @@ def complete_pass(run, worker, query, sort):
 
 def complete(run, worker, query):
     with locked(run):
-        data=read(run);job=next(r for r in data['jobs'] if r['query']==query)
+        data=_read(run);job=next(r for r in data['jobs'] if r['query']==query)
         if job['owner']!=worker or not job['started']: raise RuntimeError('Query ownership changed')
         _ensure_pass_states(job)
         for state in job['sort_passes'].values():

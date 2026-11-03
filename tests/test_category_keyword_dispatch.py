@@ -48,6 +48,19 @@ def test_colors_dimensions_models_and_plural_titles_need_no_category_dictionary(
     assert all('red' not in r['query'] for r in rows)
 
 
+def test_multifunction_title_does_not_become_inches_or_a_truncated_model():
+    row={'asin':'B00YBP918M','rank':1,
+         'title':'Zulay Kitchen Metal 2-in-1 Lemon Lime Squeezer, Juicer Handheld - Yellow'}
+    category={'stage1':{'text_gate':'declarative'},'temu':{
+        'base_queries':['lemon squeezer'],'max_products_per_keyword':120,
+        'keyword_features':[],'include_terms':[],'severe_exclude_terms':[]}}
+    plan=build_category_keyword_plan([row],category)
+    assert '2-in-1 lemon squeezer' in {item['query'] for item in plan}
+    features={(f['value'],f['kind']) for item in candidates(row,['lemon squeezer']) for f in item['features']}
+    assert ('2 in','parameter') not in features
+    assert ('in-1','model') not in features
+
+
 def test_one_amazon_drill_title_drops_unseen_seed_but_keeps_evidenced_terms():
     category={'stage1':{'text_gate':'declarative'},'temu':{
         'base_queries':['power drill','cordless drill','electric drill','drill driver'],

@@ -39,9 +39,13 @@ def candidates(row, base_queries):
     for kind, phrases in [('structure',structures),('material',materials),('color',colors)]:
         for phrase in phrases:
             if contains(phrase,normalized): add(phrase,kind)
+    for match in re.finditer(r'\b\d+-in-\d+\b',text,re.I):
+        add(match[0],'structure')
     units=r'(?:fl\s*oz|us\s*cup|cups?|cm|mm|inches|inch|in|ml|liters?|litres?|l|oz|gallons?|gal|watts?|w|volts?|v|mah|ah|gb|tb|hz|khz|lbs?|kg)'
     for match in re.finditer(r'(?<![\w.,])(\d+(?:\.\d+)?(?:\s*(?:[x×]|-|to)\s*\d+(?:\.\d+)?)*)\s*[- ]?\s*('+units+r')(?!\w)',text,re.I):
         unit=match[2].lower()
+        if unit=='in' and re.match(r'-\d',text[match.end():]):
+            continue
         context=text[max(0,match.start()-45):min(len(text),match.end()+30)].lower()
         # Pet/person body weight is not the capacity or size of a bowl/accessory.
         if unit in ('lb','lbs','kg') and re.search(r'\b(dogs?|cats?|pets?|children|adults?|body|weighing)\b',context):
@@ -82,7 +86,7 @@ def candidates(row, base_queries):
         if not matches_noun or not supported_quantity(match):continue
         add(match[1]+' x '+match[2]+' count','quantity',match[0],scope='OBSERVED_MULTIPACK_EXPRESSION')
     brand=str(row.get('brand') or '').strip().lower()
-    for token in re.findall(r'\b[A-Za-z][A-Za-z0-9-]{2,18}\b',text):
+    for token in re.findall(r'(?<![\w-])[A-Za-z][A-Za-z0-9-]{2,18}\b',text):
         # Preserve concrete alphanumeric model codes; not a guessed brand-only query.
         if (any(c.isdigit() for c in token) and sum(c.isalpha() for c in token)>=2
                 and token.lower()!=brand and not re.fullmatch(r'\d*pack',token,re.I)

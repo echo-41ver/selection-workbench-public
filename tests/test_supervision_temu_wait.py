@@ -77,7 +77,8 @@ const guard = source.slice(source.indexOf('class InitialProductsStopped'), sourc
 const loops = source.slice(source.indexOf('async function waitForStableEmptySearch'), source.indexOf('const bidi = await startBidi'));
 const initial = source.slice(source.indexOf('async function waitForInitialProducts()'), source.indexOf('try { await waitForInitialProducts(); }'));
 const driver = source.slice(source.indexOf('try { await waitForInitialProducts(); }'));
-let tick = 0, calls = 0, reloads = 0;
+let tick = 0, calls = 0, reloads = 0, cleanups = 0, callsAtCleanup = null, exitCode = null;
+const manualExit = {};
 const snapshots = [], events = [];
 const empty = {url:'https://www.temu.com/search_result.html?search_key=towels',visibleGoodsCount:0,text:''};
 const searchBox = {...empty,url:'https://www.temu.com/search_result.html',readyState:'complete',
@@ -94,8 +95,9 @@ const page = async () => {
 };
 const context = vm.createContext({
   ...bootstrapPolicy, decideInitialProductsWait,decideEmptyQueryResults, classify, terminalCollectionStop,
-  supersededByVerification, observeHttpPageTransition, URL, humanVerificationActive:false,
-  httpBlock:null, process:{exitCode:0},readLocalWarehouse:async()=>({}),confirmsLocalWarehouse:()=>false,
+  supersededByVerification, observeHttpPageTransition, URL, humanVerificationActive:false,scrollingCollectionStarted:false,
+  cleanupOwnedInterception:async()=>{cleanups++;callsAtCleanup=calls;},
+  httpBlock:null, process:{exitCode:0,exit:code=>{exitCode=code;throw manualExit;}},readLocalWarehouse:async()=>({}),confirmsLocalWarehouse:()=>false,
   Date:{now:()=>tick}, now:()=>new Date(tick).toISOString(),
   sleep:async ms=>{tick+=ms;}, rand:(min)=>min,
   QUERY:'towels', ENTRY_MODE:'empty_search', INITIAL_PRODUCTS_TIMEOUT_SECONDS:180, finalStatus:null,
@@ -110,14 +112,16 @@ const context = vm.createContext({
   bidi:{close:()=>{}}, console:{log:()=>{}}, OUT:'fixture', clicks:0,imageBlocked:0,
 });
 vm.runInContext(guard+loops+initial,context);
-if (testCase.entry === 'waitForInitialProducts') {
-  await vm.runInContext('(async()=>{'+driver+'})()',context);
-} else {
-  const call = testCase.entry === 'bootstrapThroughEmptySearch'
-    ? 'bootstrapThroughEmptySearch({navigate:false})' : testCase.entry+'()';
-  await vm.runInContext('(async()=>{try{await '+call+';}catch(error){if(!(error instanceof InitialProductsStopped))throw error;}})()',context);
-}
-console.log(JSON.stringify({status:context.finalStatus,tick,calls,reloads,snapshots,events}));
+try {
+  if (testCase.entry === 'waitForInitialProducts') {
+    await vm.runInContext('(async()=>{'+driver+'})()',context);
+  } else {
+    const call = testCase.entry === 'bootstrapThroughEmptySearch'
+      ? 'bootstrapThroughEmptySearch({navigate:false})' : testCase.entry+'()';
+    await vm.runInContext('(async()=>{try{await '+call+';}catch(error){if(!(error instanceof InitialProductsStopped))throw error;}})()',context);
+  }
+} catch(error) {if(error!==manualExit)throw error;}
+console.log(JSON.stringify({status:context.finalStatus,tick,calls,reloads,cleanups,callsAtCleanup,exitCode,snapshots,events}));
 """
 
 
@@ -144,11 +148,15 @@ def test_every_initial_wait_path_stops_and_preserves_browser(entry, failure, exp
                    for item in result["snapshots"])
 
 
-def test_bootstrap_captcha_wait_longer_than_timeout_still_resumes_normal_budget():
+def test_bootstrap_captcha_hands_off_without_spending_initial_wait_budget():
     result = run_node('const testCase={entry:"bootstrapThroughEmptySearch",failure:"timeout",manual:true};' + HARNESS)
-    assert result["status"] == "STOPPED_INITIAL_PRODUCTS_TIMEOUT"
-    assert 1078000 <= result["tick"] <= 1082000
-    assert any(item["status"] == "WAITING_SEARCH_VERIFICATION" for item in result["snapshots"])
+    assert result["status"] == "WAITING_HUMAN_VERIFICATION"
+    assert result["exitCode"] == 2 and result["cleanups"] == 1
+    assert result["tick"] < 180000 and result["calls"] == result["callsAtCleanup"]
+    assert result["snapshots"][-1]["collector_paused"] is True
+    assert result["snapshots"][-1]["browser_preserved"] is True
+    assert not any(item["status"] in {"RUNNING", "KEYWORD_COMPLETE", "KEYWORD_LIMIT_REACHED"}
+                   for item in result["snapshots"])
 
 
 @pytest.mark.parametrize('recovers', [True, False])

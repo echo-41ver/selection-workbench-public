@@ -342,6 +342,10 @@ def text_gate(category,left,right):
         else:
             if not attribute['values']:continue
             a,au=attribute_values(left,attribute['values']);b,bu=attribute_values(right,attribute['values'])
+        if identity=='product_type':
+            # A broad parent description is not a conflicting product type.
+            au=au or 'kitchen gadget' in a
+            bu=bu or 'kitchen gadget' in b
         uncertain=au or bu or any(contains(text,phrase) for text in (left,right) for phrase in attribute.get('ambiguous_phrases',[]))
         insufficient|=uncertain or len(a)!=1 or len(b)!=1
         facts.append({'field':condition['id'],'label':condition['label'],'amazon':sorted(a),'temu':sorted(b),'ambiguous_context':uncertain})

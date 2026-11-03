@@ -64,7 +64,8 @@ async function collectSearchCards(page) {
     const image = card.querySelector('img.s-image')?.currentSrc || card.querySelector('img.s-image')?.src || null;
     const priceText = text('.a-price .a-offscreen');
     const ratingText = card.querySelector('.a-icon-alt')?.textContent || '';
-    const reviewText = text('a[href*="customerReviews"] span, a[href*="product-reviews"] span');
+    const reviewText = [...card.querySelectorAll('a[href*="customerReviews"], a[href*="product-reviews"]')]
+      .filter(node => !node.querySelector('.a-icon-alt')).map(node => node.textContent.trim()).find(Boolean) || '';
     return {
       rank: index + 1,
       asin,
@@ -108,7 +109,8 @@ async function collectBestSellerCards(page, url = searchUrl) {
     const imageNode = card.querySelector('img.p13n-product-image, img');
     const image = imageNode?.currentSrc || imageNode?.src || imageNode?.getAttribute('data-src') || null;
     const ratingText = card.querySelector('.a-icon-alt')?.textContent || '';
-    const reviewText = [...card.querySelectorAll('a[href*="product-reviews"], a[href*="customerReviews"]')].map(node => node.textContent || '').join(' ');
+    const reviewText = [...card.querySelectorAll('a[href*="product-reviews"], a[href*="customerReviews"]')]
+      .filter(node => !node.querySelector('.a-icon-alt')).map(node => node.textContent.trim()).find(Boolean) || '';
     const priceText = [...card.querySelectorAll('.a-color-price, [class*="p13n-sc-price"], .a-price .a-offscreen')].map(node => node.textContent || '').find(Boolean) || '';
     return {
       rank,
@@ -156,8 +158,8 @@ async function detailFacts(context, record, attempt = 1) {
         const href=review.querySelector('a[href*="/gp/customer-reviews/"]')?.href;
         if(rating>=1&&rating<=2&&text&&href)negativeReviews.push({rating,text:text.slice(0,1000),source_url:href});
       }
-      const ratingText = document.querySelector('#acrPopover')?.getAttribute('title') || first('#acrPopover .a-icon-alt');
-      const reviewText = first('#acrCustomerReviewText');
+      const ratingText = document.querySelector('#acrPopover')?.getAttribute('title') || first('#acrPopover .a-icon-alt', '#haulAverageCustomerReviewsContainer .a-color-base.a-text-bold');
+      const reviewText = first('#acrCustomerReviewText', '#haul-number-of-reviews');
       const specs = [];
       const add = (label, value) => {
         const key = cleanText(label).replace(/:$/, ''); const content = cleanText(value);
@@ -169,6 +171,9 @@ async function detailFacts(context, record, attempt = 1) {
         if (parts.length >= 2) add(parts[0], parts.slice(1).join(' '));
       });
       document.querySelectorAll('#feature-bullets li span').forEach((item, index) => { if (index < 20) add(`卖点${index + 1}`, item.textContent); });
+      document.querySelectorAll('#haul-productFacts-desktop-expander .haul-productFacts-desktop-row').forEach(row =>
+        add(row.querySelector('.haul-productFacts-desktop-label')?.textContent,
+            row.querySelector('.haul-productFacts-desktop-value')?.textContent));
       const image = document.querySelector('#landingImage');
       const dynamic = image?.getAttribute('data-a-dynamic-image');
       let candidates = [];
@@ -189,8 +194,10 @@ async function detailFacts(context, record, attempt = 1) {
       const bsr = specs.find(entry => /best sellers rank/i.test(entry.label))?.value
         || detailText.match(/Best Sellers Rank\s*(#.+?)(?=(?:\s{2,}|Product Dimensions|Date First Available|ASIN|Customer Reviews|$))/i)?.[1]
         || null;
+      const haulFacts = document.getElementById('haulProductFactsDesktop_feature_div');
       return {
         title: first('#productTitle'), brand: first('#bylineInfo', '#productOverview_feature_div .po-brand .po-break-word') || specs.find(row=>/^brand(?: name)?$/i.test(row.label))?.value || null, seller: first('#sellerProfileTriggerId', '#merchantInfoFeature_feature_div'),
+        specifications_availability:haulFacts && !cleanText(haulFacts.textContent) ? 'NOT_PROVIDED_BY_SOURCE' : null,
         availability: first('#availability'), specifications: specs, variants: variants.slice(0, 60), best_sellers_rank: bsr,
         price_usd: Number((priceText || '').replace(/[^0-9.]/g, '').match(/\d+(?:\.\d+)?/)?.[0]) || null,
         detail_price_text: priceText,

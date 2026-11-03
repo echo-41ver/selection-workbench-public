@@ -29,9 +29,13 @@ def normalize_attribute_aliases(values):
 
 
 def compile_stage1_rules(category):
+    from .rules import contains
     result=deepcopy(category)
     if result.get('stage1',{}).get('text_gate')!='declarative':return result
-    for attr in result['stage1'].get('attributes',[]):
+    attributes=result['stage1'].get('attributes',[])
+    if not isinstance(attributes,list) or any(not isinstance(attr,dict) for attr in attributes):
+        raise ValueError('第一层文字属性必须为对象数组')
+    for attr in attributes:
         attr['values']=normalize_attribute_aliases(attr.get('values'))
         if 'ambiguous_phrases' not in attr:continue
         if not isinstance(attr['ambiguous_phrases'],list):
@@ -48,7 +52,13 @@ def compile_stage1_rules(category):
                 for alias in aliases:
                     for separator in ((' ',) if phrase.isascii() else ('',' ')):
                         phrases.append(phrase+separator+alias)
-            else:phrases.append(phrase)
+            else:
+                # A generic "opener" cannot mask an explicit "can opener".
+                # Alone it still has no attribute value and remains insufficient.
+                if (any(contains(alias,phrase) for alias in aliases)
+                        and all(phrase.casefold()!=alias.casefold() for alias in aliases)):
+                    continue
+                phrases.append(phrase)
         attr['ambiguous_phrases']=list(dict.fromkeys(phrases))
     validate_stage1_authoring(result)
     return result

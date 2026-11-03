@@ -118,6 +118,29 @@ def test_true_collector_progress_replaces_completed_generation_and_redacts_gate(
     assert '0/2' in console.generation_progress()['message']
 
 
+def test_failed_preparation_is_idle_error_and_missing_facts_are_not_access_gates(tmp_path):
+    from selection_automation.release_reload import idle_for_reload
+    output,_,scope=artifacts(tmp_path)
+    amazon=output.with_suffix('.amazon.json');payload=web.selection.read(amazon)
+    for row in payload['records']:
+        row['detail_error']={'code':'DETAIL_QUALITY_INCOMPLETE','retryable':False,
+                             'missing_fields':['specifications_or_features']}
+    web.selection.save(amazon,payload)
+    console=web.Console(tmp_path);console.preparation_path=output;console.pending_scope=scope
+    console.progress_file=output.with_suffix('.progress.json')
+    console.generation_error={'code':'AMAZON_DETAILS_INCOMPLETE','message':'详情尚未采齐'}
+    console.phase='详情尚未采齐'
+    progress=console.generation_progress()
+    assert progress['stage']=='error' and progress['amazon_gate_count']==0
+    assert '访问门禁' not in progress['message']
+    state=dict(ok=True,active=False,console_busy=False,market_busy=False,
+               generation=progress,stage3_control={'running':False})
+    assert idle_for_reload(state,console)
+    console.busy=True;console.phase='正在采集 Amazon 商品标题、详情参数并提炼关键词'
+    state['generation']=console.generation_progress()
+    assert not idle_for_reload(state,console)
+
+
 @pytest.mark.parametrize('claimed_complete,verifier_code',[(False,0),(True,2)])
 def test_partial_or_unverified_details_never_reach_keywords_or_paid_visual(tmp_path,monkeypatch,claimed_complete,verifier_code):
     output,category,scope=artifacts(tmp_path)
@@ -149,8 +172,13 @@ def test_explicit_invalid_checkpoint_fails_closed_before_model(tmp_path,monkeypa
             'api_key':'PRIVATE','api_base_url':scope['api_base_url'],'api_model':scope['api_model'],'commercial':scope['commercial']})
 
 
-def test_explicit_preparation_can_switch_only_amazon_route_before_listing_exists(tmp_path,monkeypatch):
-    output,_,scope=artifacts(tmp_path)
+@pytest.mark.parametrize('listing_alias',[False,True])
+def test_explicit_preparation_can_switch_only_amazon_route_before_listing_exists(tmp_path,monkeypatch,listing_alias):
+    output,category,scope=artifacts(tmp_path)
+    listing=''
+    if listing_alias:
+        scope['bestsellers_url']=category['amazon']['bestsellers_url']
+        listing=scope['bestsellers_url'].replace('/zgbs/','/gp/bestsellers/')+'/ref=fixture'
     for path in output.parent.glob('*.amazon.json*'):path.unlink()
     web.selection.save(output.parent/'pending-generation.json',{'scope':scope,
         'preparation':{'schema_version':'web-preparation-v1','category_file':output.name,'stage':'rules_ready'}})
@@ -161,6 +189,7 @@ def test_explicit_preparation_can_switch_only_amazon_route_before_listing_exists
         def start(self):pass
     monkeypatch.setattr(web.threading,'Thread',Thread)
     response=console.start({'category_name':scope['category'],'amazon_count':2,'per_keyword':400,'worker_count':4,
+        'bestsellers_url':listing,
         'amazon_route_mode':'DIRECT','api_key':'PRIVATE','api_base_url':scope['api_base_url'],
         'api_model':scope['api_model'],'commercial':scope['commercial']})
     assert response['preparation_resumed'] is True and console.preparation_path==output
@@ -174,6 +203,36 @@ def test_explicit_preparation_can_switch_only_amazon_route_before_listing_exists
     monkeypatch.setattr(console,'invoke',invoke)
     console._start(captured[0])
     assert console.preparation_path==output
+
+
+@pytest.mark.parametrize('mode,transport,code,attempts',[
+    ('AUTO','CONFIGURED_PROXY','AMAZON_LOGIN_REQUIRED',2),
+    ('DIRECT','BROWSER_DIRECT','AMAZON_LOGIN_REQUIRED',1),
+    ('AUTO','CONFIGURED_PROXY','AMAZON_VERIFICATION_REQUIRED',1),
+    ('AUTO','SYSTEM_ROUTE','AMAZON_LOGIN_REQUIRED',1),
+])
+def test_proxy_login_tries_direct_once_without_losing_checkpoint(tmp_path,monkeypatch,mode,transport,code,attempts):
+    output,category,_=artifacts(tmp_path)
+    amazon=output.with_suffix('.amazon.json');payload=web.selection.read(amazon)
+    payload.update(amazon_browser_route={'mode':mode,'transport':transport},
+        missing_details=[{'asin':row['asin'],'error':{'code':code}} for row in payload['records']])
+    web.selection.save(amazon,payload)
+    checkpoint=output.with_suffix('.amazon.json.checkpoint.json').read_bytes()
+    calls=[]
+    def invoke(argv,**kwargs):
+        calls.append((argv,dict(kwargs['env'])))
+        return SimpleNamespace(returncode=2)
+    console=web.Console(tmp_path);monkeypatch.setattr(console,'invoke',invoke)
+    with pytest.raises(web.ConsoleError,match='详情尚未采齐'):
+        console.collect_amazon_and_plan(output,category,{'AMAZON_BROWSER_ROUTE_MODE':mode,'DEEPSEEK_API_KEY':'PRIVATE'})
+    assert len(calls)==attempts
+    assert all('DEEPSEEK_API_KEY' not in env for _,env in calls)
+    assert output.with_suffix('.amazon.json.checkpoint.json').read_bytes()==checkpoint
+    if attempts==2:
+        assert calls[0][0]==calls[1][0]
+        assert calls[1][1]['AMAZON_BROWSER_ROUTE_MODE']=='DIRECT'
+        assert calls[1][1]['AMAZON_MANUAL_RECHECK']=='1' and calls[1][1]['AMAZON_BROWSER_PROXY']==''
+        assert web.selection.read(amazon.with_suffix('.proxy-login.json'))==payload
 
 
 def test_stopped_preparation_never_launches_another_child(tmp_path,monkeypatch):

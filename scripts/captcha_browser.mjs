@@ -9,6 +9,7 @@ export const captchaStatuses=new Set(['WAITING_CAPTCHA','CAPTCHA_REQUIRED','WAIT
   'WAITING_EMPTY_SEARCH_VERIFICATION','WAITING_HUMAN_VERIFICATION']);
 
 export function inspectCaptcha() {
+  for(const e of document.querySelectorAll('[data-swb-captcha]'))e.removeAttribute('data-swb-captcha');
   const visible=e=>{const r=e?.getBoundingClientRect(),s=e&&getComputedStyle(e);return r?.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';};
   const tag=(e,name)=>{e.setAttribute('data-swb-captcha',name);return `[data-swb-captcha="${name}"]`;};
   const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
@@ -23,26 +24,61 @@ export function inspectCaptcha() {
           width:images[0].naturalWidth,height:images[0].naturalHeight}]};
     }
   }
-  // Temu's documented service is the three movable picture-piece task.
-  // Require drag instructions AND three explicitly draggable images; never
-  // reinterpret a slider, rotation or line puzzle as that service task.
+  // The official TemuImageTask supports Line placement and Icon ordered clicks.
+  // Preserve the actual reference count/order; the guide says usually three.
   const panels=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],[id*="captcha" i],[class*="captcha" i],[id*="verify" i],[class*="verify" i]')].filter(visible);
+  if(/bgn_verification/i.test(location.pathname)&&document.body)panels.push(document.body);
   for(const panel of panels) {
     const text=panel.innerText||'';
-    if(!/drag.{0,60}(?:image|picture|piece)|拖动.{0,20}(?:图片|图块|拼图)|拖動.{0,20}(?:圖片|圖塊|拼圖)/i.test(text)
-      || /rotate|rotation|slide|connect|旋转|旋轉|滑块|滑塊|连线|連線/i.test(text))continue;
-    const pieces=[...panel.querySelectorAll('img[draggable="true"],[draggable="true"] img')].filter(visible);
-    const backgrounds=[...panel.querySelectorAll('img')].filter(e=>visible(e)&&!pieces.includes(e)&&e.naturalWidth>=150&&e.naturalHeight>=100);
-    if(pieces.length!==3||backgrounds.length!==1||pieces.some(e=>!e.naturalWidth))continue;
-    const images=[backgrounds[0],...pieces].map((e,i)=>({selector:tag(e,'image'+i),rect:rect(e),src:e.currentSrc||e.src,width:e.naturalWidth,height:e.naturalHeight}));
+    const icon=/click.{0,70}(?:order|sequence)|(?:order|sequence).{0,70}click|(?:依次|按顺序|按順序).{0,20}(?:点击|點擊)|(?:点击|點擊).{0,30}(?:顺序|順序)/i.test(text);
+    const line=/align.{0,40}line|connect.{0,40}line|drag.{0,60}(?:image|picture|piece)|fill each box.{0,80}(?:number|object)|拖[动動].{0,30}(?:图片|圖片|图块|圖塊|拼图|拼圖|线|線)|(?:对齐|對齊|连线|連線|拼接).{0,30}(?:线|線|图|圖)/i.test(text);
+    const mode=/rotate|rotation|旋转|旋轉/i.test(text)?'temu_auto':icon?'temu_icon':line?'temu_line':'temu_auto';
+    const candidates=[...panel.querySelectorAll('img,canvas,[style*="background-image"]')].filter(e=>visible(e)
+      &&(e.tagName!=='IMG'||e.complete&&e.naturalWidth>0)
+      &&(e.tagName!=='CANVAS'||e.width>0&&e.height>0)
+      &&(e.tagName==='IMG'||e.tagName==='CANVAS'||/url\(/i.test(getComputedStyle(e).backgroundImage)));
+    const ranked=candidates.map(e=>({e,r:rect(e)})).filter(x=>x.r.width>=8&&x.r.height>=8)
+      .sort((a,b)=>b.r.width*b.r.height-a.r.width*a.r.height);
+    const background=ranked[0];
+    if(!background||background.r.width<100||background.r.height<100)continue;
+    const pieces=candidates.filter(e=>e!==background.e&&rect(e).width*rect(e).height<background.r.width*background.r.height*0.45);
+    if(pieces.length<1||pieces.length>8||ranked.length!==pieces.length+1)continue;
+    if(icon)pieces.sort((a,b)=>Math.abs(rect(a).y-rect(b).y)>Math.min(rect(a).height,rect(b).height)/2?rect(a).y-rect(b).y:rect(a).x-rect(b).x);
+    let surface=background.e;
+    if(mode!=='temu_icon') {
+      // Line input is the complete puzzle surface, including initial movable
+      // pieces, rather than the underlying background image with blank slots.
+      while(surface!==panel&&!pieces.every(e=>surface.contains(e)))surface=surface.parentElement;
+    }
+    const images=[surface,...pieces].map((e,i)=>({selector:tag(e,'image'+i),rect:rect(e),
+      width:e.naturalWidth||e.width||rect(e).width,height:e.naturalHeight||e.height||rect(e).height}));
     const buttons=[...panel.querySelectorAll('button,[role="button"]')].filter(e=>visible(e)&&/^(?:submit|confirm|verify|确定|确认|提交|驗證|验证)$/i.test((e.innerText||'').trim()));
-    return {kind:'temu',images,submit:buttons.length===1?tag(buttons[0],'submit'):null};
+    return {kind:mode,images,submit:buttons.length===1?tag(buttons[0],'submit'):null};
   }
   const challenge=[...document.querySelectorAll('iframe[src*="captcha"],iframe[src*="geetest"],iframe[src*="verification"],.geetest_panel,.geetest_holder,#captcha-container')].some(visible)
     || panels.some(p=>/verify.{0,15}human|captcha|security verification|complete the verification|drag|rotate|人机|验证码|安全验证|请完成验证|滑块|拼图|连线/i.test(p.innerText||''))
     || /bgn_verification|validateCaptcha|security[-_]?verification/i.test(location.pathname)
     || /robot check|enter the characters you see/i.test(document.title+' '+(document.body?.innerText||'').slice(0,1000));
-  return challenge?{kind:'unsupported',images:[]}:null;
+  const loading=/bgn_verification/i.test(location.pathname)&&(!(document.body?.innerText||'').replace(/[\s\u200b]/g,'')
+    || [...document.images].some(e=>visible(e)&&(!e.complete||!e.naturalWidth)));
+  return challenge?{kind:loading?'loading':'unsupported',images:[]}:null;
+}
+
+export function captureCaptchaImage(selector) {
+  const image=document.querySelector(selector);
+  if(!image)return null;
+  try {
+    const canvas=image.tagName==='CANVAS'?image:document.createElement('canvas');
+    if(image.tagName!=='CANVAS') {
+      if(image.tagName!=='IMG')return null;
+      canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+      canvas.getContext('2d').drawImage(image,0,0);
+    }
+    return {body:canvas.toDataURL('image/png').split(',')[1],width:canvas.width,height:canvas.height};
+  } catch(error) {
+    if(error.name==='SecurityError')return null; // Cross-origin images use element screenshot below.
+    throw error;
+  }
 }
 
 export function captchaRequest(root, request) {
@@ -62,12 +98,12 @@ export function captchaRequest(root, request) {
   });
 }
 
-export function parseTemuCoordinates(answer, image) {
+export function parseTemuCoordinates(answer, image, partCount=3) {
   let points;
   try {points=JSON.parse(answer);points=points.coordinates||points;}catch {
     points=[...String(answer).matchAll(/x=(\d+),y=(\d+)/g)].map(m=>({x:Number(m[1]),y:Number(m[2])}));
   }
-  if(!Array.isArray(points)||points.length!==3||points.some(p=>!Number.isFinite(p.x)||!Number.isFinite(p.y)
+  if(!Array.isArray(points)||points.length!==partCount||points.some(p=>!p||!Number.isFinite(p.x)||!Number.isFinite(p.y)
     ||p.x<0||p.y<0||p.x>=image.width||p.y>=image.height))throw new Error('INVALID_CAPTCHA_COORDINATES');
   return points;
 }
@@ -78,6 +114,8 @@ export function webdriverCaptchaAdapter(wd,execute) {
     images:async challenge=>{
       const images=[];
       for(const item of challenge.images) {
+        const original=await execute(`return (${captureCaptchaImage.toString()})(arguments[0]);`,[item.selector],'captcha_image_source');
+        if(original){item.width=original.width;item.height=original.height;images.push(original.body);continue;}
         const element=await wd('POST','/element',{using:'css selector',value:item.selector});
         const id=element['element-6066-11e4-a52e-4f735466cecf'];
         const encoded=await wd('GET',`/element/${id}/screenshot`),buffer=Buffer.from(encoded,'base64');
@@ -92,14 +130,22 @@ export function webdriverCaptchaAdapter(wd,execute) {
         await wd('POST',`/element/${id}/clear`,{});
         await wd('POST',`/element/${id}/value`,{text:answer});
       } else {
-        const points=parseTemuCoordinates(answer,challenge.images[0]);
+        const points=parseTemuCoordinates(answer,challenge.images[0],challenge.images.length-1);
+        const bg=await wd('GET',`/element/${await element(challenge.images[0].selector)}/rect`);
         for(let i=0;i<points.length;i++) {
+          if(challenge.kind==='temu_icon') {
+            // API coordinates are top-left positions in the submitted image.
+            const x=Math.round(bg.x+(points[i].x+challenge.images[i+1].width/2)/challenge.images[0].width*bg.width);
+            const y=Math.round(bg.y+(points[i].y+challenge.images[i+1].height/2)/challenge.images[0].height*bg.height);
+            await wd('POST','/actions',{actions:[{type:'pointer',id:'captcha-mouse',parameters:{pointerType:'mouse'},actions:[
+              {type:'pointerMove',duration:100,origin:'viewport',x,y},{type:'pointerDown',button:0},{type:'pointerUp',button:0}]}]});
+            continue;
+          }
           const piece=await wd('GET',`/element/${await element(challenge.images[i+1].selector)}/rect`);
-          const bg=await wd('GET',`/element/${await element(challenge.images[0].selector)}/rect`);
           await wd('POST','/actions',{actions:[{type:'pointer',id:'captcha-mouse',parameters:{pointerType:'mouse'},actions:[
             {type:'pointerMove',duration:100,origin:'viewport',x:Math.round(piece.x+piece.width/2),y:Math.round(piece.y+piece.height/2)},
             {type:'pointerDown',button:0},{type:'pause',duration:150},
-            {type:'pointerMove',duration:700,origin:'viewport',x:Math.round(bg.x+points[i].x/challenge.images[0].width*bg.width),y:Math.round(bg.y+points[i].y/challenge.images[0].height*bg.height)},
+            {type:'pointerMove',duration:700,origin:'viewport',x:Math.round(bg.x+points[i].x/challenge.images[0].width*bg.width+piece.width/2),y:Math.round(bg.y+points[i].y/challenge.images[0].height*bg.height+piece.height/2)},
             {type:'pointerUp',button:0}]}]});
         }
       }
@@ -122,9 +168,14 @@ export function createCaptchaHandler({root,scope,browserIdentity='',adapter,requ
     handling=true;
     try {
       let challenge=await adapter.inspect();
+      const readyDeadline=now()+60000;
+      while(challenge?.kind==='loading'&&now()<readyDeadline&&!await shouldStop()) {
+        await notify({status:'PAGE_LOADING',message:'验证码题图正在加载，保留原浏览器和断点。'});
+        await sleep(1000);challenge=await adapter.inspect();
+      }
       if(!challenge)return await isReleased();
-      if(challenge.kind==='unsupported') {
-        await notify({status:'UNSUPPORTED',message:'当前验证码题型尚未适配；保留原环境和断点，请在原窗口处理。'});
+      if(['unsupported','loading'].includes(challenge.kind)) {
+        await notify({status:'UNSUPPORTED',message:'未能取得完整验证码题图，保留原环境和断点，请在原窗口人工处理。'});
         return false;
       }
       const images=await adapter.images(challenge);
@@ -140,13 +191,17 @@ export function createCaptchaHandler({root,scope,browserIdentity='',adapter,requ
         }
       } while(result.status==='PENDING');
       if(result.status!=='ANSWER_READY')return false;
+      if(challenge.kind==='temu_auto') {
+        result=await request({action:'manual',scope,fingerprint,kind:challenge.kind});await notify(result);
+        return false; // API was tried first; unknown controls must not receive guessed actions.
+      }
       const current=await adapter.inspect();
       if(!current)return await isReleased();
       // Never enter an answer on a replaced/changed challenge.
       if(hash(JSON.stringify([browserIdentity,current.kind,await adapter.images(current)]))!==fingerprint)return false;
       const answer=result.answer;
       if(current.kind==='normal'&&(typeof answer!=='string'||!/^.{1,64}$/u.test(answer)))return false;
-      result=await request({action:'claim',scope,fingerprint});
+      result=await request({action:'claim',scope,fingerprint,kind:current.kind});
       if(result.status!=='APPLYING')return false;
       await adapter.apply(current,answer);
       const deadline=now()+20000;
@@ -156,7 +211,7 @@ export function createCaptchaHandler({root,scope,browserIdentity='',adapter,requ
         if(!await adapter.inspect()&&await isReleased()){passed=true;break;}
       }
       if(await shouldStop())return false; // Keep APPLYING: never submit the answer twice after a stop.
-      result=await request({action:'verify',scope,fingerprint,passed});await notify(result);
+      result=await request({action:'verify',scope,fingerprint,kind:current.kind,passed});await notify(result);
       return passed;
     } finally {handling=false;}
   };

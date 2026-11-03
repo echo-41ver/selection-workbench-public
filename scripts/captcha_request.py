@@ -9,8 +9,8 @@ from selection_automation.captcha import step, reply
 
 if __name__ == '__main__':
     try:
-        raw = sys.stdin.read(4_000_001)
-        if len(raw) > 4_000_000:
+        raw = sys.stdin.read(12_000_001)
+        if len(raw) > 12_000_000:
             raise ValueError('CAPTCHA request too large')
         result = step(ROOT, json.loads(raw))
     except Exception:

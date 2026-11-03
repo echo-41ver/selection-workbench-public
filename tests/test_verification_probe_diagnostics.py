@@ -1,6 +1,7 @@
 """Manual-gate diagnostics use fake replies only, never a live browser or provider."""
 import json
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 import urllib.error
@@ -13,6 +14,29 @@ sys.path.insert(0,str(ROOT/'scripts'))
 import selection
 
 SECRET='fixture-private-query-cookie-session-token'
+
+
+@pytest.mark.parametrize('allow_reentry,page_text,expected',[
+    (True,'Whisks search results',True),
+    (False,'Whisks search results',False),
+    (True,'Verify you are human',False),
+])
+def test_previous_query_search_can_reenter_only_after_manual_gate(probe,allow_reentry,page_text,expected):
+    probe.replies.append(b'{"value":true}')
+    selection.ready_after_verification(probe.session,'next keyword',allow_empty_search=allow_reentry)
+    payload=json.loads(probe.requests[0][0].data)
+    payload['page_text']=page_text
+    node=r"""
+      const fs=require('node:fs'),vm=require('node:vm'),p=JSON.parse(fs.readFileSync(0,'utf8'));
+      const element={getBoundingClientRect:()=>({width:200,height:40}),disabled:false,readOnly:false};
+      const context={URL,location:{href:'https://www.temu.com/search_result.html?search_key=previous%20keyword'},
+        arguments:p.args,getComputedStyle:()=>({display:'block',visibility:'visible'}),
+        document:{title:'Temu',readyState:'complete',body:{innerText:p.page_text},
+          querySelectorAll:s=>['input[type="search"]','[data-goods-id],a[href*="-g-"]'].includes(s)?[element]:[]}};
+      console.log(JSON.stringify(vm.runInNewContext('(function(){'+p.script+'}).apply(null,arguments)',context)));
+    """
+    result=subprocess.run(['node','-e',node],input=json.dumps(payload),text=True,capture_output=True,check=True)
+    assert json.loads(result.stdout) is expected
 
 
 @pytest.fixture
@@ -126,6 +150,26 @@ def test_failed_check_is_visible_then_clears_to_normal_wait_and_resumes_same_ses
 
 
 
+@pytest.mark.parametrize('started',[False,True])
+def test_recovered_bootstrap_network_page_can_resume_empty_search_only_before_collection(probe,started):
+    output=probe.root/'temu/workers/worker1/query'
+    output.mkdir(parents=True)
+    selection.save(output/'progress.json',{'status':'STOPPED_PROXY_OR_NETWORK_FAILURE','scroll_collection_started':started})
+    checkpoint=output/'products.jsonl'; checkpoint.write_text('{"goods_id":"retained"}\n',encoding='utf-8')
+    path=probe.root/'temu/supervisors/worker1.json'
+    selection.save(path,{'status':'HUMAN_ACTION_REQUIRED','query_status':'STOPPED_PROXY_OR_NETWORK_FAILURE',
+                         'output':str(output),'current_query':SECRET,'completed_passes':['retained'],
+                         'manual_action_required':True,'browser_preserved':True})
+    probe.replies.append(b'{"value":true}')
+    assert selection.hold_blocked_worker(probe.root,probe.session,children={},finished=set(),
+        attempts={'worker1':2},next_at={'worker1':999},state={}) is False
+    body=json.loads(probe.requests[0][0].data)
+    assert body['args']==[SECRET,not started]
+    worker=selection.read(path)
+    assert worker['status']=='RESUMING' and worker['completed_passes']==['retained']
+    assert checkpoint.read_text(encoding='utf-8')=='{"goods_id":"retained"}\n'
+
+
 def values(probe, *rows):
     probe.replies.extend(json.dumps({'value':value}).encode() for value in rows)
 
@@ -212,6 +256,42 @@ def test_current_temu_blocked_page_does_not_switch_to_a_different_tab(probe):
     assert not selection.ready_after_verification(probe.session,SECRET,allow_empty_search=True,diagnostic=diagnostic)
     assert diagnostic['window_selection']=='CURRENT_TEMU_NOT_READY'
     assert len(probe.requests)==2
+
+
+def test_current_login_after_verification_is_detected_without_passing_the_page(probe):
+    values(probe,False,'https://www.temu.com/login.html?from='+SECRET)
+    diagnostic={}
+    assert not selection.ready_after_verification(probe.session,SECRET,allow_empty_search=True,diagnostic=diagnostic)
+    assert diagnostic['page_kind']=='LOGIN'
+    assert diagnostic['ready'] is False and diagnostic['check_ok'] is True
+    assert paths(probe)==[('POST','/execute/sync'),('GET','/url')]
+    assert SECRET not in json.dumps(diagnostic)
+
+
+def test_stopped_verification_redirected_to_login_relaunches_existing_pipeline(probe):
+    output=probe.root/'temu/workers/worker1/query'; output.mkdir(parents=True)
+    progress={'status':'WAITING_HUMAN_VERIFICATION','scroll_collection_started':False}
+    selection.save(output/'progress.json',progress)
+    checkpoint=output/'products.jsonl'; checkpoint.write_text('{"goods_id":"retained"}\n',encoding='utf-8')
+    budget={'kind':'LOGIN','attempts_without_progress':2,'unique_goods_before':1}
+    selection.save(output/'automatic_recovery.json',budget)
+    path=probe.root/'temu/supervisors/worker1.json'
+    selection.save(path,{'status':'HUMAN_ACTION_REQUIRED','output':str(output),'current_query':SECRET,
+                         'completed_passes':[{'query':'retained','sort':'sales'}]})
+    values(probe,False,'https://www.temu.com/login.html?from='+SECRET)
+    attempts={'worker1':3}; next_at={'worker1':999}; finished={'worker1'}; state={}
+    assert not selection.hold_blocked_worker(probe.root,probe.session,children={},finished=finished,
+        attempts=attempts,next_at=next_at,state=state)
+    worker=selection.read(path)
+    assert worker['status']=='RESUMING' and worker['manual_action_required'] is False
+    assert worker['session_recovery_kind']=='LOGIN' and worker['automatic_resume_pending'] is True
+    assert worker['verification_probe']['ready'] is False
+    assert worker['completed_passes']==[{'query':'retained','sort':'sales'}]
+    assert attempts==next_at=={'worker1':0} and not finished
+    assert selection.read(output/'automatic_recovery.json')==budget
+    assert selection.read(output/'progress.json')==progress
+    assert checkpoint.read_text('utf-8')=='{"goods_id":"retained"}\n'
+    assert (probe.root/'sid').read_text('utf-8')==SECRET
 
 
 def test_normal_non_manual_probe_keeps_single_old_request_without_tab_selection(probe):

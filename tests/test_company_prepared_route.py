@@ -91,6 +91,7 @@ def fake_bindings(tmp_path,monkeypatch,count=4,fail=False):
         sid=tmp_path/f"sid{i}.txt";sid.write_text(f"test-{i}")
         workers.append({"name":f"worker-{i}","session_id_file":sid.name,"webdriver_url":f"http://127.0.0.1:{4451+i}"})
     def open_url(url,timeout):
+        assert timeout==30  # Real cold browser returned successfully after 7.8 seconds.
         urls.append(url)
         return io.StringIO(json.dumps({"value":{} if fail else "about:blank"}))
     def build(handler):

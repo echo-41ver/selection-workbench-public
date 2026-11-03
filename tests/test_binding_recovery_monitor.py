@@ -9,6 +9,120 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import resume_worker_binding as binding
 
 
+def test_current_binding_can_recover_after_bootstrap_replaced_old_journal_profile(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    import selection
+    monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'identity', lambda: 'machine')
+    manifest = tmp_path / 'sessions.json'
+    row = {'name': 'worker-01-new', 'profile_id': 'bootstrap-profile',
+           'webdriver_url': 'http://127.0.0.1:4451'}
+    manifest.write_text(json.dumps({'machine_id': 'machine', 'task_key': 'task', 'workers': [row]}))
+    monkeypatch.setattr(binding.r, 'SESSIONS', manifest)
+    path = tmp_path / 'runtime/proxyshare-chains/replacement-worker-1.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'phase': 'REPLACED', 'new_profile_id': 'previous-profile'}))
+    driver = tmp_path / 'driver.exe'
+    driver.touch()
+    monkeypatch.setattr(binding, 'replacement_guard', lambda *a: nullcontext())
+    monkeypatch.setattr(binding.r, 'start_profile_with_retry', lambda base, profile, **kw:
+                        {'webdriver': str(driver)} if profile == 'bootstrap-profile' else None)
+    monkeypatch.setattr(binding.r, 'api_base', lambda: 'http://127.0.0.1:50325')
+    monkeypatch.setattr(binding.r, 'powershell', lambda: 'powershell')
+    commands = []
+    monkeypatch.setattr(binding.r, 'run_background_launcher', lambda command, **kw:
+                        commands.append(command) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(binding, 'mark_rebound_worker', lambda current: None)
+    binding.resume(1, allow_rebind=True, expected_task='task', expected_profile='bootstrap-profile')
+    journal = json.loads(path.read_text())
+    assert journal['new_profile_id'] == 'bootstrap-profile' and journal['local_binding_recovered']
+    assert len(commands) == 1 and '-RecoverOwnedDriver' in commands[0]
+
+
+def test_rotation_after_local_binding_failure_starts_fresh_environment(tmp_path, monkeypatch):
+    import pytest
+    import selection
+    r = binding.r
+    monkeypatch.setattr(r, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'identity', lambda: 'machine')
+    policy = tmp_path / 'policy.json'
+    policy.write_text(json.dumps({'session_rotation_policy': 'NEW_ADSPOWER_PROFILE_AND_NEW_PROXY_SESSION',
+                                  'webdriver_ports': [4451]}))
+    monkeypatch.setattr(r, 'POLICY', policy)
+    manifest = tmp_path / 'sessions.json'
+    manifest.write_text(json.dumps({'machine_id': 'machine', 'workers': [
+        {'name': 'worker-01-new', 'profile_id': 'current-profile'}]}))
+    monkeypatch.setattr(r, 'SESSIONS', manifest)
+    journal = tmp_path / 'runtime/proxyshare-chains/replacement-worker-1.json'
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps({'phase': 'BIND_FAILED', 'new_profile_id': 'current-profile'}))
+    (tmp_path / 'runtime/last_run.json').write_text('{"category_key":"task"}')
+    monkeypatch.setattr(r, 'stop_owned_collectors', lambda *a: None)
+    monkeypatch.setattr(r, 'powershell', lambda: 'powershell')
+    monkeypatch.setattr(r, 'api_base', lambda: 'http://127.0.0.1:50325')
+    calls = []
+    monkeypatch.setattr(r, 'api_call', lambda base, endpoint, **kw: calls.append(endpoint))
+    def reached_fresh_deletion(base, profile):
+        calls.append(('delete', profile))
+        raise RuntimeError('fresh environment deletion reached')
+    monkeypatch.setattr(r, 'delete_profile_after_release', reached_fresh_deletion)
+    with pytest.raises(RuntimeError, match='fresh environment deletion reached'):
+        r.replace_worker(SimpleNamespace(worker=1, task_key='task'))
+    assert calls == ['/api/v1/browser/stop?user_id=current-profile', ('delete', 'current-profile')]
+
+
+def test_binding_handoff_rechecks_target_after_owner_finishes_replacement(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    import pytest
+    import selection
+    from selection_automation.process_lock import ProcessLock
+    monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
+    monkeypatch.setattr(selection, 'identity', lambda: 'machine')
+    manifest = tmp_path / 'sessions.json'
+    row = {'name': 'worker-01-new', 'profile_id': 'old-profile'}
+    document = {'machine_id': 'machine', 'task_key': 'task', 'workers': [row]}
+    manifest.write_text(json.dumps(document), encoding='utf-8')
+    monkeypatch.setattr(binding.r, 'SESSIONS', manifest)
+    journal = tmp_path / 'runtime/proxyshare-chains/replacement-worker-1.json'
+    journal.parent.mkdir(parents=True)
+    completed = {'phase': 'REPLACED', 'new_profile_id': 'new-profile'}
+
+    @contextmanager
+    def owner_finishes_before_yielding(*args):
+        # The current owner still needs this real OS lock to finish handing off.
+        with ProcessLock(tmp_path / 'runtime/replacement-1.lock'):
+            document['workers'][0]['profile_id'] = 'new-profile'
+            manifest.write_text(json.dumps(document), encoding='utf-8')
+            journal.write_text(json.dumps(completed), encoding='utf-8')
+        yield
+
+    monkeypatch.setattr(binding, 'replacement_guard', owner_finishes_before_yielding)
+    monkeypatch.setattr(binding.r, 'start_profile_with_retry', lambda *a, **k: pytest.fail('stale profile must not be opened'))
+    with pytest.raises(RuntimeError, match='target changed during handoff'):
+        binding.resume(1, allow_rebind=True, expected_task='task', expected_profile='old-profile')
+    assert json.loads(manifest.read_text('utf-8'))['workers'][0]['profile_id'] == 'new-profile'
+    assert json.loads(journal.read_text('utf-8')) == completed
+
+
+def test_replacement_entry_allows_pending_owner_to_finish_before_transaction_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from selection_automation.process_lock import ProcessLock
+    monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['replace_proxyshare_worker_environment.py', '--worker', '1'])
+    finished = []
+
+    @contextmanager
+    def owner_finishes_before_yielding(*args):
+        with ProcessLock(tmp_path / 'runtime/replacement-1.lock'):
+            finished.append('owner transaction completed')
+        yield
+
+    monkeypatch.setattr(binding.r, 'replacement_guard', owner_finishes_before_yielding)
+    monkeypatch.setattr(binding.r, 'replace_worker', lambda args: {'worker': args.worker})
+    binding.r.main()
+    assert finished == ['owner transaction completed']
+
+
 def test_driver_repair_does_not_erase_exhausted_site_recovery(tmp_path, monkeypatch):
     monkeypatch.setattr(binding.r, 'ROOT', tmp_path)
     manifest=tmp_path/'sessions.json';manifest.write_text('{"task_key":"task"}')
@@ -80,7 +194,75 @@ def test_hung_control_driver_is_rebound_even_without_invalid_session_error(tmp_p
     assert not binding.repair_waiting(tmp_path,row,attempts,110)
 
 
-def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_path,monkeypatch):
+def test_control_timeout_rebinds_even_when_url_probe_briefly_succeeds(tmp_path,monkeypatch):
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    (folder/'worker-01-new.json').write_text(json.dumps({'status':'BINDING_RETRY_WAIT',
+        'query_status':'STOPPED_BROWSER_COMMAND_TIMEOUT'}))
+    monkeypatch.setattr(binding,'driver_connected',lambda row:True)
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    calls=[];attempts={};row={'name':'worker-01-new','profile_id':'retained-profile'}
+    monkeypatch.setattr(binding,'mark_rebound_worker',lambda row:(_ for _ in ()).throw(
+        AssertionError('a URL response alone must not declare a timed-out control connection repaired')))
+    monkeypatch.setattr(binding,'resume',lambda *args,**kwargs:calls.append((args,kwargs)))
+    assert binding.repair_waiting(tmp_path,row,attempts,100)=='BOUND_EXISTING_PROFILE'
+    assert calls==[((1,),{'allow_rebind':True,'expected_task':tmp_path.name,'expected_profile':'retained-profile'})]
+    assert not binding.repair_waiting(tmp_path,row,attempts,110)
+
+
+def test_exhausted_control_recovery_waits_for_explicit_lane_restart(tmp_path,monkeypatch):
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    path=folder/'worker-03-new.json'
+    path.write_text(json.dumps({'status':'BINDING_RETRY_WAIT',
+        'query_status':'STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET',
+        'recovery_budget_exhausted':True,'current_query':'silicone spatula'}))
+    before=path.read_bytes();attempts={}
+    def must_not_repair(*args,**kwargs):
+        raise AssertionError('automatic recovery must stop when its budget is exhausted')
+    monkeypatch.setattr(binding,'driver_connected',must_not_repair)
+    monkeypatch.setattr(binding,'resume',must_not_repair)
+    assert not binding.repair_waiting(tmp_path,{'name':'worker-03-new'},attempts,100)
+    assert path.read_bytes()==before and not attempts
+
+
+def test_failed_rebind_pause_retries_with_existing_control_budget(tmp_path,monkeypatch):
+    import pytest
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    output=tmp_path/'temu/workers/worker-01-new/current';output.mkdir(parents=True)
+    path=folder/'worker-01-new.json'
+    path.write_text(json.dumps({'status':'PAUSED_FOR_ENVIRONMENT_REPLACEMENT',
+        'query_status':'STOPPED_BROWSER_COMMAND_TIMEOUT','output':str(output),'unique_goods':139}))
+    (output/'browser_control_recovery.json').write_text(json.dumps(
+        {'attempts_without_progress':1,'unique_goods_high_water':139,'limit':3}))
+    checkpoint=output/'products.jsonl';checkpoint.write_text('saved checkpoint')
+    monkeypatch.setattr(binding,'driver_connected',lambda row:False)
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    calls=[]
+    def fail_rebind(*args,**kwargs):
+        calls.append((args,kwargs))
+        raise RuntimeError('binding unavailable')
+    monkeypatch.setattr(binding,'resume',fail_rebind)
+    attempts={};row={'name':'worker-01-new','profile_id':'retained'}
+    for at in (100,200):
+        with pytest.raises(RuntimeError,match='binding unavailable'):
+            binding.repair_waiting(tmp_path,row,attempts,at)
+    assert not binding.repair_waiting(tmp_path,row,attempts,300)
+    stopped=json.loads(path.read_text())
+    assert len(calls)==2 and stopped['recovery_budget_exhausted']
+    assert stopped['manual_action_required'] and not stopped['automatic_resume_pending']
+    assert checkpoint.read_text()=='saved checkpoint'
+
+
+def test_non_control_replacement_pause_does_not_rebind(tmp_path,monkeypatch):
+    folder=tmp_path/'temu/supervisors';folder.mkdir(parents=True)
+    (folder/'worker-01-new.json').write_text(json.dumps(
+        {'status':'PAUSED_FOR_ENVIRONMENT_REPLACEMENT','query_status':'WAITING_HUMAN_VERIFICATION'}))
+    def forbidden(*args,**kwargs):raise AssertionError('verification environment must remain unchanged')
+    monkeypatch.setattr(binding,'driver_connected',forbidden)
+    monkeypatch.setattr(binding,'resume',forbidden)
+    assert not binding.repair_waiting(tmp_path,{'name':'worker-01-new'},{},100)
+
+
+def test_rebound_driver_clears_terminal_progress_and_preserves_raw_count(tmp_path,monkeypatch):
     monkeypatch.setattr(binding.r,'ROOT',tmp_path)
     manifest=tmp_path/'sessions.json';manifest.write_text('{"task_key":"task"}')
     monkeypatch.setattr(binding.r,'SESSIONS',manifest)
@@ -92,8 +274,9 @@ def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_
     (output/'progress.json').write_text(json.dumps({'status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT',
         'raw_collected_count':40,'unique_goods':8,'raw_sampling':{'count':40}}))
     checkpoint=output/'products.jsonl';checkpoint.write_text('saved');before=checkpoint.read_bytes()
-    monkeypatch.setattr(binding,'driver_connected',lambda row:True)
-    monkeypatch.setattr(binding,'resume',lambda *a,**k:(_ for _ in ()).throw(AssertionError('responsive driver must not restart')))
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    monkeypatch.setattr(binding,'resume',lambda *a,**k:binding.mark_rebound_worker(
+        {'name':'worker-04-new','profile_id':'same-profile'}))
     assert binding.repair_waiting(base,{'name':'worker-04-new','profile_id':'same-profile'},{},100)=='BOUND_EXISTING_PROFILE'
     progress=json.loads((output/'progress.json').read_text())
     assert progress['status']=='RESUMING' and progress['raw_collected_count']==40 and progress['unique_goods']==8
@@ -101,22 +284,34 @@ def test_responsive_driver_clears_terminal_progress_and_preserves_raw_count(tmp_
     assert json.loads(path.read_text())['current_sort']=='sales'
 
 
-def test_recovered_lane_restarts_only_current_task_without_a_live_collector(tmp_path,monkeypatch):
-    import selection,psutil
+def test_monitor_hands_recovered_lane_to_supervisor_without_launching_collector(tmp_path,monkeypatch):
+    import selection
+    from threading import Event
     monkeypatch.setattr(binding.r,'ROOT',tmp_path)
     monkeypatch.setattr(selection,'live_owner',lambda:{'category_key':'task'})
+    monkeypatch.setattr(selection,'identity',lambda:'local')
+    manifest=tmp_path/'sessions.json'
+    row={'name':'worker-04-new','profile_id':'existing'}
+    manifest.write_text(json.dumps({'machine_id':'local','task_key':'task','workers':[row]}))
+    monkeypatch.setattr(binding.r,'SESSIONS',manifest)
     base=tmp_path/'runs/task';folder=base/'temu/supervisors';folder.mkdir(parents=True)
-    path=folder/'worker-04-new.json';path.write_text('{"status":"RESUMING"}')
-    row={'name':'worker-04-new'};calls=[]
+    path=folder/'worker-04-new.json'
+    path.write_text(json.dumps({'status':'HUMAN_ACTION_REQUIRED','query_status':'STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT'}))
+    calls=[];repaired=Event();repair=binding.repair_waiting
     monkeypatch.setattr(binding.subprocess,'Popen',lambda command,**kwargs:calls.append(command) or SimpleNamespace(pid=123))
-    lease=tmp_path/'runtime/worker-leases/worker-04-new.owner.json';lease.parent.mkdir(parents=True)
-    lease.write_text(json.dumps({'pid':123,'worker':row['name'],'purpose':'collector'}))
-    args=['python',str(tmp_path/'scripts/pipeline.py'),'collect-temu','--worker-name',row['name'],'--category',str(base/'category.json')]
-    monkeypatch.setattr(psutil,'Process',lambda _:SimpleNamespace(is_running=lambda:True,cmdline=lambda:args))
-    assert not binding.ensure_collector_resumed(base,row) and not calls
-    lease.unlink()
-    assert binding.ensure_collector_resumed(base,row) and len(calls)==1
-    assert '--worker-name' in calls[0] and calls[0][-1]==row['name']
-    assert not binding.ensure_collector_resumed(base,row)
-    path.write_text('{"status":"RESUMING"}');(base/'STOP').touch()
-    assert not binding.ensure_collector_resumed(base,row) and len(calls)==1
+    monkeypatch.setattr(binding,'driver_connected',lambda row:True)
+    monkeypatch.setattr(binding,'profile_closed',lambda row:False)
+    monkeypatch.setattr(binding,'resume',lambda *a,**k:binding.mark_rebound_worker(row))
+    def observe_repair(*args):
+        result=repair(*args);repaired.set();return result
+    def stop_after_repair(seconds):
+        assert repaired.wait(2)
+        (base/'STOP').touch()
+    monkeypatch.setattr(binding,'repair_waiting',observe_repair)
+    monkeypatch.setattr(binding,'time',SimpleNamespace(monotonic=lambda:100,sleep=stop_after_repair))
+    binding.monitor(base/'category.json')
+    assert repaired.is_set() and not calls
+    assert json.loads(path.read_text())['status']=='RESUMING'
+    before=path.read_bytes()
+    binding.monitor(base/'category.json')
+    assert path.read_bytes()==before and not calls

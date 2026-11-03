@@ -32,6 +32,25 @@ def test_ready_runtime_never_reinstalls(tmp_path):
     assert len(calls) == 1
 
 
+def test_slow_local_probe_uses_startup_budget_without_reinstall(tmp_path):
+    import subprocess
+    calls=[]
+    def run(command,**kwargs):
+        calls.append(command)
+        if kwargs['timeout']<20:raise subprocess.TimeoutExpired(command,kwargs['timeout'])
+        return SimpleNamespace(returncode=0,stdout='{"status":"READY"}')
+    assert ensure_node_runtime(tmp_path,run=run,which=lambda _: 'node')=={'ready':True,'repaired':False}
+    assert len(calls)==1
+
+
+def test_probe_failure_records_original_cause(tmp_path):
+    def run(*args,**kwargs):raise OSError('TEST_ONLY_PROBE_FAILURE')
+    with pytest.raises(NodeRuntimeError,match='OSError'):
+        ensure_node_runtime(tmp_path,run=run,which=lambda _: 'node')
+    record=json.loads((tmp_path/'runtime/node-dependencies-status.json').read_text('utf-8'))
+    assert record['status']=='ERROR' and record['error']=='OSError'
+
+
 def test_scheduled_install_uses_verified_local_proxy_without_api_key(tmp_path,monkeypatch):
     from selection_automation import browser_transport
     root=tmp_path/'project';root.mkdir()

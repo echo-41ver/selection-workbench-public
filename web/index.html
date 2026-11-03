@@ -411,9 +411,9 @@ async function enableSelectedDoubao(){
 function renderSelectionSummary(report,box=$('commercial'),historical=false){
  box.replaceChildren();const heading=document.createElement('h2');heading.textContent='Amazon 商品分析进度';box.append(heading);
  if(!report?.products?.length){const p=document.createElement('p');p.textContent='等待 Amazon 商品与分析结果。';box.append(p);return;}
- const note=document.createElement('p');note.className='small matching-note';note.textContent=`${historical?'历史结果':'随分析自动更新'} · 共 ${report.products.length} 件 Amazon 商品。无法判断：已有结果但证据不足；未分析：尚未完成。Excel 选品结论只保留同款＋类似款小于 ${report.policy?.same_limit??'N'} 的商品。`;box.append(note);
+ const note=document.createElement('p');note.className='small matching-note';note.textContent=`${historical?'历史结果':'随分析自动更新'} · 共 ${report.products.length} 件 Amazon 商品。无法判断：已有结果但证据不足。“未分析 / 未入围”含前两层筛除及等待第三层判断的商品；第三层进度见运行总览。Excel 选品结论只保留同款＋类似款小于 ${report.policy?.same_limit??'N'} 的商品。`;box.append(note);
  const wrap=document.createElement('div'),table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody');wrap.className='matching-scroll';table.className='matching-table';
- const hr=document.createElement('tr');for(const label of ['Amazon ASIN','标题','图片','同款','类似款','不同款','无法判断','未分析','价格','销量','评分 / 评论','商品详细参数']){const th=document.createElement('th');th.textContent=label;hr.append(th);}head.append(hr);
+ const hr=document.createElement('tr');for(const label of ['Amazon ASIN','标题','图片','同款','类似款','不同款','无法判断','未分析 / 未入围','价格','销量','评分 / 评论','商品详细参数']){const th=document.createElement('th');th.textContent=label;hr.append(th);}head.append(hr);
  for(const row of report.products){const tr=document.createElement('tr'),card=row.amazon_card||{},match=row.match||{};const cell=(value,cls='')=>{const td=document.createElement('td');td.textContent=value??'未取得';td.className=cls;tr.append(td);return td;};
   const asin=cell('');if(card.url){const a=document.createElement('a');a.href=card.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=row.asin;asin.append(a);}else asin.textContent=row.asin;
   cell(row.title||card.title,'product-title');const photo=cell('');if(card.image&&/^https?:\/\//.test(card.image)){const a=document.createElement('a'),img=document.createElement('img');a.href=card.image;a.target='_blank';a.rel='noopener noreferrer';img.src=card.image;img.alt=row.title||row.asin;img.loading='lazy';a.append(img);photo.append(a);}else photo.textContent='图片未取得';
@@ -494,7 +494,9 @@ function renderMatchCriteria(data={}){
 }
 async function applyMatchCriteria(){
  if(!lastStatus?.draft||!criteriaSelection)return;criteriaSaving=true;renderMatchCriteria(lastStatus);const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
- try{const response=await fetch('/api/match-criteria',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({draft_id:lastStatus.draft.id,revision:criteriaRevision,selected_ids:[...criteriaSelection]})});const value=await response.json();if(!response.ok)throw Error(value.error?.message||'匹配条件保存失败');criteriaDirty=false;criteriaRevision='';feedback(value.phase);await poll();}
+ try{const response=await fetch('/api/match-criteria',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({draft_id:lastStatus.draft.id,revision:criteriaRevision,selected_ids:[...criteriaSelection]})});const value=await response.json();if(!response.ok)throw Error(value.error?.message||'匹配条件保存失败');
+ for(const [field,id] of [['stage1_text','stage1-rule'],['stage3_text','stage3-rule']])if($(id).value===lastStatus.draft[field])$(id).value=value.draft[field];
+ Object.assign(lastStatus.draft,value.draft);criteriaDirty=false;criteriaRevision='';feedback(value.phase);await poll();}
  catch(error){feedback(error.name==='AbortError'?'条件保存等待超时，请刷新确认；原任务数据保留。':error.message,true);}
  finally{clearTimeout(timer);criteriaSaving=false;criteriaRendering='';if(lastStatus)renderMatchCriteria(lastStatus);updateControls();}
 }
@@ -718,7 +720,7 @@ function stage3Button(data){
  const providerChanged=JSON.stringify(stage3ProviderSettings())!==JSON.stringify(data?.stage3_provider);
  const active=running||Boolean(state.codex_review?.running),runtime=data?.stage3_runtime||{};
  const blocked=Object.keys(runtime.agent_blocks||{}).some(id=>(data?.stage3_provider?.agent_ids||[]).includes(id));
- $('start-stage3').textContent=runtime.switch_pending?'正在保存断点并切换':active&&providerChanged?'保存断点并切换到所选方案':runtime.paused?'按所选方案继续第三层':active?'第三层分析中':$('stage3-mode').value==='local_agent'?'开始分析':'启动 / 继续第三层';
+ $('start-stage3').textContent=runtime.switch_pending?'正在保存断点并切换':active&&providerChanged?'保存断点并切换到所选方案':runtime.paused?'按所选方案继续第三层':state.error&&!active?'按所选方案重试第三层':active?'第三层分析中':$('stage3-mode').value==='local_agent'?'开始分析':'启动 / 继续第三层';
  $('start-stage3').title='应用上方所选模型与设置，启动、继续或切换第三层';
  $('start-stage3').disabled=unavailable||!statusFresh||Boolean(data?.release_update?.pending)||runtime.switch_pending||active&&!providerChanged&&!runtime.paused||(!active&&state.can_start===false&&!providerChanged)||Boolean(p.counting)||refreshing||!Number.isInteger(p.total)||($('stage3-mode').value==='local_agent'&&!stage3AgentInputsReady())||($('stage3-mode').value==='local_model'&&!$('stage3-model').value.trim());
  $('configure-stage3').disabled=unavailable||active||runtime.switch_pending;
@@ -726,7 +728,7 @@ function stage3Button(data){
  let pause=$('pause-stage3');if(!pause){pause=document.createElement('button');pause.type='button';pause.id='pause-stage3';$('stop-stage3').before(pause);pause.addEventListener('click',()=>action('/api/control-stage3',{action:stage3ResumeRequired(lastStatus)?'resume':'pause'}));}
  const resumeRequired=stage3ResumeRequired(data);
  if(blocked)$('start-stage3').textContent='等待处理后继续';
- pause.textContent=resumeRequired?'恢复当前方案':'暂停第三层';pause.title=resumeRequired?'沿用当前已保存的第三层方案恢复派发':'暂停当前方案派发新组';pause.disabled=unavailable||runtime.switch_pending||!active&&!resumeRequired;
+ pause.textContent=resumeRequired?((state.error||p.retryable_local_failed>0)&&!running?'重试当前方案':'恢复当前方案'):'暂停第三层';pause.title=resumeRequired?'沿用已保存方案重新读取输入并继续；保留已完成结果和断点':'暂停当前方案派发新组';pause.disabled=unavailable||runtime.switch_pending||!active&&!resumeRequired;
  let agentsBox=$('stage3-runtime-agents');if(!agentsBox){agentsBox=document.createElement('div');agentsBox.id='stage3-runtime-agents';$('stage3-phase').after(agentsBox);}agentsBox.replaceChildren();
  for(const agent of state.codex_review?.pool?.agents||[]){const row=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button'),paused=(runtime.paused_agents||[]).includes(agent.id);row.className='agent-runtime-row';label.textContent=`${agent.name||agent.id} · ${Number(agent.running||0)} 组处理中${paused?' · 已暂停新组':''}`;button.type='button';button.textContent=paused?'继续此 Agent':'暂停此 Agent';button.disabled=unavailable||runtime.switch_pending;button.addEventListener('click',()=>action('/api/control-stage3',{action:paused?'resume_agent':'pause_agent',agent_id:agent.id}));row.append(label,button);agentsBox.append(row);}
  $('stop-stage3').disabled=unavailable||!state.can_stop;
@@ -748,7 +750,7 @@ function stage3Button(data){
  $('stage3-progress-fill').style.width=percent+'%';$('stage3-progress-track').setAttribute('aria-valuenow',percent);
  let eta='预计剩余时间：积累处理速度后显示';
  if(refreshing){eta='预计剩余时间：新增输入核对后显示'}
- else if(remaining===0&&p.total){eta='当前候选已全部处理，剩余 0 分钟'}
+ else if(remaining===0&&p.total){eta=p.failed?`当前候选处理已结束，仍有 ${p.failed} 对失败`:'当前候选已全部处理，剩余 0 分钟'}
  else if(p.eta_seconds!=null){const m=Math.ceil(p.eta_seconds/60);eta=`预计剩余 ${Math.floor(m/60)} 小时 ${m%60} 分钟`}
  const source=p.rate_source==='history_group_normalized'?`按历史 ${p.historical_sample_groups||0} 个成功组平均 ${p.historical_group_seconds||'未知'} 秒和当前并发推算，尚非本任务实测`:p.rate_source==='current'?'本任务已完成请求实测':'历史速度（旧口径，尚未归一）';
  const speed=p.rate_per_hour!=null?`约 ${Number(p.rate_per_hour).toLocaleString()} 对 / 小时（${source}）`:'速度统计中';
@@ -760,7 +762,7 @@ function stage3Button(data){
  codexReviewPanel(data);
 }
 function stage3ResumeRequired(data){
- return Boolean(data?.stage3_runtime?.paused||data?.stage3_provider?.mode==='local_agent'&&(data.stage3_provider.agent_ids||[]).some(id=>data?.stage3_runtime?.agent_blocks?.[id]?.code==='HUMAN_VERIFICATION_REQUIRED'));
+ return Boolean((data?.stage3_control?.error||data?.stage3_control?.progress?.retryable_local_failed>0)&&!data.stage3_control.running&&!data.stage3_control.progress?.billing_hold_fail_closed&&!data.stage3_control.progress?.billing_unknown_pairs||data?.stage3_runtime?.paused||data?.stage3_provider?.mode==='local_agent'&&(data.stage3_provider.agent_ids||[]).some(id=>data?.stage3_runtime?.agent_blocks?.[id]?.code==='HUMAN_VERIFICATION_REQUIRED'));
 }
 function codexReviewPanel(data){
  const state=data?.stage3_control||{},p=state.progress||{},c=state.codex_review||{};
@@ -791,7 +793,10 @@ function codexReviewPanel(data){
  $('codex-review-target').textContent=`${c.expected_tasks?count(c.expected_tasks)+' 个累计分片 · ':''}已导入分片结果 ${count(completed)} / ${count(target)} 对${target?' · '+percent+'%':''}${c.all_reviews_complete?(c.excel_current?' · Excel已更新':' · 等待Excel更新'):''}`;
 }
 const excelOpening=new Set();
-function excelButtons(data){const files=data?.excel_files||{};const labels={layer123:'选品结果 Excel'};const states=[];for(const [kind,label] of Object.entries(labels)){const info=files[kind]||{};const button=document.querySelector('[data-excel="'+kind+'"]');button.disabled=busy||!statusFresh||!info.available||excelOpening.has(kind);button.title=info.available?'当前文件：'+info.filename:'当前任务尚无可打开的文件';const stamp=info.updated_at?new Date(info.updated_at*1000).toLocaleTimeString('zh-CN'):'';states.push(label+'：'+(info.available?'已生成'+(stamp?'（'+stamp+' 更新）':''):'等待生成'));}$('excel-hint').textContent=states.join(' · ');}
+function excelButtons(data){
+ const taskKey=data?.category_key||'';
+ if(excelButtons.taskKey!==taskKey){excelButtons.taskKey=taskKey;$('excel-open-status').textContent='';$('excel-download').hidden=true;}
+ const files=data?.excel_files||{};const labels={layer123:'选品结果 Excel'};const states=[];for(const [kind,label] of Object.entries(labels)){const info=files[kind]||{};const button=document.querySelector('[data-excel="'+kind+'"]');button.disabled=busy||!statusFresh||!info.available||excelOpening.has(kind);button.title=info.available?'当前文件：'+info.filename:'当前任务尚无可打开的文件';const stamp=info.updated_at?new Date(info.updated_at*1000).toLocaleTimeString('zh-CN'):'';states.push(label+'：'+(info.available?'已生成'+(stamp?'（'+stamp+' 更新）':''):'等待生成'));}$('excel-hint').textContent=states.join(' · ');}
 async function openExcel(kind){
  const button=document.querySelector('[data-excel="'+kind+'"]');if(!button||button.disabled||excelOpening.has(kind))return;
  const stamp=lastStatus?.excel_files?.[kind]?.updated_at;
@@ -823,6 +828,7 @@ let taskScopeEdited=false,taskScopeOwner=null,retryScopeOwner=null,retryListingE
 let amazonRouteEdited=false;
 $('amazon-route-mode').addEventListener('change',()=>{amazonRouteEdited=true;});
 for(const id of taskScopeFieldIds)$(id).addEventListener('input',()=>{taskScopeEdited=true;});
+$('category').addEventListener('input',()=>{const previous=lastStatus?.draft;if(previous&&$('category').value.trim()!==previous.category_name&&$('bestsellers-url').value.trim()===previous.amazon_url)$('bestsellers-url').value='';});
 $('biz-same_limit').addEventListener('input',()=>{taskScopeEdited=true;businessScopeEdited=true;});
 $('retry-listing-url').addEventListener('input',()=>{retryListingEdited=true;});
 function pendingGenerationScope(data){
@@ -871,7 +877,7 @@ function renderGenerationRecovery(data){
  if(scope.same_limit!==null)$('new-same-limit').value=String(scope.same_limit);
  taskScopeOwner=owner;
 }
-async function action(endpoint,body,showSuccess=true){if(endpoint==='/api/plain-rules'){body.api_base_url=$('api-base-url').value.trim();body.api_model=$('api-model').value.trim();}const fresh=endpoint==='/api/configure-stage3'?(lastStatus?.live_sample?liveStage3Fresh(lastStatus):statusFresh):statusFresh||(['/api/control-stage3','/api/stage3/concurrency','/api/stop-stage3'].includes(endpoint)&&liveStage3Fresh(lastStatus));if(busy||!fresh)return;if(lastStatus?.release_update?.pending&&!['/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market','/api/stage3/concurrency','/api/control-stage3'].includes(endpoint)){feedback(lastStatus.release_update.message,true);return;}if(['/api/plain-rules','/api/run','/api/start-stage3'].includes(endpoint)&&$('api-key').value.trim()){body.api_key=$('api-key').value.trim();$('api-key').value='';}busy=true;if(['/api/configure-stage3','/api/start-stage3'].includes(endpoint)){stage3SettingsDirty=true;stage3SettingsSaved=null;}if(endpoint==='/api/refresh-market')beginMarketRefresh();updateControls();const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);try{const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok||data.ok===false||data.error){const error=Error(data.error?.message||text(data.error||data.message||data));error.code=data.error?.code;throw error;}if(['/api/configure-stage3','/api/start-stage3'].includes(endpoint))stage3SettingsSaved={provider:data.provider||body.provider,selection:JSON.stringify(body.provider)};if(endpoint==='/api/refresh-market'&&marketRefreshView)marketRefreshView.acceptedAt=Date.now();preparationFeedback=['/api/generate','/api/plain-rules','/api/run'].includes(endpoint);if(showSuccess){const message=typeof(data.message||data.phase)==='string'?(data.message||data.phase):'操作已提交，请查看当前进度。';feedback(message);if(endpoint==='/api/refresh-market'&&marketRefreshView)marketRefreshView.feedback=message;}if(endpoint==='/api/resume')rememberResumeFeedback(data);if(endpoint==='/api/run'){pendingRunNavigation=false;showPage('monitor');}if(endpoint==='/api/generate')showPage('create');if(['/api/resume','/api/restore'].includes(endpoint))showPage('monitor');await poll();}catch(error){if(endpoint==='/api/refresh-market'){if(error.code==='ALREADY_RUNNING'&&marketRefreshView){marketRefreshView.acceptedAt=Date.now();marketRefreshView.feedback=error.message;}else marketRefreshView=null;renderMarketStatus(lastStatus?.market_status||{},Boolean(marketRefreshView||lastStatus?.market_busy));}feedback(error.name==='AbortError'?'操作响应超时，提交结果待确认。不会自动重复提交，请先查看最新状态。':error.message||'请求失败，请检查本地服务。',true);poll();}finally{clearTimeout(deadline);busy=false;updateControls();if(endpoint==='/api/refresh-market')renderMarketStatus(lastStatus?.market_status||{},marketRefreshInProgress(lastStatus));}}
+async function action(endpoint,body,showSuccess=true){if(endpoint==='/api/plain-rules'){body.api_base_url=$('api-base-url').value.trim();body.api_model=$('api-model').value.trim();}const fresh=endpoint==='/api/configure-stage3'?(lastStatus?.live_sample?liveStage3Fresh(lastStatus):statusFresh):statusFresh||(['/api/control-stage3','/api/stage3/concurrency','/api/stop-stage3'].includes(endpoint)&&liveStage3Fresh(lastStatus));if(busy||!fresh)return;if(lastStatus?.release_update?.pending&&!['/api/stop','/api/stop-stage3','/api/open-excel','/api/refresh-market','/api/stage3/concurrency','/api/control-stage3'].includes(endpoint)){feedback(lastStatus.release_update.message,true);return;}if(['/api/plain-rules','/api/run','/api/start-stage3'].includes(endpoint)&&$('api-key').value.trim()){body.api_key=$('api-key').value.trim();$('api-key').value='';}busy=true;action.pendingStage3Start=null;const stage3Start=endpoint==='/api/start-stage3'?{key:lastStatus.category_key,at:Date.now()/1000,completed:lastStatus.stage3_control?.progress?.completed}:null;if(['/api/configure-stage3','/api/start-stage3'].includes(endpoint)){stage3SettingsDirty=true;stage3SettingsSaved=null;}if(endpoint==='/api/refresh-market')beginMarketRefresh();updateControls();const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);try{const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok||data.ok===false||data.error){const error=Error(data.error?.message||text(data.error||data.message||data));error.code=data.error?.code;throw error;}if(['/api/configure-stage3','/api/start-stage3'].includes(endpoint))stage3SettingsSaved={provider:data.provider||body.provider,selection:JSON.stringify(body.provider)};if(endpoint==='/api/refresh-market'&&marketRefreshView)marketRefreshView.acceptedAt=Date.now();preparationFeedback=['/api/generate','/api/plain-rules','/api/run'].includes(endpoint);if(showSuccess){const message=typeof(data.message||data.phase)==='string'?(data.message||data.phase):'操作已提交，请查看当前进度。';feedback(message);if(endpoint==='/api/refresh-market'&&marketRefreshView)marketRefreshView.feedback=message;}if(endpoint==='/api/resume')rememberResumeFeedback(data);if(endpoint==='/api/run'){pendingRunNavigation=false;showPage('monitor');}if(endpoint==='/api/generate')showPage('create');if(['/api/resume','/api/restore'].includes(endpoint))showPage('monitor');await poll();}catch(error){if(endpoint==='/api/refresh-market'){if(error.code==='ALREADY_RUNNING'&&marketRefreshView){marketRefreshView.acceptedAt=Date.now();marketRefreshView.feedback=error.message;}else marketRefreshView=null;renderMarketStatus(lastStatus?.market_status||{},Boolean(marketRefreshView||lastStatus?.market_busy));}const message=error.name==='AbortError'?'操作响应超时，提交结果待确认。不会自动重复提交，请先查看最新状态。':error.message||'请求失败，请检查本地服务。';feedback(message,true);if(error.name==='AbortError'&&stage3Start)action.pendingStage3Start={...stage3Start,message};poll();}finally{clearTimeout(deadline);busy=false;updateControls();if(endpoint==='/api/refresh-market')renderMarketStatus(lastStatus?.market_status||{},marketRefreshInProgress(lastStatus));}}
 $('retry-generation').addEventListener('click',()=>{const scope=lastStatus?.scope;if(!scope?.category||lastStatus?.active)return;const url=$('retry-listing-url').value.trim()||scope.bestsellers_url||'';const key=$('api-key').value;$('api-key').value='';action('/api/generate',{category_name:scope.category,amazon_count:scope.amazon_count,per_keyword:scope.per_keyword,worker_count:scope.worker_count,amazon_route_mode:$('amazon-route-mode').value,bestsellers_url:url,commercial:scope.commercial||{same_limit:Number($('new-same-limit').value),same_operator:'lt'},api_key:key,api_base_url:$('api-base-url').value.trim(),api_model:$('api-model').value.trim()});});
 let providerLoaded=false,providerEdited=false;
 for(const id of ['api-base-url','api-model'])$(id).addEventListener('input',()=>{providerEdited=true;});
@@ -1034,6 +1040,11 @@ function preparationOnly(data){return !data.category_key&&Boolean(data.console_b
 function renderPreparationProgress(data){if(typeof autoExpandCollectionDetails==='function')autoExpandCollectionDetails(data);const preparing=preparationOnly(data),box=$('create-progress');if(box){box.hidden=!preparing;const generation=data.generation||{};box.textContent=preparing?(generation.stage==='complete'?(data.phase||generation.message||'正在准备任务'):(generation.message||data.phase||'正在准备任务')):'';}if($('overview'))$('overview').hidden=preparing;if($('run-overview'))$('run-overview').hidden=preparing;}
 function render(data){if(typeof renderResumeLaunchFeedback==='function')renderResumeLaunchFeedback(data);
  const control=data.stage3_control;
+ const pending=typeof action==='function'&&action.pendingStage3Start,sample=data.status_sample;
+ if(pending&&data.category_key===pending.key&&sample?.sampled_at>pending.at&&sample.age_seconds<=15&&!sample.error&&control?.progress?.completed>pending.completed&&!control.progress.refreshing){
+  for(const id of ['feedback','global-feedback']){const node=$(id);if(node?.textContent===pending.message){node.textContent='已确认第三层已实际执行，结果已保存。';node.className='notice success';}}
+  action.pendingStage3Start=null;
+ }
  if(control?.stopped&&!control.running&&!control.codex_review?.running&&liveStage3Fresh(data)){
   for(const id of ['feedback','global-feedback']){const node=$(id);if(node?.textContent==='停止中：等待已发出的请求返回并保存，采集和前两层继续运行')node.textContent='第三层已停止，已完成结果和历史记录已保留。';}
  }
@@ -1064,9 +1075,9 @@ function showPage(page){
  for(const name of ['create','monitor','results','history'])$(name+'-panel').hidden=name!==page;
  for(const button of document.querySelectorAll('[data-page]'))button.setAttribute('aria-selected',String(button.dataset.page===page));
  if(location.hash!=='#'+page)history.replaceState(null,'','#'+page);
- const next=$('next-step');if(next)next.hidden=page!=='create';placeDraftEditor();if(page==='history')loadHistory();
+ const next=$('next-step');if(next)next.hidden=page!=='create';placeDraftEditor();if(page==='history'){loadHistory();if(historySelectedKey)openHistory(historySelectedKey);}
 }
-let historyLoading=false,historyRequest=0,historyRetry,historyDetailRetry;
+let historyLoading=false,historyRequest=0,historyRetry,historyDetailRetry,historySelectedKey;
 async function historyJSON(path){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);
  try{const response=await fetch(path,{cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok)throw Error(data.error?.message||'历史记录读取失败');return data;}
@@ -1097,7 +1108,7 @@ function historyExcelLinks(key,files){
  }
  return links;
 }
-async function openHistory(key){const request=++historyRequest;
+async function openHistory(key){historySelectedKey=key;const request=++historyRequest;
  clearTimeout(historyDetailRetry);
  const box=$('history-detail');box.replaceChildren();box.textContent='正在读取历史结果…';
  const restoreButton=()=>{const button=document.createElement('button');button.type='button';button.textContent='恢复到工作区';button.addEventListener('click',()=>action('/api/restore',{category_key:key}));return button;};
@@ -1106,7 +1117,7 @@ async function openHistory(key){const request=++historyRequest;
  const latest=data.excel_files?.layer123;
  if(latest?.available){const published=document.createElement('p');published.className='notice';published.textContent='综合 Excel 已发布'+(latest.updated_at?' · 最新更新时间：'+new Date(latest.updated_at*1000).toLocaleString('zh-CN'):'')+'。下方市场数据日期为原始采集时间。';box.insertBefore(published,state);state.textContent='采集任务保存状态：'+state.textContent;}
  box.append(historyExcelLinks(key,data.excel_files));
- for(const worker of data.workers||[]){const line=document.createElement('p');line.className='small';line.textContent=(worker.name?.match(/worker-(\d+)/)?'第 '+Number(worker.name.match(/worker-(\d+)/)[1])+' 路':'采集路')+'：'+(worker.live_snapshot?.['状态']||statusLabels[worker.status]||worker.status||'已保存');box.append(line);}
+ for(const worker of data.workers||[]){const line=document.createElement('p');line.className='small';line.textContent=(worker.name?.match(/worker-(\d+)/)?'第 '+Number(worker.name.match(/worker-(\d+)/)[1])+' 路':'采集路')+'：'+(data.details?.['阶段']?.[worker.name]?.['状态']||worker.live_snapshot?.['状态']||statusLabels[worker.status]||worker.status||'已保存');box.append(line);}
  const marketBox=document.createElement('section');marketBox.id='history-frontend-market';box.append(marketBox);renderFrontendMarket(data.frontend_market,marketBox,{...data,historical:true});
  const businessBox=document.createElement('section');businessBox.id='history-commercial';box.append(businessBox);renderBusiness(data.commercial,businessBox,true);if(data.commercial_error){const warning=document.createElement('p');warning.className='notice danger';warning.textContent='该任务保存的商业判断异常：'+data.commercial_error;businessBox.append(warning);}
  const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='查看保存的市场结果和进度';const pre=document.createElement('pre');pre.textContent=JSON.stringify(safe({market:data.frontend_market,progress:data.details}),null,2);details.append(summary,pre);box.append(details);

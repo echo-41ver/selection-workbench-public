@@ -89,10 +89,10 @@ def test_independent_collection_host_stops_identical_failures_and_keeps_checkpoi
  monkeypatch.setattr(persistent.time,'sleep',lambda seconds:waits.append(seconds))
  assert persistent.collection_host(8765,category)==1
  assert len(calls)==3 and waits==[5,10]
- state=json.loads((category.parent/'status.json').read_text())
+ state=json.loads((category.parent/'status.json').read_text(encoding='utf-8'))
  assert state['需人工介入'] and state['原因']=='准备环境失败' and '已停止' in state['状态']
  assert state['阶段']['bootstrap']['状态']=='启动准备失败'
- assert json.loads((category.parent/'supervisor_recovery.json').read_text())['retry_seconds'] is None
+ assert json.loads((category.parent/'supervisor_recovery.json').read_text(encoding='utf-8'))['retry_seconds'] is None
  assert checkpoint.read_text()=='{"goods":243}'
 
 

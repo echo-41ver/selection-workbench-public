@@ -150,7 +150,7 @@ def test_concurrent_cache_reads_remain_consistent_after_replace(task):
         assert all(pool.map(lambda _: gate.allows([task.pairs[1]]), range(16)))
 
 
-def test_current_input_failure_preserves_inflight_success_and_creates_no_failed_pair(task, monkeypatch):
+def test_current_input_failure_preserves_inflight_success_and_creates_no_failed_pair(task, monkeypatch, capsys):
     original = openai.OpenAI
     class Client(original):
         def create(self, **kwargs):
@@ -158,9 +158,11 @@ def test_current_input_failure_preserves_inflight_success_and_creates_no_failed_
             task.temu.write_text('{broken', encoding='utf-8')
             return result
     monkeypatch.setattr(openai, 'OpenAI', Client)
-    with pytest.raises(SystemExit, match='当前输入.*继续'):
+    with pytest.raises(SystemExit) as stopped:
         with runner.frozen_candidates(task.candidate) as frozen:
             runner.run(task.args, frozen)
+    assert stopped.value.code == 75
+    assert '当前输入暂不可核对' in capsys.readouterr().err
     assert len(task.calls) == 1
     results = list(runner.rows(task.args.results))
     assert len(results) == 1 and results[0]['api_status'] == 'success'
@@ -209,24 +211,28 @@ def test_parallel_inflight_results_survive_replacement_but_next_group_is_not_dis
 
 
 @pytest.mark.parametrize('directory', ['stage123', 'Stage123'])
-def test_real_managed_entry_requires_source_configuration(task, directory):
+def test_real_managed_entry_requires_source_configuration(task, directory, capsys):
     task.args.results = task.base / directory / 'results.jsonl'
     (task.base / 'stage12_config.json').unlink()
-    with pytest.raises(SystemExit, match='当前输入.*继续'):
+    with pytest.raises(SystemExit) as stopped:
         with runner.frozen_candidates(task.candidate) as frozen:
             runner.run(task.args, frozen)
+    assert stopped.value.code == 75
+    assert '当前输入暂不可核对' in capsys.readouterr().err
     assert task.calls == []
     assert not task.args.results.exists()
     assert not task.args.results.with_name('request_intents.jsonl').exists()
 
 
-def test_managed_run_rejects_a_foreign_candidate_publication(task):
+def test_managed_run_rejects_a_foreign_candidate_publication(task, capsys):
     foreign = task.base / 'other/candidates.jsonl'
     write(foreign, task.pairs)
     task.args.candidates = foreign
-    with pytest.raises(SystemExit, match='当前输入.*继续'):
+    with pytest.raises(SystemExit) as stopped:
         with runner.frozen_candidates(foreign) as frozen:
             runner.run(task.args, frozen)
+    assert stopped.value.code == 75
+    assert '当前输入暂不可核对' in capsys.readouterr().err
     assert task.calls == []
     assert not task.args.results.with_name('request_intents.jsonl').exists()
 

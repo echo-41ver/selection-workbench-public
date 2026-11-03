@@ -3,6 +3,29 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import pytest
 ROOT=Path(__file__).resolve().parents[1]
+@pytest.mark.parametrize('recover', [False, True])
+def test_explicit_control_recovery_does_not_reuse_old_driver(tmp_path,recover):
+    shell=shutil.which('pwsh') or shutil.which('powershell')
+    if not shell:pytest.skip('PowerShell unavailable')
+    source=(ROOT/'scripts/bind_flower_worker.ps1').read_text('utf-8')
+    start=source.index('    if (-not $RecoverOwnedDriver -and $previous.marionette_port')
+    probe=source[start:source.index('    if ($previous.marionette_port',start+5)]
+    script=tmp_path/'reuse.ps1'
+    script.write_text('''$RecoverOwnedDriver=$%s
+$previous=[pscustomobject]@{marionette_port=1234}
+$MarionettePort=1234;$sidFile='sid';$bidiFile='bidi';$base='http://127.0.0.1:4451'
+function Test-Path {return $true}
+function Get-Content {return 'existing-session'}
+function Invoke-LocalDriverRest {return @{value='https://www.temu.com/search_result.html'}}
+function Write-BindingTiming {}
+'''%str(recover).lower()+probe+'''Write-Output 'REBUILD_REQUIRED'
+''',encoding='utf-8-sig')
+    result=subprocess.run([shell,'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=30)
+    assert result.returncode==0,result.stderr
+    assert ('REBUILD_REQUIRED' in result.stdout)==recover
+    assert ('ALREADY_BOUND' in result.stdout)==(not recover)
+
+
 def test_incomplete_binding_reclaims_only_matching_profile_and_browser(tmp_path):
     shell=shutil.which('pwsh') or shutil.which('powershell')
     if not shell:pytest.skip('PowerShell unavailable')
@@ -29,7 +52,8 @@ $previous.profile_id='selected';$previous.browser_started_ticks=201
 '''+decision+'''
 if($incompleteOwnedBinding){throw 'restarted browser identity was ignored'}
 ''',encoding='utf-8-sig')
-    result=subprocess.run([shell,'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=15)
+    # Hosted Windows startup may exceed 15s; bounded browser retry counts stay asserted above.
+    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=60)
     assert result.returncode==0,result.stderr
 
 def test_binding_rest_is_loopback_only_and_bypasses_proxy(tmp_path):
@@ -55,18 +79,39 @@ $refused=$false
 try{{Invoke-LocalDriverRest 'http://example.invalid/'}}catch{{$refused=$true}}
 if(-not $refused){{throw 'non-loopback request allowed'}}
 ''',encoding='utf-8-sig')
-        result=subprocess.run([shell,'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=20)
+        result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=20)
         assert result.returncode==0,result.stderr
         assert received==[{'probe':True}]
     finally:server.shutdown();server.server_close()
 def test_binding_foreground_and_logs_remain_owned_by_selected_profile():
     source=(ROOT/'scripts/bind_flower_worker.ps1').read_text('utf-8')
     assert 'Get-ProfileBrowserTree $RootPid' in source
-    assert 'if ($windows.Count -ne 1)' in source
+    assert 'Sort-Object { $_.Id -ne $RootPid }' in source
     assert 'Show-VerifiedProfileWindow $script:expectedProfileBrowserPid' in source
-    assert source.index('$foreground = if ($ProfileId)') < source.index('$session = Invoke-LocalDriverRest')
+    assert source.index('$foreground = if ($ProfileId -and -not $RecoverOwnedDriver)') < source.index('$session = Invoke-LocalDriverRest')
     assert 'retained rather than creating a second session' in source
     assert 'RedirectStandardError' in source and 'local_rest_proxy' in source
+
+
+def test_recover_owned_driver_does_not_wait_for_foreground(tmp_path):
+    shell=shutil.which('pwsh') or shutil.which('powershell')
+    if not shell:pytest.skip('PowerShell unavailable')
+    source=(ROOT/'scripts/bind_flower_worker.ps1').read_text('utf-8')
+    assignment=next(line for line in source.splitlines() if line.startswith('$foreground = '))
+    script=tmp_path/'recovery-foreground.ps1'
+    script.write_text('''$ProfileId='retained'
+$script:expectedProfileBrowserPid=123
+$RecoverOwnedDriver=$true
+function Show-VerifiedProfileWindow {throw 'foreground unavailable'}
+'''+assignment+'''
+if($null -ne $foreground){throw 'recovery must retain the existing window'}
+$RecoverOwnedDriver=$false
+function Show-VerifiedProfileWindow {return @{visible=$true}}
+'''+assignment+'''
+if(-not $foreground.visible){throw 'initial binding still needs a visible profile'}
+''',encoding='utf-8-sig')
+    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=30)
+    assert result.returncode==0,result.stderr
 
 def test_foreground_retries_detach_input_queues_and_stop_on_owner_change(tmp_path):
     shell=shutil.which('pwsh') or shutil.which('powershell')
@@ -82,6 +127,8 @@ public static class OwnedFlowerForeground {
  public static bool SetForegroundWindow(IntPtr h){Sets++;return !Blocked && Sets>=3;}
  public static bool ShowWindowAsync(IntPtr h,int c){return true;}
  public static bool IsIconic(IntPtr h){return false;}
+ public static bool Visible=true;
+ public static bool IsWindowVisible(IntPtr h){return Visible;}
  public static IntPtr GetForegroundWindow(){return new IntPtr(!Blocked && Sets>=3?401288:123);}
  public static bool BringWindowToTop(IntPtr h){return true;}
  public static uint GetWindowThreadProcessId(IntPtr h,out uint pid){pid=h.ToInt64()==401288?(Lost?999u:62788u):100u;return h.ToInt64()==401288?22u:11u;}
@@ -89,38 +136,52 @@ public static class OwnedFlowerForeground {
  public static uint GetCurrentThreadId(){return 44u;}
 }
 "@
-function Get-ProfileBrowserTree { return @(62788) }
-function Get-Process { return [pscustomobject]@{Id=62788;MainWindowHandle=[IntPtr]401288;StartTime=[DateTime]'2026-01-01'} }
+$WaitSeconds=2
+$script:windowReads=0
+function Start-Sleep { param($Milliseconds) } # Simulated window transitions below need no wall-clock delay.
+function Get-ProfileBrowserTree { return @(90000,62788) }
+function Get-Process {
+ param($Id)
+ $script:windowReads++
+ $handle=if($script:windowReads -le 2){0}elseif($Id -eq 62788){401288}else{111}
+ if($script:alternateMainWindow -and $script:windowReads -eq 5){$handle=401289}
+ return [pscustomobject]@{Id=$Id;MainWindowHandle=[IntPtr]$handle;StartTime=[DateTime]'2026-01-01'}
+}
 '''+helper+'''
-$r=Show-VerifiedProfileWindow 52248
+$r=Show-VerifiedProfileWindow 62788
 if($r.attempts -ne 3 -or $r.window_pid -ne 62788){throw 'wrong target or missing bounded retry'}
 if([OwnedFlowerForeground]::Attached -ne 6 -or [OwnedFlowerForeground]::Detached -ne 6){throw 'input queues not detached'}
 [OwnedFlowerForeground]::Lost=$true
 $refused=$false
-try{Show-VerifiedProfileWindow 52248}catch{$refused=$true}
+try{Show-VerifiedProfileWindow 62788}catch{$refused=$true}
 if(-not $refused){throw 'ownership change was ignored'}
 [OwnedFlowerForeground]::Lost=$false
+$script:windowReads=0
+$script:alternateMainWindow=$true
+[OwnedFlowerForeground]::Sets=0
+$r=Show-VerifiedProfileWindow 62788
+if($r.window_handle -ne 401288 -or -not $r.visible){throw 'owned window rejected after MainWindowHandle chose another same-process window'}
+$script:alternateMainWindow=$false
 [OwnedFlowerForeground]::Blocked=$true
 [OwnedFlowerForeground]::Sets=0
 $script:prompts=0
 function Request-BrowserDisplayConfirmation {
     $script:prompts++
-    [OwnedFlowerForeground]::Blocked=$false
-    return 0.25
+    throw 'Foreground permission is not a browser control requirement'
 }
-$r=Show-VerifiedProfileWindow 52248
-if($script:prompts -ne 1 -or [OwnedFlowerForeground]::Sets -ne 13 -or $r.confirmation_seconds -ne 0.25 -or -not $r.activated){throw 'confirmation did not return to actual foreground verification'}
-[OwnedFlowerForeground]::Blocked=$true
+$r=Show-VerifiedProfileWindow 62788
+if($script:prompts -ne 0 -or [OwnedFlowerForeground]::Sets -ne 12 -or $r.activated -or -not $r.visible){throw 'blocked focus must preserve the visible owned browser without a prompt'}
 [OwnedFlowerForeground]::Sets=0
-function Request-BrowserDisplayConfirmation {throw 'TEST_ONLY_CANCELLED'}
+[OwnedFlowerForeground]::Visible=$false
 $refused=$false
-try{Show-VerifiedProfileWindow 52248}catch{if($_.Exception.Message -ne 'TEST_ONLY_CANCELLED'){throw};$refused=$true}
-if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'cancelled confirmation was ignored or retried'}
+try{Show-VerifiedProfileWindow 62788}catch{if($_.Exception.Message -notmatch 'not visible'){throw};$refused=$true}
+if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'hidden browser incorrectly accepted'}
+[OwnedFlowerForeground]::Visible=$true
 [OwnedFlowerForeground]::Sets=0
-function Request-BrowserDisplayConfirmation {[OwnedFlowerForeground]::Lost=$true;return 0.1}
+[OwnedFlowerForeground]::Lost=$true
 $refused=$false
-try{Show-VerifiedProfileWindow 52248}catch{if($_.Exception.Message -notmatch 'ownership changed'){throw};$refused=$true}
-if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 12){throw 'window changed during confirmation was activated'}
+try{Show-VerifiedProfileWindow 62788}catch{if($_.Exception.Message -notmatch 'ownership changed'){throw};$refused=$true}
+if(-not $refused -or [OwnedFlowerForeground]::Sets -ne 0){throw 'changed window owner was activated'}
 ''',encoding='utf-8-sig')
-    result=subprocess.run([shell,'-NoProfile','-File',str(script)],capture_output=True,text=True,timeout=15)
+    result=subprocess.run([shell,'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],capture_output=True,text=True,timeout=15)
     assert result.returncode==0,result.stderr

@@ -111,7 +111,9 @@ def test_cli_progress_preserves_route_while_waiting_and_restores_reporter(tmp_pa
     def capture(path,value):captures.append(json.loads(value));write(path,value)
     monkeypatch.setattr(generator,'atomic_write',capture)
     def generate(*args,progress,**kwargs):
-        progress(stage='generating',route=[{'url':'https://www.amazon.com/zgbs/pc/12879431'}])
+        progress(stage='generating',route=[{'url':'https://www.amazon.com/zgbs/pc/12879431'}],
+            verified_listing_url='https://www.amazon.com/zgbs/pc/12879431')
+        progress(stage='validating')
         return generator.model_json('test')
     monkeypatch.setattr(generator,'generate_category',generate)
     monkeypatch.setattr(generator.sys,'argv',['generate_category.py','--category-name','键盘','--amazon-count','20',
@@ -119,5 +121,6 @@ def test_cli_progress_preserves_route_while_waiting_and_restores_reporter(tmp_pa
     old=generator.MODEL_PROGRESS_REPORTER
     assert generator.main()==0 and generator.MODEL_PROGRESS_REPORTER is old
     waiting=[row for row in captures if row.get('model_waiting')]
-    assert waiting and waiting[0]['stage']=='generating' and waiting[0]['route']
+    assert waiting and waiting[0]['stage']=='validating' and waiting[0]['route']
+    assert all(row.get('verified_listing_url')=='https://www.amazon.com/zgbs/pc/12879431' for row in captures)
     assert 'TEST_ONLY_KEY' not in json.dumps(captures)

@@ -111,24 +111,38 @@ async function recordBrowserControlTimeout(error){
     message:'浏览器控制超时，保留断点并自动修复连接后继续'};
   await atomicSnapshot(PROGRESS,JSON.stringify({...previous,...details},null,2));
   await fs.appendFile(EVENTS,JSON.stringify({at:now(),type:details.status,...details})+'\n','utf8');
-  // Remove this collector's owned intercepts and release paused requests before
-  // exiting. The browser/session/proxy are not stopped or reopened.
-  if(browserControlCleanup){
-    let deadline;
-    try{await Promise.race([browserControlCleanup(),new Promise(resolve=>{deadline=setTimeout(resolve,15000);})]);}
-    catch{} // timeout status is durable even if the control channel cannot clean up
-    finally{clearTimeout(deadline);}
-  }
+  await cleanupOwnedInterception();
   process.exit(2);
 }
+async function cleanupOwnedInterception(){
+  // Remove only this collector's intercepts and paused requests. Keep the browser/session/proxy.
+  if(browserControlCleanup){
+    let deadline;
+    try{await Promise.race([browserControlCleanup(),new Promise((_,reject)=>{deadline=setTimeout(()=>reject(Object.assign(new Error('BiDi cleanup deadline'),{code:'BIDI_CLEANUP_TIMEOUT'})),15000);})]);}
+    catch(error){await appendEvent('BIDI_CLEANUP_INCOMPLETE',{
+      error_code:['BIDI_CLEANUP_INCOMPLETE','BIDI_CLEANUP_TIMEOUT'].includes(error?.code)?error.code:'BIDI_CLEANUP_ERROR',
+      remaining_intercepts:error?.remaining_intercepts??null,remaining_requests:error?.remaining_requests??null});}
+    finally{clearTimeout(deadline);}
+  }
+}
 const wd=createBrowserControlClient({base:WD,session:sid,onTimeout:recordBrowserControlTimeout});
-const initialWindowClient=createBrowserControlClient({base:WD,session:sid,commandTimeoutMs:5000,onTimeout:recordBrowserControlTimeout});
-const initialWindowDeadline=Date.now()+15000;
+const initialWindowClient=createBrowserControlClient({base:WD,session:sid,onTimeout:recordBrowserControlTimeout});
+const initialWindowDeadline=Date.now()+60000;
 const initialWd=async(...args)=>{
   if(Date.now()>=initialWindowDeadline)throw Object.assign(new Error('Initial window selection budget exhausted'),{code:'WINDOW_SELECTION_DEADLINE'});
   return initialWindowClient(...args);
 };
-async function execute(script, args = [], commandLabel = 'execute_sync') { return wd('POST', '/execute/sync', { script, args }, {commandLabel}); }
+async function execute(script, args = [], commandLabel = 'execute_sync') {
+  const captchaCommand=commandLabel.startsWith('captcha_');
+  // A confirmed standalone challenge resumes only after its existing BiDi URL leaves it.
+  while (!captchaCommand && humanVerificationActive && bidiStatus === 'ACTIVE'
+    && /^https:\/\/(?:www\.)?temu\.com\/bgn_verification\.html(?:[?#]|$)/i.test(currentDocumentUrl)) {
+    await sleep(1000);
+  }
+  // Embedded challenges and a disconnected BiDi channel still need a slow DOM probe.
+  if (humanVerificationActive && !captchaCommand) await sleep(5000);
+  return wd('POST', '/execute/sync', { script, args }, {commandLabel});
+}
 async function atomic(file, text) {
   await atomicSnapshot(file,text);
 }
@@ -145,7 +159,7 @@ const handleCaptcha=createCaptchaHandler({root:ROOT,scope:`temu/${categoryConfig
   onStatus:async captcha=>{
     const progress=JSON.parse(await fs.readFile(PROGRESS,'utf8'));
     await atomicSnapshot(PROGRESS,JSON.stringify({...progress,captcha,message:captcha.message,
-      manual_action_required:!['PENDING','ANSWER_READY','VERIFIED'].includes(captcha.status),
+      manual_action_required:!['PAGE_LOADING','PENDING','ANSWER_READY','VERIFIED'].includes(captcha.status),
       automatic_retry:false,automatic_recovery_eligible:false,resume_requires_session_rotation:false},null,2));
     await appendEvent('CAPTCHA_STATUS',captcha);
   }});
@@ -443,7 +457,7 @@ function startBidi() {
     const connectTimer = setTimeout(() => { ws.close(); resolve(null); }, 15000);
     const call = (method, params = {}) => new Promise((ok, bad) => {
       const id = ++seq;
-      const timer = setTimeout(() => { pending.delete(id); bad(new Error(`BiDi timeout: ${method}`)); }, 4000);
+      const timer = setTimeout(() => { pending.delete(id); bad(Object.assign(new Error(`BiDi timeout: ${method}`),{code:'BIDI_COMMAND_TIMEOUT',method})); }, 30000);
       pending.set(id, { ok, bad, timer });
       try { ws.send(JSON.stringify({ id, method, params })); }
       catch (error) { clearTimeout(timer); pending.delete(id); bad(error); }
@@ -458,6 +472,7 @@ function startBidi() {
       }
     };
     ws.onclose = () => {
+      bidiStatus = 'CLOSED';
       clearTimeout(connectTimer);
       for (const p of pending.values()) { clearTimeout(p.timer); p.bad(new Error('BiDi disconnected')); }
       pending.clear();
@@ -504,7 +519,13 @@ function startBidi() {
           // delay the collection loop; count it without writing one event per
           // request.
           if (/no such request/i.test(String(error))) { imageCancelRaces += 1; lifecycle.released(requestId); }
-          else await appendEvent('NETWORK_INTERCEPT_ERROR', { image: isImage, message: String(error).slice(0, 500) });
+          else {
+            await appendEvent('NETWORK_INTERCEPT_ERROR', { image: isImage, message: String(error).slice(0, 500) });
+            if (!lifecycle.closing && !isImage && error?.code==='BIDI_COMMAND_TIMEOUT' && error.method==='network.continueRequest'
+                && !(humanVerificationActive && !scrollingCollectionStarted)) {
+              await recordBrowserControlTimeout({method:'BIDI',route:error.method,commandLabel:'network_continue_request'});
+            }
+          }
         }
       }
       if (m.method === 'network.responseCompleted') {
@@ -1273,6 +1294,9 @@ async function guardInitialProducts(state, phase) {
     await appendEvent('HTTP_PAGE_TRANSITION_RESULT', {phase,reason:transition.reason,waited_ms:transition.waitedMs});
   }
   humanVerificationActive = classify(state) === 'HUMAN_VERIFICATION';
+  // A confirmed first-screen challenge is handed to the existing supervisor.
+  // Start releasing interception before any further logging or page checks.
+  const manualCleanup = humanVerificationActive && !scrollingCollectionStarted ? cleanupOwnedInterception() : null;
   // A displayed challenge replaces the preceding failed search request.
   // Do not reuse that old HTTP status after the human completes verification.
   if (supersededByVerification({...state, verificationVisible:humanVerificationActive}, httpBlock)) {
@@ -1317,6 +1341,12 @@ async function guardInitialProducts(state, phase) {
     const fingerprint=JSON.stringify(evidence);
     if(initialProductsWait?.gate_fingerprint!==fingerprint)await appendEvent('MANUAL_GATE_OBSERVED',evidence);
     decision.clock.gate_fingerprint=fingerprint;
+    if(manualCleanup){
+      finalStatus='WAITING_HUMAN_VERIFICATION';
+      await writeSnapshot(finalStatus,{phase,browser_preserved:true,proxy_preserved:true,collector_paused:true});
+      await manualCleanup;
+      process.exit(2);
+    }
   }
   initialProductsWait = decision.clock;
   if(decision.status==='WAITING_INITIAL_PRODUCTS'&&Date.now()-lastInitialWaitingSnapshot>=2000){
@@ -1353,7 +1383,7 @@ async function navigateConfirmed(url, expected, label) {
     return {accepted:expected.test(String(lastState.url || '')), url:String(lastState.url || '')};
   };
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try { await wd('POST', '/url', { url }); }
+    try { await wd('POST', '/url', { url }, {commandLabel:label.toLowerCase()}); }
     catch (error) {
       if(error?.kind==='TIMEOUT')throw error; // uncertain queued command: no inspect or resend
       const current = await inspect();
@@ -1727,6 +1757,7 @@ async function prepareLocalWarehouseFilter() {
     }
   };
   localWarehouseFilter=await selectLocalWarehouse({inspect:readLocalWarehouse,query:QUERY,sleep,guard,initialEvidence:localWarehouseFilter,
+    reload:()=>wd('POST','/refresh',{}),
     onAction:action=>appendEvent('LOCAL_WAREHOUSE_CONTROL_ACTION',action),
     onRetry:retry=>appendEvent('LOCAL_WAREHOUSE_CONTROL_RETRY',retry),
     click:element=>clickSalesSortControl({element,execute,sleep,click:current=>wd('POST',`/element/${current[EKEY]}/click`,{})})});
@@ -2018,6 +2049,7 @@ while (!finalStatus && rawCounter.count < MAX_PRODUCTS) {
   const roundBaselineRaw=rawCounter.count;
   let before = await visibleScrollToLearnedSeeMoreZone();
   const block = classify(before);
+  humanVerificationActive = block === 'HUMAN_VERIFICATION';
 
   if (block || httpBlock) {
     const effectiveBlock = block || 'HTTP_BLOCK';
@@ -2129,6 +2161,7 @@ while (!finalStatus && rawCounter.count < MAX_PRODUCTS) {
     see_more_bottom_offset_px: Math.round(seeMoreBottomOffset || 0) });
   const after = await waitForExpansionToSettle(countBefore,expansionBefore);
   const blockAfterClick = classify(after);
+  humanVerificationActive = blockAfterClick === 'HUMAN_VERIFICATION';
 
   if (blockAfterClick || httpBlock) {
     consecutiveNoNewRounds = 0;

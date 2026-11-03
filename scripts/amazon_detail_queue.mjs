@@ -28,7 +28,7 @@ export function scheduleAmazonContinuationRecheck(items, authorized = false, man
     const code=item.last_error?.code;
     if (item.status !== 'MANUAL_ACTION_REQUIRED' || !(authorized && code==='AMAZON_CONTINUATION_REQUIRED'
       || manual && ['AMAZON_CONTINUATION_REQUIRED','AMAZON_LOGIN_REQUIRED','AMAZON_VERIFICATION_REQUIRED',
-        'AMAZON_HTTP_403','AMAZON_HTTP_429'].includes(code))) continue;
+        'AMAZON_HTTP_403','AMAZON_HTTP_429','DETAIL_QUALITY_INCOMPLETE'].includes(code))) continue;
     item.status = 'PENDING';
     selected.add(item.asin);
   }
@@ -60,7 +60,8 @@ export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,rep
     const attempts=Math.max(0,Math.floor(Number(row.detail_image_attempts)||0));
     const status=detailComplete(row)?'COMPLETE':row.detail_error?.retryable===false?'MANUAL_ACTION_REQUIRED'
       :attempts?'RETRY_PENDING':'PENDING';
-    return [row.asin,{asin:row.asin,rank:row.rank,attempts,status,last_error:row.detail_error || null}];
+    return [row.asin,{asin:row.asin,rank:row.rank,attempts,status,last_error:row.detail_error || null,
+      incomplete_signature:null,incomplete_repeats:0}];
   }));
   const continuationRechecks=scheduleAmazonContinuationRecheck(items,recheckContinuation,recheckManual);
   let requests=0,retries=0,stopped=false,nextRetryAt=null;
@@ -99,6 +100,15 @@ export async function runAmazonDetailQueue({records,fetchDetail,onCheckpoint,rep
         }
         value={...row,...value,asin:row.asin,rank:row.rank,product_url:row.product_url,detail_image_attempts:item.attempts};
         if(!detailComplete(value) && !value.detail_error) value.detail_error={code:'DETAIL_INCOMPLETE',retryable:true,message:value.detail_status || '详情或主图不完整'};
+        if(value.detail_error?.code==='DETAIL_QUALITY_INCOMPLETE') {
+          const signature=JSON.stringify(value.detail_error.missing_fields);
+          item.incomplete_repeats=item.incomplete_signature===signature?item.incomplete_repeats+1:1;
+          item.incomplete_signature=signature;
+          if(item.incomplete_repeats>=3) value.detail_error={...value.detail_error,retryable:false,
+            message:'相同详情字段连续三次未读取完整，已保留断点并暂停重复请求；请重试准备任务'};
+        } else {
+          item.incomplete_signature=null;item.incomplete_repeats=0;
+        }
         if(continuationRechecks.has(item.asin) && !detailComplete(value) && value.detail_error?.retryable!==false) {
           value={...value,detail_error:{code:row.detail_error.code,retryable:false,
             message:'Amazon 显式重查未完成，已保留断点，等待再次手动继续',

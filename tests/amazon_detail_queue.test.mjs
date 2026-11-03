@@ -17,6 +17,28 @@ const timeout=row=>({...row,detail_status:'详情页失败：timeout',image_stat
   detail_error:{code:'DETAIL_TIMEOUT',retryable:true,message:'timeout'}});
 const noCheckpoint=async()=>{};
 
+test('repeated missing specifications pause without dropping the item and explicit retry resumes it',async()=>{
+  const requests=[];
+  const result=await runAmazonDetailQueue({records:[card('A',1),success(card('B',2))],
+    shouldStop:()=>requests.length>3,
+    onCheckpoint:noCheckpoint,fetchDetail:async(row,attempt)=>{
+      requests.push(attempt);
+      assert.ok(attempt<=3,'Unchanged missing fields must not loop indefinitely');
+      return {...row,detail_status:'详情页待补全',detail_error:{code:'DETAIL_QUALITY_INCOMPLETE',retryable:true,
+        message:'详情证据不足：specifications_or_features',missing_fields:['specifications_or_features']}};
+    }});
+  assert.deepEqual(requests,[1,2,3]);
+  assert.equal(result.queue.status,'MANUAL_ACTION_REQUIRED');
+  assert.deepEqual(result.queue.remaining_asins,['A']);
+  assert.equal(result.records[0].detail_error.retryable,false);
+  const resumed=await runAmazonDetailQueue({records:result.records,recheckManual:true,
+    onCheckpoint:noCheckpoint,fetchDetail:async(row,attempt)=>{
+      assert.equal(row.asin,'A');assert.equal(attempt,4);return success(row);
+    }});
+  assert.equal(resumed.queue.status,'COMPLETE');
+  assert.equal(resumed.requests,1);
+});
+
 test('failed details wait behind every first item, then succeed without replacing ranks',async()=>{
   const requests=[],saved=[];
   const result=await runAmazonDetailQueue({records:[card('A',1),card('B',2),card('C',3)],maxAttempts:3,concurrency:1,

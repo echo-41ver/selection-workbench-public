@@ -125,7 +125,7 @@ function Export-DeploymentDiagnostics([string]$Root, [string]$OutputPath) {
             if (-not ([IO.Directory]::Exists($directory) -and (Test-DeploymentSupportPath $Root $directory))) { continue }
             $files += Get-ChildItem -LiteralPath $directory -File | Where-Object {
                 $_.Name -match '^(?:process-|service-|launch-|host-recovery-|amazon-listing-error-|amazon-category-search-error-).+\.(?:json|jsonl|log)$' -or
-                $_.Name -match '^category-[a-f0-9]{32}(?:\.progress|\.amazon\.json\.checkpoint)?\.json$' -or
+                $_.Name -match '^category-[a-f0-9]{32}(?:\.progress|\.subject-repair|\.amazon\.json\.checkpoint)?\.json$' -or
                 ($part -eq 'installer-logs' -and $_.Extension -eq '.log') -or
                 $_.Name -in @('state.json','pending-generation.json','resume-draft.json') -or
                 ($part -eq 'model-parse-diagnostics' -and $_.Extension -eq '.json') -or

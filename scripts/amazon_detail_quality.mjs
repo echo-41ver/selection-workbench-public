@@ -41,7 +41,7 @@ export function detailQualityComplete(row) {
   const quality = row?.detail_quality;
   return quality?.schema_version === DETAIL_QUALITY_VERSION
     && quality.title_verified === true && !!text(row?.title)
-    && usefulSpecifications(row?.specifications).length > 0
+    && (usefulSpecifications(row?.specifications).length > 0 || quality.specifications_availability === 'NOT_PROVIDED_BY_SOURCE')
     && Array.isArray(quality.missing_fields) && quality.missing_fields.length === 0
     && verifiedDetailImage(row);
 }
@@ -84,12 +84,18 @@ export async function qualifyAmazonDetail(record, value, candidates, inspectImag
       merged.image_source = record.image_source || '榜单卡片主图';
     }
   }
+  const specificationCount = usefulSpecifications(merged.specifications).length;
+  // Haul can publish an empty facts section. Confirm absence across detail reads;
+  // keep unknown attributes empty instead of inventing specifications from the title.
+  const sourceSpecsAbsent = !specificationCount && (previous?.specifications_availability === 'NOT_PROVIDED_BY_SOURCE'
+    || (value.specifications_availability === 'NOT_PROVIDED_BY_SOURCE' && previous?.title_verified === true && previous.specification_count === 0));
   const missing = [];
   if (!titleVerified) missing.push('detail_title');
-  if (!usefulSpecifications(merged.specifications).length) missing.push('specifications_or_features');
+  if (!specificationCount && !sourceSpecsAbsent) missing.push('specifications_or_features');
   if (!image) missing.push('verified_detail_image');
   merged.detail_quality = {schema_version:DETAIL_QUALITY_VERSION,title_verified:titleVerified,
-    specification_count:usefulSpecifications(merged.specifications).length,image,
+    specification_count:specificationCount,
+    specifications_availability:specificationCount ? 'PROVIDED' : sourceSpecsAbsent ? 'NOT_PROVIDED_BY_SOURCE' : 'UNRESOLVED',image,
     image_failures:imageFailures,missing_fields:missing,observed_at:new Date().toISOString()};
   merged.image_status = image ? '详情页主图' : '榜单图回退';
   merged.detail_status = missing.length ? '详情页待补全' : '详情页已采集';

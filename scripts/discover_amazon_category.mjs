@@ -4,6 +4,7 @@ import path from 'node:path';
 import {inspectAmazonPage} from './amazon_page_state.mjs';
 import {openAmazonDetail} from './amazon_browser_recovery.mjs';
 import {readAmazonDocument} from './amazon_page_read.mjs';
+import {amazonBrowserRoute} from './amazon_browser_route.mjs';
 const query = process.argv[2]==='--query' ? process.argv[3]?.trim() : null;
 if (process.argv[2]==='--query' && (!query || query.length>120)) throw new Error('Invalid product search query');
 const url = query ? 'https://www.amazon.com/s?k='+encodeURIComponent(query) : process.argv[2];
@@ -18,7 +19,7 @@ try {
     .filter(Boolean).map(directory=>path.join(directory,'Microsoft/Edge/Application/msedge.exe')).find(existsSync) : null;
   browser = await chromium.launch({ headless: true,
     executablePath: process.env.AMAZON_BROWSER_PATH || installedEdge || chromium.executablePath(),
-    ...(process.env.AMAZON_BROWSER_PROXY?{proxy:{server:process.env.AMAZON_BROWSER_PROXY}}:{}) });
+    ...amazonBrowserRoute().launchOptions });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'en-US' });
   const page = await context.newPage();
   stage = 'page_navigation';
@@ -68,6 +69,20 @@ try {
     title: document.title,
     heading: [...document.querySelectorAll('h1,h2')].map(x => x.textContent.trim()).find(x => /^Best Sellers in /i.test(x)) || document.querySelector('#zg_banner_text, .zg-banner-text, h1')?.textContent?.trim() || '',
     rank_count: document.querySelectorAll('.zg-bdg-ctr').length || document.querySelectorAll('.zg-bdg-text').length,
+    ranked_products: [...document.querySelectorAll('.zg-bdg-ctr')].slice(0,8).map(badge => {
+      let card=badge.closest('.zg-grid-general-faceout');
+      if(!card) {
+        let parent=badge.parentElement;
+        while(parent && parent!==document.body) {
+          if(parent.querySelector('a[href*="/dp/"]') && parent.querySelectorAll('.zg-bdg-ctr').length===1) { card=parent; break; }
+          parent=parent.parentElement;
+        }
+      }
+      const titles=[...card?.querySelectorAll('a[href*="/dp/"]') || []]
+        .map(a=>(a.innerText || '').replace(/\s+/g,' ').trim()).filter(Boolean).sort((a,b)=>b.length-a.length);
+      return {rank:Number((badge.textContent || '').replace(/\D/g,'')),
+        title:(titles[0] || card?.querySelector('img')?.alt || '').slice(0,300)};
+    }).filter(product=>product.title),
     blocked: /enter the characters|robot check|solve this puzzle/i.test(document.body.innerText.slice(0, 10000)),
     links: [...new Set([...document.querySelectorAll('#zg-left-col a[href], [role="tree"] a[href]'), ...document.querySelectorAll('a[href]')])].filter(a => /\/(zgbs|gp\/bestsellers)(\/|$)/.test(new URL(a.href).pathname) && a.textContent.trim()).map(a => ({url:a.href, text:a.textContent.trim().slice(0,150)})),
   })));

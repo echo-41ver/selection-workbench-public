@@ -417,6 +417,54 @@ test('third layer stop notice follows confirmed runtime state and preserves erro
  assert.equal(get('global-feedback').className,'notice danger');
 });
 
+test('third layer start timeout reconciles only new same-task progress without resubmitting',async()=>{
+ const nodes=new Map();const get=id=>{if(!nodes.has(id))nodes.set(id,{value:''});return nodes.get(id);};
+ let requests=0;
+ const context=sandbox({$:get,statusFresh:true,busy:false,Date:{now:()=>100000},
+  lastStatus:{category_key:'task',stage3_control:{progress:{completed:0}}},
+  AbortController,setTimeout:()=>1,clearTimeout(){},updateControls(){},poll:async()=>{},
+  fetch:async()=>{requests++;throw Object.assign(new Error('aborted'),{name:'AbortError'});}});
+ const start=helperHtml.indexOf('function render(data)');
+ vm.runInContext(helperHtml.split('\n').find(line=>line.startsWith('function feedback('))+'\n'+
+  helperHtml.split('\n').find(line=>line.startsWith('async function action('))+'\n'+
+  helperHtml.slice(start,helperHtml.indexOf(' renderSourceCounts(data);',start))+'}',context);
+ await vm.runInContext("action('/api/start-stage3',{provider:{mode:'multimodal_api'}})",context);
+ const timeout=get('global-feedback').textContent;
+ assert.match(timeout,/操作响应超时.*待确认/);
+ const confirmed={category_key:'task',status_sample:{sampled_at:101,age_seconds:0},
+  stage3_control:{progress:{completed:37}}};
+ for(const fixture of [
+  {...confirmed,category_key:'other-task'},
+  {...confirmed,status_sample:{sampled_at:99,age_seconds:0}},
+  {...confirmed,status_sample:{sampled_at:101,age_seconds:20}},
+  {...confirmed,status_sample:{sampled_at:101,age_seconds:0,error:'sample failed'}},
+  {...confirmed,stage3_control:{progress:{completed:0}}},
+  {...confirmed,stage3_control:{progress:{completed:37,refreshing:true}}},
+ ]){
+  context.fixture=fixture;vm.runInContext('render(fixture)',context);
+  assert.equal(get('global-feedback').textContent,timeout);
+ }
+ context.fixture=confirmed;vm.runInContext('render(fixture)',context);
+ for(const id of ['feedback','global-feedback']){
+  assert.doesNotMatch(get(id).textContent,/超时|待确认/);
+  assert.match(get(id).textContent,/第三层.*已.*执行/);
+  assert.equal(get(id).className,'notice success');
+ }
+ assert.equal(requests,1);
+ // A newer error must survive even when this start is subsequently confirmed.
+ await vm.runInContext("action('/api/start-stage3',{provider:{mode:'multimodal_api'}})",context);
+ vm.runInContext("feedback('其他操作失败',true);render(fixture)",context);
+ assert.equal(get('global-feedback').textContent,'其他操作失败');
+ assert.equal(get('global-feedback').className,'notice danger');
+ // A real business rejection is not an uncertain submission.
+ context.fetch=async()=>{requests++;return {ok:false,json:async()=>({error:{message:'第三层启动被拒绝'}})};};
+ await vm.runInContext("action('/api/start-stage3',{provider:{mode:'multimodal_api'}})",context);
+ vm.runInContext('render(fixture)',context);
+ assert.equal(get('global-feedback').textContent,'第三层启动被拒绝');
+ assert.equal(get('global-feedback').className,'notice danger');
+ assert.equal(requests,3);
+});
+
 test('third layer starts during collection and displays live queue and stop controls',()=>{
  const html=fs.readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
  const a=html.indexOf('function stage3Button(data)'),b=html.indexOf('\n}',a)+2;

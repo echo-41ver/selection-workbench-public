@@ -42,17 +42,47 @@ test('a changed image never receives the old answer',async()=>{
   assert.ok(!f.calls.some(r=>r.action==='claim'));
 });
 
-for(const status of ['NOT_CONFIGURED','ZERO_BALANCE','TIMEOUT','SERVICE_FAILED','SUBMIT_UNKNOWN','BUDGET_LIMIT']) {
+for(const status of ['NOT_CONFIGURED','ZERO_BALANCE','TIMEOUT','SERVICE_FAILED','SUBMIT_UNKNOWN']) {
   test(`${status} retains scene without applying`,async()=>{
     const f=fixture({status});assert.equal(await f.handler(),false);assert.equal(f.applied(),false);
     assert.ok(!f.calls.some(r=>r.action==='claim'));
   });
 }
 
-test('unsupported rotation/slider/line puzzles never call a paid service',async()=>{
+test('unsupported rotation and unrelated slider puzzles never call a paid service',async()=>{
   const handler=createCaptchaHandler({adapter:{inspect:async()=>({kind:'unsupported'})},request:async()=>{throw Error('must not pay');}});
   assert.equal(await handler(),false);
 });
+
+test('extractable unknown puzzle tries API first and then preserves it for manual action',async()=>{
+  const calls=[],events=[];
+  const handler=createCaptchaHandler({scope:'temu/test_only',
+    adapter:{inspect:async()=>({kind:'temu_auto'}),images:async()=>['board','reference'],apply:async()=>{throw Error('unknown controls');}},
+    request:async r=>{calls.push(r);return r.action==='manual'?{status:'MANUAL_REQUIRED'}:{status:'ANSWER_READY',answer:'[{"x":10,"y":20}]'};},
+    onStatus:async s=>events.push(s)});
+  assert.equal(await handler(),false);
+  assert.equal(calls.length,2);assert.deepEqual(calls[0].images,['board','reference']);
+  assert.equal(calls[1].action,'manual');assert.equal(events.at(-1).status,'MANUAL_REQUIRED');
+});
+
+for(const kind of ['temu_icon','temu_line']) {
+  test(`${kind}: map original-image top-left coordinates to the scaled viewport`,async()=>{
+    const calls=[];
+    const wd=async(method,route,body)=>{
+      if(route==='/element')return {'element-6066-11e4-a52e-4f735466cecf':body.value};
+      if(route.endsWith('/rect'))return route.includes('background')?{x:100,y:50,width:372.5,height:374.5}:{x:10,y:20,width:83.5,height:83.5};
+      calls.push({route,body});
+    };
+    const challenge={kind,images:[{selector:'background',width:745,height:749},
+      ...[1,2,3].map(i=>({selector:'part'+i,width:167,height:167}))]};
+    await webdriverCaptchaAdapter(wd,()=>{}).apply(challenge,'[{"x":600,"y":500},{"x":100,"y":200},{"x":20,"y":30}]');
+    assert.equal(calls.length,3);
+    const actions=calls[0].body.actions[0].actions;
+    const target=kind==='temu_icon'?actions[0]:actions.find(a=>a.type==='pointerMove'&&a.duration===700);
+    assert.equal(target.x,442);assert.equal(target.y,342);
+    assert.ok(actions.some(a=>a.type==='pointerDown')&&actions.some(a=>a.type==='pointerUp'));
+  });
+}
 
 test('Temu coordinates reject incomplete/out-of-image answers before dragging',()=>{
   assert.deepEqual(parseTemuCoordinates('x=10,y=20|x=30,y=40|x=50,y=60',{width:100,height:100}),[{x:10,y:20},{x:30,y:40},{x:50,y:60}]);

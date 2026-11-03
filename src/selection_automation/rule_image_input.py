@@ -9,6 +9,10 @@ from urllib.parse import urljoin, urlsplit
 import uuid
 
 from PIL import Image
+try:
+    from httpx2 import TransportError
+except ImportError:
+    from httpx import TransportError
 from selection_workflow.api_image_input import validate_api_image
 from selection_workflow.image_transport import ImageTransport
 
@@ -81,18 +85,26 @@ def prepare_images(root,urls):
                 if not image_path.resolve().is_relative_to(cache.resolve()):raise ValueError('IMAGE_CACHE_OUTSIDE_ROOT')
                 data=image_path.read_bytes()
                 if hashlib.sha256(data).hexdigest()!=digest:raise ValueError('IMAGE_CACHE_CONTENT_CHANGED')
-                _decode(data);final_url=saved['download_url']
+                mime,size=_decode(data);final_url=saved['download_url']
             except (OSError,ValueError,KeyError,TypeError,SyntaxError):data=None
+            recovered_from=None
             if data is None:
-                data,final_url=_download(transport,url)
-                mime,size=_decode(data)
+                for attempt in range(2):
+                    try:
+                        data,final_url=_download(transport,url)
+                        mime,size=_decode(data)
+                        break
+                    except (TransportError,OSError,SyntaxError) as error:
+                        if attempt:raise
+                        recovered_from=type(error).__name__
+                        transport.close()
                 digest=hashlib.sha256(data).hexdigest()
                 _atomic(cache/(digest+'.img'),data)
                 _atomic(metadata,json.dumps({'source_url':url,'download_url':final_url,
                     'content_sha256':digest},ensure_ascii=False).encode())
-            mime,size=_decode(data);digest=hashlib.sha256(data).hexdigest()
             wire.append('data:'+mime+';base64,'+base64.b64encode(data).decode('ascii'))
             bindings.append({'source_url':url,'download_url':final_url,'content_sha256':digest,
-                'wire_sha256':digest,'bytes':len(data),'mime_type':mime,'width':size[0],'height':size[1]})
+                'wire_sha256':digest,'bytes':len(data),'mime_type':mime,'width':size[0],'height':size[1],
+                **({'download_attempts':2,'recovered_from':recovered_from} if recovered_from else {})})
     finally:transport.close()
     return wire,bindings

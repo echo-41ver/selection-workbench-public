@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import psutil
+from .adspower_diagnostics import AdsPowerAPIError
 
 
 def running_profile(profile_id):
@@ -37,8 +38,11 @@ def reserve_start(root, profile_id, active, process_running=running_profile):
         return
     except FileExistsError:
         pass
-    if active().get('data', {}).get('status') == 'Active' and process_running(profile_id):
-        return
+    if process_running(profile_id):
+        if active().get('data', {}).get('status') == 'Active':
+            return
+        raise AdsPowerAPIError('/api/v1/browser/start','STARTUP_PENDING',
+            'browser process is running but startup is not ready; retain the existing profile',retryable=True)
     raise RuntimeError('环境已使用；关闭后禁止再次打开，必须创建新环境和新session')
 
 

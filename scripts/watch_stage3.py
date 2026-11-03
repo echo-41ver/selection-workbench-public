@@ -51,6 +51,7 @@ def watch(category_path):
                 print(f'Excel后台发布启动暂缓：{exc}', flush=True)
         maintain_publisher()
         retry_local_errors = True
+        input_waits = 0
         try:
             while (folder/'paid_enabled.json').exists() and not (folder/'STOP').exists():
                 from selection_automation.schema_billing_retry import read_authorization
@@ -66,19 +67,23 @@ def watch(category_path):
                 if provider['mode']=='local_agent':
                     state('已切换至本机 Agent，断点保留');return
                 progress=snapshot(base,category,history=False)
-                if progress.get('billing_hold_fail_closed'):
-                    state('分析暂停：请求费用记录无法对应，请核对用量',error=True); return
-                if not progress.get('runnable_pending', progress['pending']) and progress.get('billing_unknown_pairs'):
-                    state(f"可运行候选已处理；{progress['billing_unknown_pairs']} 对费用待核对，未自动重发"); return
+                if provider['mode']!='local_model':
+                    if progress.get('billing_hold_fail_closed'):
+                        state('分析暂停：请求费用记录无法对应，请核对用量',error=True); return
+                    if not progress.get('runnable_pending', progress['pending']) and progress.get('billing_unknown_pairs'):
+                        state(f"可运行候选已处理；{progress['billing_unknown_pairs']} 对费用待核对，未自动重发"); return
                 if not progress['pending'] and not (retry_local_errors and progress.get('failed')):
                     state('当前候选已处理，等待新增候选' if progress['total'] else '等待前两层产生候选')
                     time.sleep(2); continue
                 state('分析中')
                 launched_at=time.time()
-                child=subprocess.Popen([sys.executable,str(ROOT/'scripts/run_category_layer3.py'),
-                    '--category',str(category_path),'--candidates',str(candidate_path(base)),
-                    '--results',str(folder/'results.jsonl'),'--independent',
-                    *(['--retry-local-errors'] if retry_local_errors else [])],cwd=ROOT, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                with (folder/'consumer.log').open('ab') as log:
+                    child=subprocess.Popen([sys.executable,str(ROOT/'scripts/run_category_layer3.py'),
+                        '--category',str(category_path),'--candidates',str(candidate_path(base)),
+                        '--results',str(folder/'results.jsonl'),'--independent',
+                        *(['--retry-local-errors'] if retry_local_errors else [])],cwd=ROOT,
+                        stdin=subprocess.DEVNULL,stdout=log,stderr=log,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
                 retry_local_errors = False
                 while True:
                     try:
@@ -86,9 +91,17 @@ def watch(category_path):
                         break
                     except subprocess.TimeoutExpired:
                         maintain_publisher()
+                if returncode == 75:
+                    input_waits += 1
+                    if input_waits < 3:
+                        state('前两层输入正在更新，等待当前批次后自动继续')
+                        time.sleep(2); continue
+                    state('前两层输入持续不可读取，分析已暂停；已完成结果保留，可点击“重试当前方案”重新读取；仍失败可导出诊断记录',error=True,error_code='CURRENT_INPUT_UNAVAILABLE',child_exit_code=returncode)
+                    return
+                input_waits = 0
                 if returncode:
                     failure=failure_state(folder,launched_at,provider)
-                    state(failure.pop('phase'),**failure); return
+                    state(failure.pop('phase'),child_exit_code=returncode,**failure); return
                 maintain_publisher()
                 if repair:
                     state('本次单对复验已结束；原费用仍待核对，未派发其他候选');return

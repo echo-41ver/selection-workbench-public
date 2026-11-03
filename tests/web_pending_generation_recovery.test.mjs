@@ -72,6 +72,17 @@ test('a user entering another category before status arrives keeps the entire ne
  assert.equal(ui.requests.length,0);
 });
 
+test('changing category clears the previous draft listing and keeps a separately entered URL',()=>{
+ for(const [category,url,expected] of [
+  ['量杯',listing,''],
+  ['量杯','https://www.amazon.com/zgbs/kitchen/289786','https://www.amazon.com/zgbs/kitchen/289786'],
+  ['浴帘',listing,listing]]){
+  const ui=setup();ui.context.lastStatus={draft:{id:'draft',category_name:'浴帘',amazon_url:listing}};
+  ui.node('bestsellers-url').value=url;ui.input('category',category);ui.submit();
+  assert.equal(ui.requests[0].body.bestsellers_url,expected);
+ }
+});
+
 test('later polls and an unrelated preserved draft cannot overwrite pending sample settings',()=>{
  const ui=setup();ui.render(pending());
  ui.context.renderDraft({id:'old-draft',category_name:'电钻',worker_count:4,

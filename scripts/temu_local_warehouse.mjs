@@ -74,8 +74,8 @@ export const confirmsLocalWarehouse=(state,query,evidence={})=>isTargetSearch(st
     &&evidence.filter_item&&(filterItems(state)||'').split('|').includes(evidence.filter_item)))
   &&!state.ambiguous&&!state.loading&&!state.dialog_open&&state.goods_ids?.length>0;
 
-export async function selectLocalWarehouse({inspect,click,guard,sleep,query,initialEvidence={},maxChecks=60,onAction=async()=>{},onRetry=async()=>{}}) {
-  const attempts={option:0,menu:0,apply:0};let stable=0,previous=null,nextAction=0;
+export async function selectLocalWarehouse({inspect,click,reload,guard,sleep,query,initialEvidence={},maxChecks=60,onAction=async()=>{},onRetry=async()=>{}}) {
+  const attempts={option:0,menu:0,apply:0,reload:0};let stable=0,previous=null,nextAction=0;
   let checkedFilters=initialEvidence.state==='UI_CONFIRMED'&&initialEvidence.query===query?initialEvidence.filter_item:null;
   for(let check=0;check<maxChecks;check++) {
     await guard();
@@ -93,10 +93,10 @@ export async function selectLocalWarehouse({inspect,click,guard,sleep,query,init
     }else{stable=0;previous=null;}
     if(check>=nextAction&&isTargetSearch(state,query)&&!state.loading&&!state.ambiguous) {
       const applied=checkedFilters&&(filterItems(state)||'').split('|').includes(checkedFilters)&&!state.dialog_open;
-      const action=!state.selected&&state.option?'option':state.selected&&state.apply?'apply':!applied&&!state.option&&state.menu&&!state.dialog_open&&!state.menu_expanded?'menu':null;
-      if(action&&attempts[action]<3) {
+      const action=!state.selected&&state.option?'option':state.selected&&state.apply?'apply':!applied&&!state.option&&state.menu&&!state.dialog_open&&!state.menu_expanded?'menu':reload&&check>=10&&!applied&&!state.option&&!state.menu&&!state.dialog_open&&state.goods_ids?.length?'reload':null;
+      if(action&&attempts[action]<(action==='reload'?1:3)) {
         await guard();await onAction({action,attempt:++attempts[action]});
-        try{await click(state[action]);}catch(error){
+        try{if(action==='reload')await reload();else await click(state[action]);}catch(error){
           const message=String(error?.message||error);
           await onRetry({action,attempt:attempts[action],reason:/intercept|obscur/i.test(message)?'控件被遮挡':/stale|detach/i.test(message)?'控件已更新':'点击尚未成功'});
         }

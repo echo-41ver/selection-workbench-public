@@ -521,11 +521,14 @@ def _verification_is_temu(value):
 
 def _select_verification_window(request, query, result):
     """Stopped manual recovery only. Select within this SID; never create/navigate/close."""
+    from urllib.parse import urlsplit
     current_url=request('GET','/url')
     if not isinstance(current_url,str): raise ValueError('invalid driver URL reply')
     # A current TEMU gate or wrong query is not permission to choose another tab.
     if _verification_is_temu(current_url):
         result['window_selection']='CURRENT_TEMU_NOT_READY'
+        url=urlsplit(current_url)
+        if url.scheme=='https' and url.path=='/login.html': result['page_kind']='LOGIN'
         return False
     original=request('GET','/window')
     handles=request('GET','/window/handles')
@@ -568,17 +571,18 @@ def ready_after_verification(session, query=None, *, allow_empty_search=False, d
     try:
         sid=(ROOT/session['session_id_file']).read_text(encoding='utf-8').strip()
         body={'script':r"""
-            const target = arguments[0], allowEmpty = arguments[1], url = new URL(location.href);
+            const target = arguments[0], allowEmpty = arguments[1], url = new URL(location.href), term = url.searchParams.get('search_key');
             const visible = e => { const r=e.getBoundingClientRect(), s=getComputedStyle(e); return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden'; };
             if (!/(^|\.)temu\.com$/.test(url.hostname) || !url.pathname.includes('search_result')) return false;
-            const emptySearch = allowEmpty === true && url.pathname === '/search_result.html' && !String(url.searchParams.get('search_key') || '').trim();
-            if (!emptySearch && target && url.searchParams.get('search_key') !== target) return false;
+            // A cleared gate may return the previous keyword; the collector must re-enter its current query.
+            const searchEntry = allowEmpty === true && url.pathname === '/search_result.html' && (!String(term || '').trim() || target && term !== target);
+            if (!searchEntry && target && term !== target) return false;
             if (/captcha|verification|login|access.denied|proxyconnectfailure|neterror/i.test(url.pathname+' '+document.title)) return false;
             if (/access denied|verify you are human|unusual traffic|too many requests|proxyconnectfailure|安全验证|安全驗證|请完成验证|請完成驗證|人机验证|人機驗證|拒绝访问|拒絕存取/i.test((document.body?.innerText||'').slice(0,5000))) return false;
             if (/no connection|please check your network connection/i.test((document.body?.innerText||'').slice(0,5000))) return false;
             if ([...document.querySelectorAll('button,a,[role="button"],div,span')].some(e => visible(e) && /^(?:try again|retry|重试)$/i.test((e.textContent||'').trim()))) return false;
             if ([...document.querySelectorAll('[role="dialog"],iframe[src*="captcha"],input[type="password"]')].some(e => visible(e) && (e.tagName==='IFRAME' || e.tagName==='INPUT' || /captcha|verify|verification|sign in|log in|access denied/i.test(e.innerText||'')))) return false;
-            if (emptySearch) return ['interactive','complete'].includes(document.readyState) && [...document.querySelectorAll('input[type="search"]')].some(e => visible(e) && !e.disabled && !e.readOnly);
+            if (searchEntry) return ['interactive','complete'].includes(document.readyState) && [...document.querySelectorAll('input[type="search"]')].some(e => visible(e) && !e.disabled && !e.readOnly);
             return [...document.querySelectorAll('[data-goods-id],a[href*="-g-"]')].some(visible);
         """,'args':[query,allow_empty_search]}
         deadline=started+15
@@ -694,6 +698,9 @@ def worker_snapshot(base, name):
     if worker.get('status')=='WAITING_BROWSER_CONTROL_RECOVERY': code=worker['status']
     if replacing or worker.get('status') in {'SESSION_REPLACED','RESUMING','STARTING','WORKER_COMPLETE','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_SORT_RETRY','WAITING_INITIAL_PRODUCTS_RETRY'}: code=worker['status']
     recovery=collector_block(code)
+    if not recovery and progress.get('collector_paused') is True:
+        recovery={'reason':code,'action':'请处理当前浏览器的采集暂停原因，确认后手动恢复；浏览器和断点已保留',
+                  'verify_to_resume':False}
     if not recovery and worker.get('status')=='HUMAN_ACTION_REQUIRED':
         recovery={'reason':'采集阻断，等待人工处理','action':worker.get('recovery_action','请检查当前浏览器；确认当前关键词商品页正常后继续'),'verify_to_resume':worker.get('verify_to_resume',True)}
     waiting={
@@ -746,7 +753,7 @@ def worker_snapshot(base, name):
         state=captcha.get('status')
         if state in MESSAGES:
             view.update(状态=MESSAGES[state],验证码状态=state,浏览器保留=True,
-                        需人工介入=state not in {'PENDING','ANSWER_READY','VERIFIED'},
+                        需人工介入=state not in {'PAGE_LOADING','PENDING','ANSWER_READY','VERIFIED'},
                         建议动作=MESSAGES[state])
     if recovery and worker.get('status')=='HUMAN_ACTION_REQUIRED' and isinstance(worker.get('verification_probe'),dict):
         view.update(verification_probe_view(worker['verification_probe'],recovery))
@@ -854,20 +861,27 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
     command_timeout=view['采集状态']=='STOPPED_BROWSER_COMMAND_TIMEOUT'
     if command_timeout and not control_command_finished(session,worker.get('current_query')):
         return True
+    probe={}
     if command_timeout:
         from selection_automation.browser_control_recovery import recovery_page_ready
         ready=recovery_page_ready(ROOT,session,worker.get('current_query')) if verify is ready_after_verification else verify(session,worker.get('current_query'))
     else:
-        probe={}
-        ready=recovery['verify_to_resume'] and (verify(session,worker.get('current_query'),allow_empty_search=verification_wait,diagnostic=probe)
+        ready=recovery['verify_to_resume'] and (verify(session,worker.get('current_query'),allow_empty_search=verification_wait or (
+            view['采集状态']=='STOPPED_PROXY_OR_NETWORK_FAILURE' and progress.get('scroll_collection_started') is False),diagnostic=probe)
             if verify is ready_after_verification else verify(session,worker.get('current_query')))
         if probe:
             worker={**worker,'verification_probe':probe}
             save_progress(worker_path,worker)
             state[name].update(verification_probe_view(probe,recovery))
-    if not ready:
+    resume_for_login=(verification_wait and probe.get('page_kind')=='LOGIN'
+                      and not worker.get('recovery_budget_exhausted'))
+    if not ready and not resume_for_login:
         return True
     attempts[name]=0; next_at[name]=0
+    if resume_for_login:
+        worker={**worker,'session_recovery_kind':'LOGIN','automatic_resume_pending':True}
+        state[name]={**view,'状态':'验证后进入登录页，自动恢复采集会话','需人工介入':False,'阻断':False}
+        recovery_event(base,name,'VERIFICATION_REDIRECTED_TO_LOGIN')
     save(base/'temu'/'supervisors'/f'{name}.json',{**worker,'status':'RESUMING','manual_action_required':False})
     return False
 
@@ -1046,15 +1060,16 @@ def rotation_step(base,category_path,sessions,owner,*,jobs,children,state,finish
             else:
                 finished.discard(name);attempts[name]=0;next_at[name]=0
                 # Only explicit manual replacement resets the durable automatic budget.
-                for ledger in (base/'temu/workers'/name).glob('*/automatic_recovery.json'):
-                    ledger.unlink(missing_ok=True)
+                for filename in ('automatic_recovery.json','browser_control_recovery.json','binding_recovery.json'):
+                    for ledger in (base/'temu/workers'/name).glob('*/'+filename):
+                        ledger.unlink(missing_ok=True)
                 recovery_event(base,name,'MANUAL_REPLACEMENT_COMPLETE',request_id=job['request']['id'])
                 prior=read(base/'temu/supervisors'/f'{name}.json',{})
                 from selection_automation import work_dispatch
                 lane_passes=[(r,order,state) for r in work_dispatch.read(base).get('jobs',[])
                     for order,state in (r.get('sort_passes') or {}).items() if state.get('owner')==name]
                 lane_done=bool(lane_passes) and all(state.get('complete') for _,_,state in lane_passes)
-                save(base/'temu/supervisors'/f'{name}.json',{**prior,'status':'WORKER_COMPLETE' if lane_done else 'SESSION_REPLACED','manual_action_required':False})
+                save(base/'temu/supervisors'/f'{name}.json',{**prior,'status':'WORKER_COMPLETE' if lane_done else 'SESSION_REPLACED','manual_action_required':False,'recovery_budget_exhausted':False})
         sessions=read(ROOT/'config/sessions.json')['workers']
         del jobs[request_id]
     while True:

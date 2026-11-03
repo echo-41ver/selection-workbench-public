@@ -439,14 +439,16 @@ def test_retry_preparation_reuses_frozen_task_without_paid_flag(tmp_path,monkeyp
     with pytest.raises(web.ConsoleError):console.retry_preparation({'category_key':'other'})
 
 
-def test_failed_preparation_preserves_resolved_listing_and_key_only_in_memory(tmp_path,monkeypatch):
+@pytest.mark.parametrize('failed_stage',['generating','validating'])
+def test_failed_preparation_preserves_resolved_listing_and_key_only_in_memory(tmp_path,monkeypatch,failed_stage):
     console=web.Console(tmp_path)
     console.pending_scope={'category':'键盘','amazon_count':20,'per_keyword':200,'worker_count':4,
         'api_base_url':'https://provider.example','api_model':'test-model','bestsellers_url':''}
     target='https://www.amazon.com/zgbs/pc/12879431'
     def fail(args,**kwargs):
         path=Path(args[args.index('--progress-file')+1])
-        path.write_text(json.dumps({'stage':'error','failed_stage':'generating','message':'model timeout',
+        path.write_text(json.dumps({'stage':'error','failed_stage':failed_stage,'message':'model timeout',
+            'verified_listing_url':target,
             'route':[{'url':target,'heading':'Best Sellers in Computer Keyboards'}]}))
         return SimpleNamespace(returncode=1)
     monkeypatch.setattr(console,'invoke',fail)
@@ -461,6 +463,19 @@ def test_failed_preparation_preserves_resolved_listing_and_key_only_in_memory(tm
     console.progress_file.write_text(json.dumps({'stage':'generating','message':'model working',
         'model_waiting':True,'model_started_at':time.time()-10}))
     assert '已等待 10 秒' in console.generation_progress()['message']
+
+
+def test_failed_preparation_does_not_reuse_unverified_parent_listing(tmp_path,monkeypatch):
+    console=web.Console(tmp_path)
+    console.pending_scope={'category':'开瓶器','bestsellers_url':''}
+    def fail(args,**kwargs):
+        path=Path(args[args.index('--progress-file')+1])
+        path.write_text(json.dumps({'stage':'error','failed_stage':'validating',
+            'route':[{'url':'https://www.amazon.com/zgbs/kitchen/289733'}]}))
+        return SimpleNamespace(returncode=1)
+    monkeypatch.setattr(console,'invoke',fail)
+    console._start({'category_name':'开瓶器','amazon_count':2,'per_keyword':120,'api_key':''})
+    assert console.pending_scope['bestsellers_url']==''
 
 
 @pytest.mark.parametrize('other_category',[False,True])

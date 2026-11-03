@@ -4,9 +4,6 @@
   "twocaptcha": {
     "enabled": false,
     "key": "",
-    "max_requests": 10,
-    "budget_usd": 0.1,
-    "reserve_usd": 0.01,
     "timeout_seconds": 180
   },
   "liquid_d1": {

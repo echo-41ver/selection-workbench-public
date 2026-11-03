@@ -1,4 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
+from threading import Event
 from selection_automation import work_dispatch as dispatch
 import json
 import sys
@@ -86,6 +87,30 @@ def test_concurrent_claim_and_restart_never_duplicates_ownership(tmp_path):
     assert len({j['query'] for j in claims})==50
     restarted=dispatch.sync(tmp_path,plan+[{'query':'new','max_products':20}],names)
     assert all(next(j for j in restarted['jobs'] if j['query']==c['query'])['owner']==c['owner'] for c in claims)
+
+
+def test_snapshot_reader_waits_for_assignment_publication(tmp_path,monkeypatch):
+    data=dispatch.sync(tmp_path,[{'query':'first','max_products':10}],['w1'])
+    assignment=tmp_path/'temu/supervisors/assignments.json'
+    publishing=Event();started=Event();original_read=Path.read_text
+    def read_text(path,*args,**kwargs):
+        if path==assignment and publishing.is_set():
+            raise PermissionError('Windows destination replacement is in progress')
+        return original_read(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'read_text',read_text)
+    def snapshot():
+        started.set()
+        return dispatch.read(tmp_path)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with dispatch.locked(tmp_path):
+            publishing.set();future=pool.submit(snapshot)
+            assert started.wait(1)
+            completed,_=wait([future],timeout=.1)
+            assert not completed
+            data['jobs'][0]['source_asins']=['CURRENT']
+            dispatch.save(tmp_path,data)
+            publishing.clear()
+        assert future.result(timeout=2)['jobs'][0]['source_asins']==['CURRENT']
 
 
 def test_completed_pass_can_leave_only_the_unstarted_sibling_for_idle_lane(tmp_path):

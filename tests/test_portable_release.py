@@ -180,7 +180,7 @@ def test_validate_only_never_calls_provider(tmp_path):
     assert not (tmp_path/'requests.jsonl').exists()
 
 
-@pytest.mark.parametrize('mode,expected_requests,expected_success',[('split',3,2),('high',2,1),('auth',1,0)])
+@pytest.mark.parametrize('mode,expected_requests,expected_success',[('split',1,0),('high',2,1),('auth',1,0)])
 def test_paid_consumer_with_fake_provider_only(tmp_path,monkeypatch,capsys,mode,expected_requests,expected_success):
     from types import SimpleNamespace
     from PIL import Image
@@ -220,6 +220,9 @@ def test_paid_consumer_with_fake_provider_only(tmp_path,monkeypatch,capsys,mode,
     assert len(calls)==expected_requests
     rows=list(consumer.rows(result))
     assert sum(r['api_status']=='success' for r in rows)==expected_success
+    if mode=='split':
+        assert len(rows)==2 and all('VISUAL_RESPONSE_SCHEMA_MISMATCH' in r['failure_reason'] for r in rows)
+        assert json.loads((tmp_path/'runtime_control.json').read_text(encoding='utf-8'))['paused'] is True
     ledger=list(consumer.rows(tmp_path/'requests.jsonl'))
     assert len(ledger)==expected_requests
     assert sum(r.get('usage',{}).get('total_tokens',0) for r in ledger)==(0 if mode=='auth' else expected_requests*101)

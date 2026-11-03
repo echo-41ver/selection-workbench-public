@@ -44,6 +44,26 @@ def test_silently_disabled_hard_rule_is_rejected_before_task_creation():
     with pytest.raises(ValueError,match='明确冲突也被规则判成不足'):compile_stage1_rules(cat)
 
 
+def test_observed_generic_opener_does_not_erase_specific_tool_conflicts():
+    cat=category()
+    cat['stage1']['attributes']=[{
+        'name':'opener_type','hard_conflict':True,'values':{
+            'bottle_cap_opener':['bottle cap opener','crown cap opener','beer opener'],
+            'can_opener':['can opener','tin opener'],
+            'jar_opener':['jar opener','jar lid opener'],
+            'screw_cap_twister':['screw cap twister','bottle cap remover tool']},
+        'ambiguous_phrases':['opener','multi opener','cap remover']}]
+    before=deepcopy(cat)
+    compiled=compile_stage1_rules(cat)
+    assert cat==before and compile_stage1_rules(compiled)==compiled
+    assert compiled['stage1']['attributes'][0]['ambiguous_phrases']==['multi opener']
+    for other in ('can opener','jar lid opener','screw cap twister'):
+        assert text_gate(compiled,'bottle cap opener',other)['excluded']
+    for unclear in ('opener','multi opener with bottle cap opener','not a bottle cap opener'):
+        row=text_gate(compiled,unclear,'can opener')
+        assert not row['excluded'] and row['stage1_status']=='TEXT_INSUFFICIENT'
+
+
 def test_observed_parameter_catalog_does_not_replace_authoring_validation_probe():
     from selection_automation.match_criteria import seed,attach
     cat=category();cat['category_name_zh']='键盘'

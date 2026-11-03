@@ -18,6 +18,11 @@ def test_provider_error_keeps_code_and_category_without_raw_sensitive_fields(mes
 def test_untrusted_string_code_is_not_reflected():
  error=provider_error('/unknown?key=SECRET','SECRET','failure')
  assert error.diagnostic['provider_code'] is None and 'SECRET' not in str(error)
+@pytest.mark.parametrize('status',[502,503,504])
+def test_wrapped_upstream_failure_preserves_uncertain_post_outcome(status):
+ error=provider_error('/api/v2/browser-profile/delete',-1,f'Request failed with status code {status}; key=SECRET')
+ assert error.diagnostic=={'operation':'PROFILE_DELETE','category':'CONNECTIVITY','provider_code':-1,'http_status':status,'retryable':False}
+ assert 'SECRET' not in str(error)
 def test_nonretryable_kernel_rejection_stops_existing_profile_without_recreate(monkeypatch):
  calls=[]
  def api(base,path,**kw):calls.append(path);raise provider_error(path,-1,'Firefox kernel not installed')
