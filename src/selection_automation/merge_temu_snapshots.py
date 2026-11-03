@@ -227,7 +227,10 @@ def atomic_write(path: Path, content: str) -> None:
     os.close(handle)
     temp_path = Path(temporary)
     try:
-        temp_path.write_text(content, encoding="utf-8")
+        with temp_path.open('w', encoding='utf-8') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
         # Windows readers/parallel publishers can briefly hold the destination
         # without delete sharing. Keep the old complete JSON until replace succeeds.
         deadline = time.monotonic() + 2.0

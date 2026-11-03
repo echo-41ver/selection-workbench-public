@@ -444,6 +444,7 @@ const redFlags=/failed|error|存在阻断|失败|错误|需要处理/i;
 function statusTone(row={}){
  const state=String(first(row,['采集状态','status','状态','phase'])||'');
  if(row.automatic_recovery)return 'warning';
+ if(['PAGE_LOADING','PENDING','ANSWER_READY','VERIFIED'].includes(row['验证码状态']))return 'success';
  if(needsHuman(row))return 'danger';
  if(!row.agent_block&&/LOGIN_REQUIRED|WAITING_LOGIN/.test(state))return 'success';
  if(/^REPLACING_.*_ENVIRONMENT$/.test(state)||/正在自动更换环境/.test(state)||/WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY/.test(state))return 'success';
@@ -458,6 +459,7 @@ function statusTone(row={}){
 function needsHuman(row={}){
  const state=String(first(row,['采集状态','status','状态','phase','code'])||'');
  if(row.automatic_recovery)return false;
+ if(['PAGE_LOADING','PENDING','ANSWER_READY','VERIFIED'].includes(row['验证码状态']))return false;
  if(/^REPLACING_.*_ENVIRONMENT$/.test(state)||/正在自动更换环境/.test(state))return false;
  if(row.manual_action_required||row.human_action_required||row['需人工介入']||row.recovery_exhausted||row.recovery_budget_exhausted)return true;
  if(!row.agent_block&&/LOGIN_REQUIRED|WAITING_LOGIN/.test(state))return false;

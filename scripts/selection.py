@@ -747,6 +747,8 @@ def worker_snapshot(base, name):
     if progress.get('max_products'):
         view['当前排序目标']=progress['max_products']
     if recovery: view['建议动作']=recovery['action']; view['浏览器保留']=True
+    if recovery and worker.get('status')=='HUMAN_ACTION_REQUIRED' and isinstance(worker.get('verification_probe'),dict):
+        view.update(verification_probe_view(worker['verification_probe'],recovery))
     captcha=progress.get('captcha')
     if recovery and code in {'WAITING_CAPTCHA','WAITING_SEARCH_VERIFICATION','WAITING_EMPTY_SEARCH_VERIFICATION','WAITING_HUMAN_VERIFICATION','CAPTCHA_REQUIRED'} and isinstance(captcha,dict):
         from selection_automation.captcha import MESSAGES
@@ -755,8 +757,6 @@ def worker_snapshot(base, name):
             view.update(状态=MESSAGES[state],验证码状态=state,浏览器保留=True,
                         需人工介入=state not in {'PAGE_LOADING','PENDING','ANSWER_READY','VERIFIED'},
                         建议动作=MESSAGES[state])
-    if recovery and worker.get('status')=='HUMAN_ACTION_REQUIRED' and isinstance(worker.get('verification_probe'),dict):
-        view.update(verification_probe_view(worker['verification_probe'],recovery))
     return worker,view,recovery
 
 
@@ -888,7 +888,8 @@ def hold_blocked_worker(base, session, *, children, finished, attempts, next_at,
 
 def supervision_status(state):
     state={name:info for name,info in state.items() if isinstance(info,dict)}
-    blocked=[name for name,info in state.items() if (info.get('阻断') and info.get('采集状态') not in {
+    blocked=[name for name,info in state.items() if (info.get('阻断') and info.get('验证码状态') not in {
+        'PAGE_LOADING','PENDING','ANSWER_READY','VERIFIED'} and info.get('采集状态') not in {
         'WAITING_INITIAL_PRODUCTS','WAITING_HTTP_COOLDOWN','WAITING_SITE_COOLDOWN','WAITING_TRY_AGAIN',
         'WAITING_SEE_MORE_CLICK','RETRYING_NETWORK','WAITING_FLEET_SLOT'}) or info.get('状态') in ('失败，需要处理','换session失败，保留替换进度')]
     human=[name for name,info in state.items() if info.get('需人工介入')]
@@ -908,9 +909,12 @@ def completion(config_path, paid):
         worker_root=config_path.parent/'temu'/'workers'
         if worker_root.exists():
             from watch_temu_union import snapshot_signature
-            snapshots=sorted(worker_root.glob('*/*/products.jsonl'))
+            snapshots=sorted([*worker_root.glob('*/*/products.jsonl'),
+                              *worker_root.glob('*/*/unclassified_products.jsonl')])
             provider=config_path.parent/'market/geekbi.json'
             if provider.is_file(): snapshots.append(provider)
+            category_path=config_path.parent/'category.json'
+            if category_path.is_file(): snapshots.append(category_path)
             union_state=read(config_path.parent/'temu'/'union'/'watch_state.json',{})
             if not snapshots or union_state.get('status')!='PUBLISHED' or union_state.get('signature')!=snapshot_signature(snapshots):
                 return None
@@ -1106,6 +1110,12 @@ def supervise(category_path, paid,*,preserve_prepared=False):
     # OS lock is released on process exit, including crash; PID reuse cannot release it.
     from selection_automation.process_lock import ProcessLock
     with ProcessLock(ROOT/'runtime'/'supervisor.lock'):
+        # Process descriptors can be regenerated; source data and paid results cannot.
+        metadata=[base/'cleanup_status.json',base/'local_service_recovery.json',base/'stage123/controller.json',
+                  *(base/'temu/supervisors').glob('binding-recovery-*.json')]
+        for path in metadata:
+            if path.is_file() and not path.read_bytes().strip(b'\0 \t\r\n'):
+                path.rename(path.with_name(f'{path.name}.corrupt-{time.time_ns()}'))
         record_start(ROOT,base,'supervisor',cat,version=LOADED_VERSION)
         save(active,{'pid':os.getpid(),'created':psutil.Process().create_time(),'category_key':cat['category_key']})
         children={}; finished=set(); attempts={}; next_at={}; state={}; changes={}

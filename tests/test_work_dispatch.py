@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from threading import Event
 from selection_automation import work_dispatch as dispatch
 import json
+import pytest
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
@@ -13,6 +14,37 @@ def empty_evidence(query):
         {'profile_id':profile,'evidence':{'confirmed':True,'protocol':'VISIBLE_EMPTY_RESULTS_STABLE_V2',
             'loading':False,'stable_ms':15000,'samples':3,'query':query,
             'url':'https://www.temu.com/search_result.html?search_key='+quote(query)}} for profile in ('first','second')]}
+
+
+def test_zeroed_dispatch_restores_completed_and_incomplete_passes(tmp_path):
+    plan=[{'query':'first','max_products':120},{'query':'next','max_products':360}]
+    target=tmp_path/'temu/supervisors/assignments.json'
+    target.parent.mkdir(parents=True)
+    damaged=b'\0'*2361
+    target.write_bytes(damaged)
+    for folder,query,sort,count in [('first','first','sales',120),('first--recent','first','recent',120),
+                                  ('next','next','sales',119)]:
+        path=tmp_path/'temu/workers/w1'/folder/'progress.json'
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({'search_query':query,'sales_sort':{'requested':sort},
+            'status':'KEYWORD_LIMIT_REACHED','keyword_complete':True,'raw_collected_count':count}),encoding='utf-8')
+    data=dispatch.sync(tmp_path,plan,['w1'])
+    assert data['jobs'][0]['complete']
+    assert all(state['complete'] for state in data['jobs'][0]['sort_passes'].values())
+    assert not data['jobs'][1]['complete']
+    assert target.with_name(data['recovered_from']).read_bytes()==damaged
+    assert dispatch.read(tmp_path)['jobs'][0]['complete']
+    job=dispatch.claim_pass(tmp_path,'w1')
+    assert (job['query'],job['sort'],job['pass_owner'])==('next','sales','w1')
+
+
+def test_malformed_dispatch_is_not_replaced_with_empty_success(tmp_path):
+    target=tmp_path/'temu/supervisors/assignments.json'
+    target.parent.mkdir(parents=True)
+    target.write_text('{broken',encoding='utf-8')
+    with pytest.raises(json.JSONDecodeError):
+        dispatch.sync(tmp_path,[{'query':'first','max_products':120}],['w1'])
+    assert target.read_text('utf-8')=='{broken'
 
 
 def test_recent_follows_same_keyword_sales_before_next_keyword(tmp_path):

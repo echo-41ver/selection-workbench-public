@@ -27,12 +27,13 @@ export function inspectCaptcha() {
   // The official TemuImageTask supports Line placement and Icon ordered clicks.
   // Preserve the actual reference count/order; the guide says usually three.
   const panels=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],[id*="captcha" i],[class*="captcha" i],[id*="verify" i],[class*="verify" i]')].filter(visible);
-  if(/bgn_verification/i.test(location.pathname)&&document.body)panels.push(document.body);
+  if(/bgn_verification/i.test(location.pathname)&&document.body)panels.unshift(document.body);
   for(const panel of panels) {
     const text=panel.innerText||'';
     const icon=/click.{0,70}(?:order|sequence)|(?:order|sequence).{0,70}click|(?:依次|按顺序|按順序).{0,20}(?:点击|點擊)|(?:点击|點擊).{0,30}(?:顺序|順序)/i.test(text);
-    const line=/align.{0,40}line|connect.{0,40}line|drag.{0,60}(?:image|picture|piece)|fill each box.{0,80}(?:number|object)|拖[动動].{0,30}(?:图片|圖片|图块|圖塊|拼图|拼圖|线|線)|(?:对齐|對齊|连线|連線|拼接).{0,30}(?:线|線|图|圖)/i.test(text);
-    const mode=/rotate|rotation|旋转|旋轉/i.test(text)?'temu_auto':icon?'temu_icon':line?'temu_line':'temu_auto';
+    const quantity=/fill each box.{0,80}(?:number|object)/i.test(text);
+    const line=/align.{0,40}line|connect.{0,40}line|drag.{0,60}(?:image|picture|piece)|拖[动動].{0,30}(?:图片|圖片|图块|圖塊|拼图|拼圖|线|線)|(?:对齐|對齊|连线|連線|拼接).{0,30}(?:线|線|图|圖)/i.test(text);
+    const mode=quantity||/rotate|rotation|旋转|旋轉/i.test(text)?'temu_auto':icon?'temu_icon':line?'temu_line':'temu_auto';
     const candidates=[...panel.querySelectorAll('img,canvas,[style*="background-image"]')].filter(e=>visible(e)
       &&(e.tagName!=='IMG'||e.complete&&e.naturalWidth>0)
       &&(e.tagName!=='CANVAS'||e.width>0&&e.height>0)
@@ -44,12 +45,10 @@ export function inspectCaptcha() {
     const pieces=candidates.filter(e=>e!==background.e&&rect(e).width*rect(e).height<background.r.width*background.r.height*0.45);
     if(pieces.length<1||pieces.length>8||ranked.length!==pieces.length+1)continue;
     if(icon)pieces.sort((a,b)=>Math.abs(rect(a).y-rect(b).y)>Math.min(rect(a).height,rect(b).height)/2?rect(a).y-rect(b).y:rect(a).x-rect(b).x);
-    let surface=background.e;
-    if(mode!=='temu_icon') {
-      // Line input is the complete puzzle surface, including initial movable
-      // pieces, rather than the underlying background image with blank slots.
-      while(surface!==panel&&!pieces.every(e=>surface.contains(e)))surface=surface.parentElement;
-    }
+    // Full quantity/unknown panel includes instructions and controls. For classic
+    // Line/Icon matching, including source thumbnails in the main image makes
+    // the API match those thumbnails instead of the intended target positions.
+    const surface=mode==='temu_auto'?panel:background.e;
     const images=[surface,...pieces].map((e,i)=>({selector:tag(e,'image'+i),rect:rect(e),
       width:e.naturalWidth||e.width||rect(e).width,height:e.naturalHeight||e.height||rect(e).height}));
     const buttons=[...panel.querySelectorAll('button,[role="button"]')].filter(e=>visible(e)&&/^(?:submit|confirm|verify|确定|确认|提交|驗證|验证)$/i.test((e.innerText||'').trim()));
@@ -173,6 +172,7 @@ export function createCaptchaHandler({root,scope,browserIdentity='',adapter,requ
         await notify({status:'PAGE_LOADING',message:'验证码题图正在加载，保留原浏览器和断点。'});
         await sleep(1000);challenge=await adapter.inspect();
       }
+      if(await shouldStop()){await notify({status:'STOPPED',message:'已停止解题等待，当前浏览器和付费任务记录保留。'});return false;}
       if(!challenge)return await isReleased();
       if(['unsupported','loading'].includes(challenge.kind)) {
         await notify({status:'UNSUPPORTED',message:'未能取得完整验证码题图，保留原环境和断点，请在原窗口人工处理。'});

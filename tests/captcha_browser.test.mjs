@@ -65,6 +65,19 @@ test('extractable unknown puzzle tries API first and then preserves it for manua
   assert.equal(calls[1].action,'manual');assert.equal(events.at(-1).status,'MANUAL_REQUIRED');
 });
 
+test('images finish loading before API submission; stopping that wait makes no request',async()=>{
+  let loaded=false,t=0,submissions=0;const events=[];
+  const handler=createCaptchaHandler({scope:'temu/test_only',
+    adapter:{inspect:async()=>({kind:loaded?'temu_auto':'loading'}),images:async()=>['complete panel','reference']},
+    request:async()=>{submissions++;assert.equal(loaded,true);return {status:'SERVICE_FAILED'};},
+    onStatus:async r=>events.push(r.status),now:()=>t,sleep:async ms=>{t+=ms;loaded=true;}});
+  assert.equal(await handler(),false);assert.equal(submissions,1);assert.deepEqual(events,['PAGE_LOADING','SERVICE_FAILED']);
+  const stopped=[];
+  const stopHandler=createCaptchaHandler({adapter:{inspect:async()=>({kind:'loading'})},shouldStop:async()=>true,
+    request:async()=>{throw Error('must not submit after stop');},onStatus:async r=>stopped.push(r.status)});
+  assert.equal(await stopHandler(),false);assert.deepEqual(stopped,['STOPPED']);
+});
+
 for(const kind of ['temu_icon','temu_line']) {
   test(`${kind}: map original-image top-left coordinates to the scaled viewport`,async()=>{
     const calls=[];

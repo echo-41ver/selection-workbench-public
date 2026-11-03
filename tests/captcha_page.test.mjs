@@ -52,13 +52,13 @@ test('local unsupported slider is recognized and never submitted as a Temu piece
   } finally {await browser.close();}
 });
 
-test('Line uses the complete board with four movable references; Icon follows visible order',async()=>{
+test('quantity uses the complete panel; classic matching excludes source thumbnails and Icon follows visible order',async()=>{
   const browser=await chromium.launch({headless:true});
   try {
     const page=await browser.newPage();
-    await page.setContent(`<div class="captcha"><p>Drag each piece to align the lines</p>
+    await page.setContent(`<div class="captcha" id="panel"><p>Drag each piece to align the lines</p>
       <div id="board" style="position:relative;width:414px;height:400px"><img id="background" width="414" height="400">
-      ${[127,223,31,319].map((x,i)=>`<img id="ref${i}" width="65" height="65" style="position:absolute;left:${x}px;top:4px">`).join('')}</div></div>`);
+      ${[127,223,31,319].map((x,i)=>`<img id="ref${i}" width="65" height="65" style="position:absolute;left:${x}px;top:4px">`).join('')}</div><button>Submit</button></div>`);
     await page.evaluate(async()=>{
       for(const image of document.images){
         const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
@@ -68,8 +68,13 @@ test('Line uses the complete board with four movable references; Icon follows vi
     });
     let challenge=await page.evaluate(inspectCaptcha);
     assert.equal(challenge.kind,'temu_line');assert.equal(challenge.images.length,5);
-    assert.equal(await page.locator(challenge.images[0].selector).getAttribute('id'),'board');
+    assert.equal(await page.locator(challenge.images[0].selector).getAttribute('id'),'background');
     assert.deepEqual(await Promise.all(challenge.images.slice(1).map(i=>page.locator(i.selector).getAttribute('id'))),['ref0','ref1','ref2','ref3']);
+    await page.locator('p').evaluate(e=>{e.textContent='Fill each box with the required number of objects indicated';});
+    challenge=await page.evaluate(inspectCaptcha);
+    assert.equal(challenge.kind,'temu_auto');
+    assert.equal(await page.locator(challenge.images[0].selector).getAttribute('id'),'panel');
+    assert.match(await page.locator(challenge.images[0].selector).innerText(),/required number[\s\S]*Submit/);
     await page.locator('p').evaluate(e=>{e.textContent='Click the objects in the order shown';});
     challenge=await page.evaluate(inspectCaptcha);
     assert.equal(challenge.kind,'temu_icon');

@@ -144,6 +144,43 @@ class LocalRun:
         selection.supervise(self.category, paid)
 
 
+def test_completion_uses_real_union_publisher_sources(tmp_path,monkeypatch):
+    from watch_temu_union import publish_once
+    run=LocalRun(tmp_path,monkeypatch)
+    worker=run.base/'temu/workers/worker-01/q'
+    worker.mkdir(parents=True)
+    (worker/'products.jsonl').write_text('{"goods_id":"T","title":"cordless drill"}\n',encoding='utf-8')
+    unclassified=worker/'unclassified_products.jsonl'
+    unclassified.write_text('',encoding='utf-8')
+    published=publish_once(run.base/'temu')
+    assert published['status']=='PUBLISHED'
+    assert selection.completion(run.config,False)['缺失或失败']==0
+    unclassified.write_text('{"goods_id":"new","title":"drill"}\n',encoding='utf-8')
+    assert selection.completion(run.config,False) is None
+
+
+def test_restart_quarantines_zeroed_process_metadata_and_keeps_results(tmp_path, monkeypatch):
+    run=LocalRun(tmp_path,monkeypatch)
+    run.collectors_finish=True
+    damaged=[run.base/'cleanup_status.json',run.base/'local_service_recovery.json',
+             run.base/'stage123/controller.json',run.base/'temu/supervisors/binding-recovery-worker-01.json']
+    for path in damaged:
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(b'\0'*127)
+    ledger=run.base/'stage123/requests.jsonl'
+    ledger.write_text('{"id":"already-paid"}\n',encoding='utf-8')
+    source=run.base/'temu-source.jsonl'
+    original=source.read_bytes()
+    run.request_and_run()
+    assert selection.read(run.base/'status.json')['状态']=='完成'
+    for path in damaged:
+        archived=list(path.parent.glob(path.name+'.corrupt-*'))
+        assert len(archived)==1 and archived[0].read_bytes()==b'\0'*127
+    assert ledger.read_text('utf-8')=='{"id":"already-paid"}\n'
+    assert source.read_bytes()==original
+    assert run.stage3_count==0
+
+
 def test_running_supervisor_stop_cleans_owned_children_and_persists_stopped(tmp_path, monkeypatch):
     run = LocalRun(tmp_path, monkeypatch)
     # A stale STOP belongs to the preceding run; request_start clears only this.

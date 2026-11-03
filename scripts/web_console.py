@@ -2437,6 +2437,7 @@ class Console:
             state=' '.join(str(value.get(field) or '') for field in ('状态','status','采集状态','query_status')).upper()
             if value.get('automatic_recovery'):return 'neutral'
             if re.search(r'REPLACING_.*_ENVIRONMENT|正在自动更换环境',state): return 'green'
+            if value.get('验证码状态') in {'PAGE_LOADING','PENDING','ANSWER_READY','VERIFIED'}: return 'green'
             if any(value.get(flag) is True for flag in ('需人工介入','manual_action_required','human_action_required',
                                                        'recovery_exhausted','recovery_budget_exhausted')): return 'red'
             if re.search(r'LOGIN_REQUIRED|WAITING_LOGIN|WAITING_INITIAL_PRODUCTS|WAITING_POST_VERIFICATION_SEARCH_BOX|WAITING_FLEET_SLOT|WAITING_HTTP_COOLDOWN|WAITING_SITE_COOLDOWN|WAITING_SORT_RETRY|WAITING_INITIAL_PRODUCTS_RETRY',state): return 'green'
