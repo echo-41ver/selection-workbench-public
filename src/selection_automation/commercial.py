@@ -494,7 +494,7 @@ def build_report(root, category, *, as_of=None):
         entry['amazon_card']=card
         entry['amazon_parameters']=collected_parameters(amazon_by_id[str(entry['asin'])])
         if entry['match']['confirmed']+entry['match'].get('similar',0) >= policy['same_limit']:continue
-        rivals=[product_card(temu_by_id[g],'temu') for g in entry['confirmed_goods_ids'] if g in temu_by_id]
+        rivals=[product_card(temu_by_id[g],'temu') for g in entry['confirmed_goods_ids']+entry['similar_goods_ids'] if g in temu_by_id]
         entry['selection_advice']=recommendation(card,rivals,entry['match'],market)
         entry['amazon_card']=card
     return {'schema_version': 1, 'category_key': key, 'category_name': category.get('category_name_zh'),

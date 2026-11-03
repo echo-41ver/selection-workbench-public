@@ -9,6 +9,9 @@ from .operations import product_card
 
 
 def recommendation(amazon, matches, match, market):
+    confirmed = match.get('confirmed', 0)
+    similar = match.get('similar', 0)
+    match_label = '同款及类似款' if similar else '同款'
     missing = []
     if match.get('pending') or match.get('possible') or match.get('state') == 'UNKNOWN':
         missing.append('候选核验未完成')
@@ -18,19 +21,17 @@ def recommendation(amazon, matches, match, market):
         missing.append('Amazon销量未取得')
     for field,label in [('rating','评分'),('review_count','评论数')]:
         if amazon[field] is None:missing.append('Amazon'+label+'未取得')
-        if any(card[field] is None for card in matches):missing.append('部分TEMU同款'+label+'未取得')
+        if any(card[field] is None for card in matches):missing.append('部分TEMU'+match_label+label+'未取得')
     if amazon['price']['min'] is None or amazon['price']['max'] is None:
         missing.append('Amazon规格价格带未取得')
     if any(card['price']['min'] is None or card['price']['max'] is None for card in matches):
-        missing.append('部分TEMU同款规格价格带未取得')
+        missing.append('部分TEMU'+match_label+'规格价格带未取得')
     if any(card['price']['observed_price'] is None for card in matches):
-        missing.append('部分TEMU同款价格未取得')
+        missing.append('部分TEMU'+match_label+'价格未取得')
     if any(card['sales']['text'] is None for card in matches):
-        missing.append('部分TEMU同款销量未取得')
-    confirmed = match.get('confirmed', 0)
-    similar = match.get('similar', 0)
+        missing.append('部分TEMU'+match_label+'销量未取得')
     if len(matches) != confirmed + similar:
-        missing.append('部分同款商品不在当前采集快照中')
+        missing.append('部分'+match_label+'商品不在当前采集快照中')
     demand = [c['sales']['lower'] for c in matches if c['sales']['lower'] is not None]
     demand = max(demand) if demand else None
     if match.get('state') == 'UNKNOWN' or match.get('pending') or match.get('possible'):
@@ -60,7 +61,7 @@ def recommendation(amazon, matches, match, market):
     reasons = [f'本次采样确认同款 {confirmed} 件、类似款 {similar} 件，合计 {confirmed+similar} 件；待分析 {match.get("pending", 0)} 对，待补证 {match.get("possible", 0)} 对',
                '需求证据：' + demand_text]
     if spread is not None:
-        reasons.append(f'Amazon当前价减已采集TEMU同款最低当前价为 ${spread:.2f}；该页面价差未扣除采购、运费、平台费与退货成本')
+        reasons.append(f'Amazon当前价减已采集TEMU{match_label}最低当前价为 ${spread:.2f}；该页面价差未扣除采购、运费、平台费与退货成本')
     for field, label in [('growth', '新品增长'), ('concentration', '销量集中度')]:
         metric = market.get(field) or {}
         if metric:

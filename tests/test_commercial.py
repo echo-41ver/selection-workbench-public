@@ -284,6 +284,31 @@ def test_pending_market_login_updates_display_without_rebuilding_product_analysi
     assert len(builds)==2
 
 
+def test_similar_only_web_advice_matches_excel_without_claiming_same_products(tmp_path, monkeypatch):
+    from selection_automation import vision, rules
+    from selection_automation.selection_delivery import build_delivery
+    cat=category();base=tmp_path/'runs/fixture';frozen=base/'stage123/export_frozen'
+    frozen.mkdir(parents=True);(base/'amazon').mkdir();(base/'temu/union').mkdir(parents=True)
+    (base/'amazon/amazon_frontend_latest.json').write_text(json.dumps({'records':[
+        {'asin':'A1','title':'Amazon fixture','price_usd':15}]}),encoding='utf-8')
+    goods=[{'goods_id':str(g),'title':'Similar fixture','price_usd':20,'sales_text':'100+ sold'} for g in (1,2)]
+    (base/'temu/union/products.jsonl').write_text('\n'.join(map(json.dumps,goods)),encoding='utf-8')
+    pairs=[{'asin':'A1','goods_id':str(g),'pair_status':'CANDIDATE'} for g in (1,2)]
+    for name in ('layer3_candidates_fixture.jsonl','layer12_rows_fixture.jsonl'):
+        (frozen/name).write_text('\n'.join(map(json.dumps,pairs)),encoding='utf-8')
+    monkeypatch.setattr(vision,'compatible_vision_keys',lambda *a,**k:['current'])
+    monkeypatch.setattr(rules,'score',lambda *a,**k:{'state':'相似款','reason':'Different handle','total_score':None})
+    results=[{**p,'api_status':'success','vision_revision_key':'current','visual_facts':{}} for p in pairs]
+    (base/'stage123/results.jsonl').write_text('\n'.join(map(json.dumps,results)),encoding='utf-8')
+    report=build_report(tmp_path,cat,as_of=NOW);entry=report['products'][0]
+    delivered=build_delivery(tmp_path,cat,report)['progress'][0]
+    assert entry['match']['confirmed']==0 and entry['match']['similar']==2
+    assert entry['selection_advice']==delivered['advice']
+    assert entry['selection_advice']['price_spread']==-5
+    assert 'TEMU同款及类似款最低当前价' in entry['selection_advice']['reason']
+    assert not any('不在当前采集快照' in gap for gap in entry['selection_advice']['missing'])
+
+
 def test_only_current_successful_unknown_pairs_enter_published_review_evidence(tmp_path,monkeypatch):
     from selection_automation import commercial
     cat=category();base=tmp_path/'runs/fixture';frozen=base/'stage123/export_frozen'
