@@ -10,7 +10,7 @@ def idle_for_reload(state, console):
         state.get('ok') is True and state.get('active') is False
         and state.get('console_busy') is False and state.get('market_busy') is False
         and isinstance(generation,dict) and not generation.get('busy')
-        and generation.get('stage') in (None,'done','complete','completed','error','idle')
+        and generation.get('stage') in (None,'done','complete','completed','error','idle','preparation','prepared','ready')
         and isinstance(stage3,dict) and stage3.get('running') is False
         and not (stage3.get('codex_review') or {}).get('running')
         and not console.busy and not console.market_busy and not console.stage3_busy
