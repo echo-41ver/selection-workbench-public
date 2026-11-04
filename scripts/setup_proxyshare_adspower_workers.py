@@ -286,7 +286,12 @@ def _main() -> None:
             existing['bind_attempts']=bind_attempt
             atomic_json(journal_path,journal)
             if bind_attempt >= 3:
-                raise RuntimeError(f"worker {number} WebDriver 绑定失败（已重试 3 次）；保留环境，不关闭重开；原因: {existing.get('bind_error','')}")
+                # A single broken lane must not abort the whole task: keep the
+                # other lanes and publish a smaller, explicit manifest.
+                existing['bootstrap_status']='BIND_FAILED'
+                existing['degraded']=True
+                atomic_json(journal_path,journal)
+                break
             # A previous attempt can leave our own geckodriver on the port. Reclaim
             # only our kernel process, then start the same profile again.
             release_owned_port(webdriver_port)
@@ -301,8 +306,12 @@ def _main() -> None:
         atomic_json(journal_path, journal)
 
     bound_workers = [worker for worker in workers if worker.get('bootstrap_status') == 'BOUND']
-    if len(bound_workers) != target_count:
-        raise RuntimeError('所选路数初始化未完成，保留断点；不发布部分就绪清单')
+    degraded = [worker.get('name') for worker in workers if worker.get('bootstrap_status') != 'BOUND']
+    if not bound_workers:
+        raise RuntimeError('所有采集路都未能启动本地浏览器；保留断点，请导出诊断后重试')
+    if degraded:
+        journal['degraded_workers'] = degraded
+        atomic_json(journal_path, journal)
     try:
         from selection_automation.profile_capacity import list_profiles
         serials={str(row.get('user_id') or row.get('profile_id') or ''):row.get('serial_number')
@@ -312,7 +321,7 @@ def _main() -> None:
             if serial is not None: worker['serial_number']=str(serial)
     except RuntimeError:
         pass
-    capacity_limited = False
+    capacity_limited = bool(degraded)
     policy['worker_chain_ports'] = list(policy['worker_chain_ports'])[:len(bound_workers)]
     policy['webdriver_ports'] = list(gecko_ports)[:len(bound_workers)]
     policy['worker_count'] = len(bound_workers)
@@ -328,6 +337,7 @@ def _main() -> None:
         "worker_count": len(bound_workers),
         "desired_worker_count": requested_count,
         "capacity_limited": capacity_limited,
+        "degraded_workers": degraded,
         "capacity_limit": journal.get('capacity_limit'),
         "machine_id": identity(),
         "task_key": args.new_task,
