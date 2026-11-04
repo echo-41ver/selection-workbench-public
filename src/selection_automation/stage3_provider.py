@@ -14,6 +14,55 @@ LABELS = {'liquid_d1': '决策 API', 'multimodal_api': '多模态 API',
           'local_model': '本地模型服务', 'local_agent': '本地 Agent 多任务分析'}
 
 
+def openai_decisions(provider):
+    """OpenAI exposes the same decisions idea with a different wire shape."""
+    try:
+        return (provider.get('protocol') == 'decisions'
+                and (urlsplit(provider.get('base_url') or '').hostname or '').lower() == 'api.openai.com')
+    except ValueError:
+        return False
+
+
+def openai_decisions_request(encoded):
+    """Translate the stored D1-shaped payload into OpenAI's sessions format."""
+    payload = json.loads(encoded)
+    state = payload.get('state') if isinstance(payload.get('state'), dict) else {}
+    content = [{'type': 'input_text', 'text': json.dumps(state, ensure_ascii=False, separators=(',', ':'))}]
+    for url in payload.get('images') or []:
+        if isinstance(url, str) and url:
+            content.append({'type': 'input_image', 'image_url': url})
+    questions = []
+    for name, question in (payload.get('questions') or {}).items():
+        if not isinstance(question, dict):
+            continue
+        criteria = question.get('criteria') if isinstance(question.get('criteria'), dict) else {}
+        questions.append({'type': 'choice', 'name': str(name),
+                          'instructions': str(question.get('instructions') or ''),
+                          'choices': [{'value': str(value), 'description': str(description)}
+                                      for value, description in criteria.items()]})
+    return json.dumps({'model': payload.get('model'), 'input': [{'role': 'user', 'content': content}],
+                       'questions': questions}, ensure_ascii=False, separators=(',', ':'))
+
+
+def openai_decisions_response(raw):
+    """OpenAI answers arrive as a list with list-shaped probabilities."""
+    answers = raw.get('answers') if isinstance(raw, dict) else None
+    if not isinstance(answers, list):
+        return raw
+    converted = {}
+    for item in answers:
+        if not isinstance(item, dict) or not isinstance(item.get('name'), str):
+            continue
+        probabilities = item.get('probabilities')
+        if isinstance(probabilities, list):
+            item = {**item, 'probabilities': {row['value']: row['probability']
+                                              for row in probabilities
+                                              if isinstance(row, dict) and 'value' in row and 'probability' in row}}
+        converted[item['name']] = item
+    return {**raw, 'answers': converted}
+
+
+
 def settings(value=None):
     value = value or {}
     allowed = {'mode', 'base_url', 'model', 'protocol', 'workers', 'confidence', 'concurrency_mode', 'agent_ids','agent_models','agent_efforts','reasoning_effort'}
@@ -285,6 +334,9 @@ class VisualClient:
                 output_text=choice.message.content or '', status='incomplete' if choice.finish_reason == 'length' else 'completed',
                 incomplete_details={'reason': choice.finish_reason} if choice.finish_reason == 'length' else None)
         data = prepared or self.prepare(request['input'][0]['content'],request['instructions'])
+        expected = set(json.loads(data)['questions'])
+        if openai_decisions(self.provider):
+            data = openai_decisions_request(data)
         headers = {'Content-Type': 'application/json'}
         if self.key:
             headers['Authorization'] = 'Bearer ' + self.key
@@ -297,7 +349,9 @@ class VisualClient:
             if native_endpoint(self.provider):exc.body=rejection_body(response)
             raise
         raw = response.json()
-        expected=set(json.loads(data)['questions']);answers=raw['answers']
+        if openai_decisions(self.provider):
+            raw = openai_decisions_response(raw)
+        answers=raw['answers']
         if set(answers)!=expected:raise ValueError('决策响应的候选数量或 ID 不一致')
         def facts(answer):
             return {'decision_api': {'choice': answer['choice'], 'probabilities': answer['probabilities'],
