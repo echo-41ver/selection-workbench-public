@@ -1,0 +1,5 @@
+{
+  "manifest_url": "https://github.com/echo-41ver/selection-workbench-public/releases/latest/download/update-manifest.json",
+  "auto_apply": true,
+  "interval_seconds": 300
+}

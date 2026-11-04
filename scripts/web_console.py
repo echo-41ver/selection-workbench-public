@@ -2643,6 +2643,8 @@ class Handler(BaseHTTPRequestHandler):
                 state=self.server.console.status()
                 if getattr(self.server,'release',None):
                     with self.server.release_lock:state['release_update']=self.server.release.check()
+                if getattr(self.server,'update_state',None) is not None:
+                    state['auto_update']=self.server.update_state
                 return self.send_json(state)
             if self.path=='/api/status-profile': return self.send_json(self.server.console.profile_status_once())
             if self.path=='/api/monitor-status':
@@ -2821,6 +2823,57 @@ def watch_release(server,stopping):
             print('Automatic release reload deferred: '+type(error).__name__,flush=True)
 
 
+def watch_update(server, stopping):
+    """Check for a newer build and stage it only while the console is idle.
+
+    Downloading and verifying happen here; the actual file swap runs in a
+    detached worker so this process can exit cleanly and be restarted.
+    """
+    from selection_automation import auto_update as updater
+    from selection_automation.release_reload import idle_for_reload
+    while not stopping.is_set():
+        try:
+            config = updater.source(ROOT)
+            if not config['manifest_url']:
+                server.update_state = {'status': 'DISABLED', 'reason': '未配置更新地址'}
+                stopping.wait(600)
+                continue
+            result = updater.check(ROOT)
+            server.update_state = {key: value for key, value in result.items() if key != 'manifest'}
+            if result['status'] == 'AVAILABLE' and config['auto_apply']:
+                if not idle_for_reload(server.console.monitor.get(), server.console):
+                    server.update_state = {**server.update_state, 'status': 'WAITING_IDLE'}
+                else:
+                    package = updater.download(ROOT, result['manifest'])
+                    folder = updater.extract(ROOT, package)
+                    preflight = subprocess.run(
+                        [sys.executable, str(ROOT / 'scripts/apply_update.py'), '--package-root', str(folder),
+                         '--install-root', str(ROOT), '--check'],
+                        cwd=ROOT, capture_output=True, text=True, timeout=180)
+                    if preflight.returncode != 0:
+                        server.update_state = {**server.update_state, 'status': 'DEFERRED', 'reason': 'PREFLIGHT'}
+                    else:
+                        server.update_state = {'status': 'APPLYING', 'version': result['version']}
+                        logs = ROOT / 'runtime/updates'
+                        logs.mkdir(parents=True, exist_ok=True)
+                        with (logs / 'apply.log').open('ab') as output:
+                            subprocess.Popen(
+                                [sys.executable, str(ROOT / 'scripts/auto_update_worker.py'),
+                                 '--package-root', str(folder), '--install-root', str(ROOT),
+                                 '--port', str(server.server_port)],
+                                cwd=ROOT, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                                creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0) |
+                                              getattr(subprocess, 'CREATE_NO_WINDOW', 0) |
+                                              getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))
+                        updater.cleanup(ROOT)
+                        stopping.set()
+                        server.shutdown()
+                        return
+        except Exception as error:
+            server.update_state = {'status': 'ERROR', 'reason': type(error).__name__}
+        stopping.wait(updater.source(ROOT)['interval_seconds'])
+
+
 def main():
     # Scheduled hosts may survive an update and retain their old low priority.
     # Keep this interactive HTTP service at normal priority regardless of parent.
@@ -2836,6 +2889,8 @@ def main():
     server.release.check(force=True)
     stopping=threading.Event()
     threading.Thread(target=watch_release,args=(server,stopping),daemon=True).start()
+    server.update_state={'status':'STARTING'}
+    threading.Thread(target=watch_update,args=(server,stopping),name='auto-update',daemon=True).start()
     from local_service_recovery import LocalServiceRecovery
     recovery=LocalServiceRecovery(ROOT,server.console.owner)
     threading.Thread(target=recovery.run,args=(stopping,),name='local-service-recovery',daemon=True).start()
