@@ -79,6 +79,16 @@ const TEMU_HOME = 'https://www.temu.com/';
 const TEMU_HOME_URL = /^https:\/\/(?:www\.)?temu\.com\/(?:[?#].*)?$/i;
 const TEMU_EMPTY_SEARCH_URL = /^https:\/\/(?:www\.)?temu\.com\/search_result\.html(?:\?(?![^#]*search_key=[^&#]+)[^#]*)?(?:#.*)?$/i;
 const SAFE_SOURCE = `https://www.temu.com/search_result.html?search_key=${encodeURIComponent(QUERY)}`;
+// The page TEMU hands back after a solved verification carries the verified
+// session (x_sessn_id / refer_page_name=bgn_verification). Reuse it as-is.
+const TEMU_VERIFIED_SEARCH_PAGE = url => {
+  try {
+    const u = new URL(String(url || ''));
+    return /(?:^|\.)temu\.com$/i.test(u.hostname) && u.pathname === '/search_result.html'
+      && !u.searchParams.get('search_key')
+      && /bgn_verification/i.test(String(u.searchParams.get('refer_page_name') || ''));
+  } catch { return false; }
+};
 const ENTRY_MODE = argument('--entry-mode', categoryConfig.temu.bootstrap_entry_by_worker?.[path.basename(path.dirname(SID_FILE))]
   || categoryConfig.temu.entry_mode || 'empty_search');
 if (!['home_search', 'empty_search', 'direct_search'].includes(ENTRY_MODE)) throw new Error('Unsupported TEMU entry mode');
@@ -1603,7 +1613,8 @@ async function bootstrapThroughEmptySearch({ navigate = true, reason = 'INITIAL_
   const current = await bootstrapPageState();
   if (!navigate && decideSearchSubmission('', current.url, QUERY) === 'SKIP_ALREADY_TARGET_URL'
       && Number(current.visibleGoodsCount) > 0) return;
-  if (!reuseSearchPage && (navigate || !TEMU_EMPTY_SEARCH_URL.test(String(current.url || '')))) {
+  if (!reuseSearchPage && !TEMU_VERIFIED_SEARCH_PAGE(current.url)
+      && (navigate || !TEMU_EMPTY_SEARCH_URL.test(String(current.url || '')))) {
     await appendEvent('EMPTY_SEARCH_BOOTSTRAP_NAVIGATION', { destination: TEMU_EMPTY_SEARCH, image_policy: bidiStatus });
     await navigateConfirmed(TEMU_EMPTY_SEARCH, TEMU_EMPTY_SEARCH_URL, 'TEMU_EMPTY_SEARCH');
   }
@@ -1617,6 +1628,7 @@ async function bootstrapThroughEmptySearch({ navigate = true, reason = 'INITIAL_
   await appendEvent('EMPTY_SEARCH_QUERY_SUBMITTED', { query: QUERY, ...submitted });
   let retried = false;
   let verificationInterruptedSearch = false;
+  let reuseVerifiedPage = false;
   let targetReadyTicks = 0;
   while (true) {
     const state = await bootstrapPageState();
@@ -1638,24 +1650,20 @@ async function bootstrapThroughEmptySearch({ navigate = true, reason = 'INITIAL_
     }
     if (verificationInterruptedSearch && !targetSearch && /^https:\/\/(?:www\.)?temu\.com\/search_result\.html(?:[?#].*)?$/i.test(String(state.url || ''))) {
       verificationInterruptedSearch = false;
-      if (reuseSearchPage) {
-        await execute(`window.scrollTo({top:0,left:0,behavior:'instant'});return true;`);
-        await waitForStableEmptySearch('POST_VERIFICATION_CURRENT_SEARCH', true);
-        submitted = await submitHomeSearch();
-        await appendEvent('CURRENT_SEARCH_RESUBMITTED_AFTER_VERIFICATION', {query:QUERY,...submitted});
-        continue;
-      }
-      await appendEvent('SEARCH_STATE_RESET_AFTER_VERIFICATION', { destination: TEMU_EMPTY_SEARCH });
-      await navigateConfirmed(TEMU_EMPTY_SEARCH, TEMU_EMPTY_SEARCH_URL, 'POST_VERIFICATION_EMPTY_SEARCH');
-      const recoveredState = await waitForPostVerificationSearchBox();
-      if (recoveredState.targetAlreadyReady) return;
+      reuseVerifiedPage = true;
+      // Keep the page TEMU returned after verification instead of reloading the
+      // clean empty search page: that reload drops the just-verified session and
+      // immediately re-triggers verification or the login wall.
+      await execute(`window.scrollTo({top:0,left:0,behavior:'instant'});return true;`);
+      const reusedState = await waitForStableEmptySearch('POST_VERIFICATION_CURRENT_SEARCH', true);
+      if (reusedState?.targetAlreadyReady) return;
       submitted = await submitHomeSearch();
-      await appendEvent('EMPTY_SEARCH_QUERY_RESUBMITTED_AFTER_VERIFICATION', { query: QUERY, ...submitted });
+      await appendEvent('CURRENT_SEARCH_RESUBMITTED_AFTER_VERIFICATION', {query:QUERY,...submitted, reused_verified_page:true});
       continue;
     }
     if (!retried && !targetSearch && /^https:\/\/(?:www\.)?temu\.com\/search_result\.html(?:[?#].*)?$/i.test(String(state.url || ''))) {
       retried = true;
-      if (reuseSearchPage) {
+      if (reuseSearchPage || reuseVerifiedPage) {
         await execute(`window.scrollTo({top:0,left:0,behavior:'instant'});return true;`);
         await waitForStableEmptySearch('UNCOMMITTED_CURRENT_SEARCH', true);
         await submitHomeSearch();
