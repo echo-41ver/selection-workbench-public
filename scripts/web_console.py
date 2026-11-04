@@ -2221,7 +2221,10 @@ class Console:
                 raise ConsoleError('TASK_BUSY','任务仍在运行或退出中，请稍后重试',409)
             base, category = self.history_base(self.key)
             details = selection.read(base/'status.json',{})
-            if details.get('阶段',{}).get('bootstrap',{}).get('状态') != '启动准备失败':
+            bootstrap_state = details.get('阶段',{}).get('bootstrap',{}).get('状态')
+            # Prepared environments must start collection too; otherwise a task
+            # whose environment is already ready can never be resumed.
+            if bootstrap_state not in ('启动准备失败','启动准备完成','已完成'):
                 raise ConsoleError('NOT_PREPARATION_FAILURE','当前任务不是环境准备失败，无需重复初始化',409)
             result = self.invoke([str(self.root/'scripts/selection.py'),'start','--category',str(base/'category.json')])
             if result.returncode:
