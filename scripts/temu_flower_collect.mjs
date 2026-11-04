@@ -79,16 +79,6 @@ const TEMU_HOME = 'https://www.temu.com/';
 const TEMU_HOME_URL = /^https:\/\/(?:www\.)?temu\.com\/(?:[?#].*)?$/i;
 const TEMU_EMPTY_SEARCH_URL = /^https:\/\/(?:www\.)?temu\.com\/search_result\.html(?:\?(?![^#]*search_key=[^&#]+)[^#]*)?(?:#.*)?$/i;
 const SAFE_SOURCE = `https://www.temu.com/search_result.html?search_key=${encodeURIComponent(QUERY)}`;
-// The page TEMU hands back after a solved verification carries the verified
-// session (x_sessn_id / refer_page_name=bgn_verification). Reuse it as-is.
-const TEMU_VERIFIED_SEARCH_PAGE = url => {
-  try {
-    const u = new URL(String(url || ''));
-    return /(?:^|\.)temu\.com$/i.test(u.hostname) && u.pathname === '/search_result.html'
-      && !u.searchParams.get('search_key')
-      && /bgn_verification/i.test(String(u.searchParams.get('refer_page_name') || ''));
-  } catch { return false; }
-};
 const ENTRY_MODE = argument('--entry-mode', categoryConfig.temu.bootstrap_entry_by_worker?.[path.basename(path.dirname(SID_FILE))]
   || categoryConfig.temu.entry_mode || 'empty_search');
 if (!['home_search', 'empty_search', 'direct_search'].includes(ENTRY_MODE)) throw new Error('Unsupported TEMU entry mode');
@@ -1627,7 +1617,19 @@ async function bootstrapThroughEmptySearch({ navigate = true, reason = 'INITIAL_
   const current = await bootstrapPageState();
   if (!navigate && decideSearchSubmission('', current.url, QUERY) === 'SKIP_ALREADY_TARGET_URL'
       && Number(current.visibleGoodsCount) > 0) return;
-  if (!reuseSearchPage && !TEMU_VERIFIED_SEARCH_PAGE(current.url)
+  // The page TEMU hands back after a solved verification carries the verified
+  // session (x_sessn_id / refer_page_name=bgn_verification). Reuse it as-is
+  // instead of reloading the clean empty search page, which re-triggers the
+  // challenge. Kept inline so the offline harness slices keep working.
+  let verifiedSearchPage = false;
+  try {
+    const verified = new URL(String(current.url || ''));
+    verifiedSearchPage = /(?:^|\.)temu\.com$/i.test(verified.hostname)
+      && verified.pathname === '/search_result.html'
+      && !verified.searchParams.get('search_key')
+      && /bgn_verification/i.test(String(verified.searchParams.get('refer_page_name') || ''));
+  } catch {}
+  if (!reuseSearchPage && !verifiedSearchPage
       && (navigate || !TEMU_EMPTY_SEARCH_URL.test(String(current.url || '')))) {
     await appendEvent('EMPTY_SEARCH_BOOTSTRAP_NAVIGATION', { destination: TEMU_EMPTY_SEARCH, image_policy: bidiStatus });
     await navigateConfirmed(TEMU_EMPTY_SEARCH, TEMU_EMPTY_SEARCH_URL, 'TEMU_EMPTY_SEARCH');
