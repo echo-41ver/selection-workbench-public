@@ -1197,15 +1197,23 @@ async function findVisibleSeeMore() {
   // Unlike findSeeMore(), this probe must never call scrollIntoView. It is
   // used after positioning from the learned bottom offset so an off-screen
   // duplicate cannot jump the browser to the footer.
+  // Two passes: the control is almost always a real button/link, and scanning
+  // those only is cheap on a page holding a thousand product cards. The wide
+  // div/span sweep stays as a fallback so behaviour is unchanged when the
+  // control is a plain element.
   return execute(`
    const vis=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>2&&r.height>2&&r.bottom>0&&r.top<innerHeight};
-   const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多|Try again|重试|重試|再试一次|再試一次|重新加载|重新載入)\\s*$/i.test(e.textContent||''));
-   for(const n of nodes.sort((a,b)=>a.children.length-b.children.length)){
-    let candidate=null;
-    for(let e=n,i=0;i<5&&e;i++,e=e.parentElement){const s=getComputedStyle(e);if(e.matches('button,a,[role=button]')||e.tabIndex>=0||s.cursor==='pointer'){candidate=e;break}}
-    if(candidate&&vis(candidate))return candidate;
-   }
-   return null;`);
+   const PATTERN=/^\\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多|Try again|重试|重試|再试一次|再試一次|重新加载|重新載入)\\s*$/i;
+   const probe=sel=>{
+    const nodes=[...document.querySelectorAll(sel)].filter(e=>PATTERN.test(e.textContent||''));
+    for(const n of nodes.sort((a,b)=>a.children.length-b.children.length)){
+     let candidate=null;
+     for(let e=n,i=0;i<5&&e;i++,e=e.parentElement){const s=getComputedStyle(e);if(e.matches('button,a,[role=button]')||e.tabIndex>=0||s.cursor==='pointer'){candidate=e;break}}
+     if(candidate&&vis(candidate))return candidate;
+    }
+    return null;
+   };
+   return probe('button,a,[role=button]')||probe('div,span');`);
 }
 
 async function findSeeMoreFromCurrentDom() {
@@ -1213,16 +1221,22 @@ async function findSeeMoreFromCurrentDom() {
   if (element?.[EKEY]) return element;
   // The page height changes after an expansion. A previously learned offset
   // can point above a real, off-screen control; use its current DOM position.
+  // Same two-pass lookup: real controls first, the wide div/span sweep only
+  // when that finds nothing. This keeps the round cost flat as the list grows.
   const control = await execute(`
-    const nodes=[...document.querySelectorAll('button,a,[role=button],div,span')].filter(e=>/^\\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多)\\s*$/i.test(e.textContent||''));
-    for(const n of nodes.sort((a,b)=>a.children.length-b.children.length)){
-      for(let e=n,i=0;i<5&&e;i++,e=e.parentElement){
-        const s=getComputedStyle(e),r=e.getBoundingClientRect();
-        if((e.matches('button,a,[role=button]')||e.tabIndex>=0||s.cursor==='pointer')&&s.display!=='none'&&s.visibility!=='hidden'&&r.width>2&&r.height>2)
-          return {top:r.top,height:r.height};
+    const PATTERN=/^\\s*(See more|查看更多|顯示更多|显示更多|加载更多|載入更多|展開更多|展开更多)\\s*$/i;
+    const probe=sel=>{
+      const nodes=[...document.querySelectorAll(sel)].filter(e=>PATTERN.test(e.textContent||''));
+      for(const n of nodes.sort((a,b)=>a.children.length-b.children.length)){
+        for(let e=n,i=0;i<5&&e;i++,e=e.parentElement){
+          const s=getComputedStyle(e),r=e.getBoundingClientRect();
+          if((e.matches('button,a,[role=button]')||e.tabIndex>=0||s.cursor==='pointer')&&s.display!=='none'&&s.visibility!=='hidden'&&r.width>2&&r.height>2)
+            return {top:r.top,height:r.height};
+        }
       }
-    }
-    return null;`);
+      return null;
+    };
+    return probe('button,a,[role=button]')||probe('div,span');`);
   if (control && Number.isFinite(control.top)) {
     const viewport=await lightPageState();
     const delta = Math.round(control.top + control.height / 2 - 0.5 * viewport.innerHeight);
