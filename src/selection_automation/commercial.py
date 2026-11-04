@@ -16,7 +16,8 @@ from .snapshot_io import open_snapshot_text
 
 DEFAULTS = {
     'same_operator': 'lte',
-    'same_limit': 20, 'new_days': 90, 'growth_min_percent': 20.0,
+    'same_limit': 20, 'same_includes_similar': True,
+    'new_days': 90, 'growth_min_percent': 20.0,
     'growth_period': 'either', 'top_n': 5, 'top_share_max_percent': 90.0,
     'min_new_products': 5, 'min_market_products': 30, 'min_sales_coverage': 0.8,
 }
@@ -29,6 +30,7 @@ def settings(value=None):
         raise ValueError('商业筛选设置字段无效')
     result = {**DEFAULTS, **value}
     if result['same_operator'] not in ('lt','lte'):raise ValueError('同款数量比较方式无效')
+    if type(result['same_includes_similar']) is not bool:raise ValueError('同款统计口径无效')
     for key, minimum, maximum in [('same_limit', 0, 10000), ('new_days', 1, 365),
                                   ('top_n', 1, 100), ('min_new_products', 1, 1000),
                                   ('min_market_products', 2, 100000)]:
@@ -233,10 +235,11 @@ def match_metric(counts, expected, policy):
     confirmed = counts.get('confirmed', 0)
     similar = counts.get('similar', 0)
     combined = confirmed + similar
+    counted = combined if policy.get('same_includes_similar', True) else confirmed
     pending = counts.get('pending', 0) + max(0, expected-sum(counts.values()))
     possible = counts.get('possible', 0)
     strict=policy.get('same_operator')=='lt'
-    if combined >= policy['same_limit'] if strict else combined > policy['same_limit']:
+    if counted >= policy['same_limit'] if strict else counted > policy['same_limit']:
         state, reason = 'FAIL', '最终同款与类似款合计已达到筛选门槛'
     elif not expected or pending or possible:
         state, reason = 'UNKNOWN', '候选分析或待复核尚未完成，不能将未知商品当作零同款'
@@ -247,7 +250,8 @@ def match_metric(counts, expected, policy):
                   unanalysed=pending+counts.get('screened_out',0),
                   similar=similar, same_or_similar=combined,
                   screened_out=counts.get('screened_out', 0), expected=expected,
-                  threshold=policy['same_limit'], scope='本次采集及三层候选核验范围')
+                  threshold=policy['same_limit'], same_includes_similar=bool(policy.get('same_includes_similar', True)),
+                  scope='本次采集及三层候选核验范围')
 
 
 def report_signature(root, category):

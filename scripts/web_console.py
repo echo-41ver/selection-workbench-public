@@ -51,6 +51,8 @@ def draft_form_scope(category,amazon_payload=None):
     commercial=category.get('commercial') or {}
     limit=commercial.get('same_limit') if isinstance(commercial,dict) else None
     if type(limit) is int and 1<=limit<=10000:scope['commercial']['same_limit']=limit
+    similar=commercial.get('same_includes_similar') if isinstance(commercial,dict) else None
+    if type(similar) is bool:scope['commercial']['same_includes_similar']=similar
     payload=amazon_payload if isinstance(amazon_payload,dict) else {}
     route=payload.get('amazon_browser_route') or {}
     rows=payload.get('records');rows=rows if isinstance(rows,list) else []
