@@ -140,8 +140,23 @@ def repair_waiting(base, row, last_attempt, now=None):
         allowed,record=reserve_control_recovery(Path(state['output'])/'browser_control_recovery.json',state.get('unique_goods'))
         state={**state,'control_recovery':record}
         if not allowed:
-            state.update(status='BINDING_RETRY_WAIT',recovery_budget_exhausted=True,
-                         manual_action_required=True,automatic_retry=False,automatic_resume_pending=False)
+            # Budget exhausted: replace the profile once instead of leaving the
+            # lane in a state that claims to be reconnecting but never retries.
+            queued=False
+            if not state.get('auto_replacement_requested'):
+                state.update(status='BINDING_RETRY_WAIT',recovery_budget_exhausted=True,
+                             manual_action_required=False,automatic_retry=True,automatic_resume_pending=False,
+                             auto_replacement_requested=True)
+                r.atomic_json(base/'temu/supervisors'/f'{name}.json',state)
+                try:
+                    from selection import request_rotation
+                    request_rotation(base,[number])
+                    queued=True
+                except Exception:
+                    queued=False
+            if not queued:
+                state.update(status='BINDING_FAILED',recovery_budget_exhausted=True,
+                             manual_action_required=True,automatic_retry=False,automatic_resume_pending=False)
         r.atomic_json(base/'temu/supervisors'/f'{name}.json',state)
         if not allowed:return False
     resume(number,allow_rebind=True,expected_task=base.name,expected_profile=row.get('profile_id'))
