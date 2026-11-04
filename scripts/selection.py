@@ -674,7 +674,18 @@ def worker_snapshot(base, name):
             '建议动作':'','浏览器保留':True,'采集进程运行中':False},None
     if worker.get('status') in {'BINDING_LOCAL','BINDING_FAILED','BINDING_RETRY_WAIT'}:
         checkpoint=read(Path(worker['output'])/'progress.json',{}) if worker.get('output') else {}
-        return worker,{'状态':'连接中断，正在自动重连','采集状态':'BINDING_LOCAL',
+        exhausted=(worker.get('status')=='BINDING_FAILED' or worker.get('manual_action_required') or
+                   worker.get('recovery_budget_exhausted'))
+        if exhausted:
+            # Never claim an automatic reconnect that will not happen.
+            return worker,{'状态':'本路浏览器连接中断，自动重连已用尽；该路停用，其余采集路继续','采集状态':'BINDING_FAILED',
+                '阻断':False,'需人工介入':True,'建议动作':'在运行总览对该路执行“换 session”，或停止后重试准备环境；已采数据与断点保留',
+                '采集条数':checkpoint.get('raw_collected_count'),'当前排序目标':checkpoint.get('max_products'),
+                '关键词':worker.get('current_query')},None
+        attempts=worker.get('bind_attempts') or worker.get('attempt')
+        suffix=(f'（第 {attempts} 次）' if isinstance(attempts,int) and attempts>1 else '')
+        label='连接中断，正在自动重连'+suffix
+        return worker,{'状态':label,'采集状态':'BINDING_LOCAL',
             '阻断':False,'需人工介入':False,'建议动作':'',
             '采集条数':checkpoint.get('raw_collected_count'),
             '当前排序目标':checkpoint.get('max_products'),
