@@ -268,7 +268,7 @@ def _main() -> None:
         geckodriver = str(started.get("webdriver") or "")
         if not pathlib.Path(geckodriver).is_file():
             raise RuntimeError(f"worker {number} 新环境未返回可用 Marionette/geckodriver")
-        for bind_attempt in range(1):
+        for bind_attempt in range(1, 4):
             try:
                 bind = run_background_launcher(
                     [shell, "-NoProfile", "-File", str(ROOT / "scripts" / "bind_flower_worker.ps1"),
@@ -276,13 +276,27 @@ def _main() -> None:
                      "-WebDriverPort", str(webdriver_port), "-GeckoDriverPath", geckodriver, "-WaitSeconds", "60"],
                     cwd=ROOT, timeout=145,
                 )
-                if not bind.returncode: break
+                if not bind.returncode:
+                    existing['bootstrap_status'] = 'BOUND'
+                    break
                 existing['bind_error']=(bind.stderr or bind.stdout or 'bind failed')[-1000:]
             except subprocess.TimeoutExpired:
                 existing['bind_error']='binding launcher timed out after 75 seconds'
             existing['bootstrap_status']='BIND_FAILED'
+            existing['bind_attempts']=bind_attempt
             atomic_json(journal_path,journal)
-            raise RuntimeError(f"worker {number} WebDriver 绑定失败；保留环境，不关闭重开；原因: {existing.get('bind_error','')}")
+            if bind_attempt >= 3:
+                raise RuntimeError(f"worker {number} WebDriver 绑定失败（已重试 3 次）；保留环境，不关闭重开；原因: {existing.get('bind_error','')}")
+            # A previous attempt can leave our own geckodriver on the port. Reclaim
+            # only our kernel process, then start the same profile again.
+            release_owned_port(webdriver_port)
+            time.sleep(2)
+            try:
+                started = start_profile_with_retry(base, profile_id, api=api_call)
+                marionette = int(started.get("marionette_port") or 0)
+                geckodriver = str(started.get("webdriver") or "")
+            except Exception:
+                pass
         existing['bootstrap_status'] = 'BOUND'
         atomic_json(journal_path, journal)
 
@@ -324,6 +338,39 @@ def _main() -> None:
     print(json.dumps({"status": "READY", "profiles_created": len(bound_workers),
                       "worker_count": len(bound_workers), "desired_worker_count": requested_count,
                       "capacity_limited": capacity_limited, "sessions_manifest": str(SESSIONS)}, ensure_ascii=False))
+
+
+
+def release_owned_port(port):
+    """Terminate a leftover geckodriver from this installation holding the port.
+
+    Only processes whose executable lives under the AdsPower kernel folder are
+    candidates, so user browsers and other tools are never touched.
+    """
+    import psutil
+    released = False
+    try:
+        connections = psutil.net_connections(kind='tcp')
+    except (psutil.Error, OSError):
+        return False
+    for connection in connections:
+        if not connection.laddr or connection.laddr.port != port or not connection.pid:
+            continue
+        try:
+            process = psutil.Process(connection.pid)
+            executable = str(process.exe() or '')
+        except (psutil.Error, OSError):
+            continue
+        name = executable.rsplit('\\', 1)[-1].lower()
+        if name != 'geckodriver.exe' or 'adspower_global' not in executable.lower():
+            continue
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+            released = True
+        except (psutil.Error, OSError):
+            continue
+    return released
 
 
 def main():
