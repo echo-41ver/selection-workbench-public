@@ -10,7 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 MODES = {'liquid_d1', 'multimodal_api', 'local_model', 'local_agent'}
 PROTOCOLS = {'responses', 'chat_completions', 'decisions'}
-LABELS = {'liquid_d1': 'Liquid D1 决策 API', 'multimodal_api': '多模态 API',
+LABELS = {'liquid_d1': '决策 API', 'multimodal_api': '多模态 API',
           'local_model': '本地模型服务', 'local_agent': '本地 Agent 多任务分析'}
 
 
