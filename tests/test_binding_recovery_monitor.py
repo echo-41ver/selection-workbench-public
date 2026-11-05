@@ -217,11 +217,19 @@ def test_exhausted_control_recovery_waits_for_explicit_lane_restart(tmp_path,mon
         'recovery_budget_exhausted':True,'current_query':'silicone spatula'}))
     before=path.read_bytes();attempts={}
     def must_not_repair(*args,**kwargs):
-        raise AssertionError('automatic recovery must stop when its budget is exhausted')
-    monkeypatch.setattr(binding,'driver_connected',must_not_repair)
+        raise AssertionError('automatic recovery must not restart a lane whose budget is spent')
+    monkeypatch.setattr(binding,'driver_connected',lambda row:False)
     monkeypatch.setattr(binding,'resume',must_not_repair)
     assert not binding.repair_waiting(tmp_path,{'name':'worker-03-new'},attempts,100)
     assert path.read_bytes()==before and not attempts
+    # A browser that is alive again is adopted instead of staying frozen.
+    adopted=[]
+    monkeypatch.setattr(binding,'driver_connected',lambda row:True)
+    monkeypatch.setattr(binding,'mark_rebound_worker',lambda row:adopted.append(row['name']))
+    assert binding.repair_waiting(tmp_path,{'name':'worker-03-new'},attempts,200)=='BOUND_EXISTING_PROFILE'
+    assert adopted==['worker-03-new']
+    state=json.loads(path.read_text('utf-8'))
+    assert 'recovery_budget_exhausted' not in state and 'manual_action_required' not in state
 
 
 def test_failed_rebind_pause_retries_with_existing_control_budget(tmp_path,monkeypatch):
