@@ -1766,10 +1766,28 @@ async function prepareLocalWarehouseFilter() {
     click:element=>clickSalesSortControl({element,execute,sleep,click:current=>wd('POST',`/element/${current[EKEY]}/click`,{})})});
   await appendEvent('LOCAL_WAREHOUSE_FILTER_RESULT',localWarehouseFilter);
   if(localWarehouseFilter.state!=='UI_CONFIRMED') {
-    finalStatus='本地仓筛选失败，需要处理';
-    await writeSnapshot(finalStatus,{local_warehouse_filter:localWarehouseFilter,manual_action_required:true,
-      automatic_retry:false,keyword_complete:false,browser_preserved:true,collector_paused:true});
-    throw new InitialProductsStopped(finalStatus);
+    // The operator can apply the filter by hand while the browser stays open.
+    // Keep watching for a bounded window instead of exiting on the first miss.
+    await writeSnapshot('本地仓筛选失败，需要处理',{local_warehouse_filter:localWarehouseFilter,manual_action_required:true,
+      automatic_retry:true,waiting_for_manual_filter:true,keyword_complete:false,browser_preserved:true,collector_paused:true});
+    const deadline=Date.now()+10*60*1000;
+    let confirmed=false;
+    while(Date.now()<deadline){
+      await sleep(3000);
+      try{
+        const state=await readLocalWarehouse();
+        if(state && confirmsLocalWarehouse(state,QUERY,localWarehouseFilter)){confirmed=true;break;}
+      }catch{}
+      const page=await bootstrapPageState();
+      if(classify(page)) await guardInitialProducts(page,'local_warehouse');
+    }
+    if(!confirmed){
+      finalStatus='本地仓筛选失败，需要处理';
+      await writeSnapshot(finalStatus,{local_warehouse_filter:localWarehouseFilter,manual_action_required:true,
+        automatic_retry:false,keyword_complete:false,browser_preserved:true,collector_paused:true});
+      throw new InitialProductsStopped(finalStatus);
+    }
+    localWarehouseFilter={...localWarehouseFilter,state:'UI_CONFIRMED',confirmed_after_manual:true};
   }
   await atomicSnapshot(path.join(OUT,'warehouse_filter.json'),JSON.stringify(localWarehouseFilter,null,2));
   await writeSnapshot('本地仓筛选已确认',{local_warehouse_filter:localWarehouseFilter});
