@@ -1797,9 +1797,18 @@ async function waitForInitialProducts() {
   // A resumed collector may find the user's existing verification page.
   // Bind interception, but preserve that page until the user completes it.
   let resumePage = await bootstrapPageState();
+  const verifyWaitStarted = Date.now();
   while (classify(resumePage) === 'HUMAN_VERIFICATION') {
     await guardInitialProducts(resumePage, 'resume_verification');
     await writeSnapshot('WAITING_SEARCH_VERIFICATION', { browser_preserved: true, manual_action_required: true });
+    if (Date.now() - verifyWaitStarted > 180000) {
+      // Verification is done but the page never returns to the search context.
+      // Stop waiting on a dead page: let the supervisor restart this lane from
+      // the keyword breakpoint instead of hanging forever.
+      await writeSnapshot('验证后页面未恢复，正在自动重启本路', { browser_preserved: true,
+        manual_action_required: false, automatic_retry: true, verification_stalled: true });
+      throw new InitialProductsStopped('验证后页面未恢复，自动重启本路');
+    }
     await sleep(500);
     resumePage = await bootstrapPageState();
   }
