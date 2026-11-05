@@ -116,11 +116,39 @@ def profile_closed(row):
     return not running_profile(row['profile_id'])
 
 
+def terminate_lane_browser(row):
+    """Terminate this lane's own hung browser processes before rebinding.
+
+    Matched by the profile id inside the command line, so other lanes and the
+    user's browsers are never touched.
+    """
+    import psutil
+    profile=str(row.get('profile_id') or '')
+    if not profile:return 0
+    killed=0
+    for proc in psutil.process_iter(['name','cmdline']):
+        try:
+            if (proc.info['name'] or '').lower()!='flowerbrowser.exe':continue
+            if profile in ' '.join(proc.info['cmdline'] or []):
+                proc.terminate();killed+=1
+        except (psutil.Error,OSError):continue
+    return killed
+
+
 def repair_waiting(base, row, last_attempt, now=None):
     now=time.monotonic() if now is None else now
     name=row['name']
     state=json.loads((base/'temu/supervisors'/f'{name}.json').read_text(encoding='utf-8'))
-    if state.get('recovery_budget_exhausted'):return False
+    # A spent budget must not freeze the lane forever: if the browser is alive
+    # again (fresh driver record), clear the flag and adopt the connection.
+    if state.get('recovery_budget_exhausted'):
+        if driver_connected(row):
+            state.pop('recovery_budget_exhausted',None)
+            state.pop('manual_action_required',None)
+            r.atomic_json(base/'temu/supervisors'/f'{name}.json',state)
+            mark_rebound_worker(row)
+            return 'BOUND_EXISTING_PROFILE'
+        return False
     control_stop=state.get('query_status') in {'STOPPED_BROWSER_COMMAND_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_TIMEOUT','STOPPED_BROWSER_CONTROL_RECOVERY_BUDGET'}
     paused_control=state.get('status')=='PAUSED_FOR_ENVIRONMENT_REPLACEMENT' and control_stop
     if not paused_control and state.get('status') not in {'HUMAN_ACTION_REQUIRED','WAITING_BROWSER_CONTROL_RECOVERY','BINDING_FAILED','BINDING_RETRY_WAIT','RUNNING','RESUMING','STARTING'}:return False
@@ -131,6 +159,10 @@ def repair_waiting(base, row, last_attempt, now=None):
     if now-last_attempt.get(name,-60)<60 or (not urgent and not invalid_session(row)):return False
     last_attempt[name]=now
     number=int(name.split('-')[1])
+    if control_stop and not driver_connected(row):
+        # A hung Firefox never answers WebDriver; drop it so the rebind starts
+        # a fresh browser for the same profile instead of timing out again.
+        terminate_lane_browser(row)
     if profile_closed(row):
         from selection import request_rotation
         request_rotation(base,[number])
